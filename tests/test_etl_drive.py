@@ -54,7 +54,7 @@ class TestPackageDiscoveryAndOrgAssignment(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             drive_root = Path(tmp)
-            org_dir = drive_root / "ORG-001" / "INBOX"
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
             org_dir.mkdir(parents=True)
             make_package_zip(org_dir / "paquete_01.zip", GEOJSON_ORG001)
 
@@ -78,7 +78,7 @@ class TestPackageDiscoveryAndOrgAssignment(unittest.TestCase):
             drive_root = Path(tmp)
             pipeline, _ = build_pipeline(drive_root)
 
-            zip_path = drive_root / "ORG-XYZ" / "INBOX" / "cualquier_nombre.zip"
+            zip_path = drive_root / "ORG-XYZ" / "RYZOS_INBOX" / "cualquier_nombre.zip"
             org_id = pipeline.get_org_id_from_path(zip_path)
 
             self.assertEqual(org_id, "ORG-XYZ")
@@ -171,13 +171,13 @@ class TestArchiveRenaming(unittest.TestCase):
             drive_root = Path(tmp)
             pipeline, _ = build_pipeline(drive_root)
 
-            zip_path = drive_root / "ORG-001" / "INBOX" / "paquete_01.zip"
+            zip_path = drive_root / "ORG-001" / "RYZOS_INBOX" / "paquete_01.zip"
             fixed_ts = datetime(2026, 8, 16, 15, 30, 0)
 
             dest = pipeline.build_archive_destination(zip_path, "ORG-001", timestamp=fixed_ts)
 
             self.assertEqual(dest.name, "PROCESADO_20260816_153000_paquete_01.zip")
-            self.assertEqual(dest.parent, drive_root / "ORG-001" / "ARCHIVE")
+            self.assertEqual(dest.parent, drive_root / "ORG-001" / "RYZOS_ARCHIVE")
 
             from scripts.etl_drive_to_supabase import ARCHIVE_FILENAME_PATTERN
             self.assertRegex(dest.name, ARCHIVE_FILENAME_PATTERN.pattern)
@@ -187,7 +187,7 @@ class TestArchiveRenaming(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             drive_root = Path(tmp)
-            org_dir = drive_root / "ORG-001" / "INBOX"
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
             org_dir.mkdir(parents=True)
             zip_path = org_dir / "paquete_01.zip"
             make_package_zip(zip_path, GEOJSON_ORG001)
@@ -206,7 +206,7 @@ class TestArchiveRenaming(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             drive_root = Path(tmp)
-            org_dir = drive_root / "ORG-001" / "INBOX"
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
             org_dir.mkdir(parents=True)
             zip_path = org_dir / "paquete_01.zip"
             make_package_zip(zip_path, GEOJSON_ORG001)
@@ -257,7 +257,7 @@ class TestPipelineIntegration(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             drive_root = Path(tmp)
-            org_dir = drive_root / "ORG-001" / "INBOX"
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
             org_dir.mkdir(parents=True)
             zip_path = org_dir / "paquete_01.zip"
             make_package_zip(zip_path, GEOJSON_ORG001)
@@ -287,7 +287,7 @@ class TestPipelineIntegration(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             drive_root = Path(tmp)
-            org_dir = drive_root / "ORG-001" / "INBOX"
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
             org_dir.mkdir(parents=True)
             zip_path = org_dir / "vacio.zip"
             with zipfile.ZipFile(zip_path, "w") as zf:

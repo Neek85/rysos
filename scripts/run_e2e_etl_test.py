@@ -24,8 +24,8 @@ ARCHIVED_ZIP_PATTERN = re.compile(rf"^PROCESADO_\d{{8}}_\d{{6}}_{re.escape(ZIP_N
 
 def setup_directories(base_dir: Path) -> tuple[Path, Path]:
     # base_dir representa RYZOS_CLIENTES; cada organizacion tiene su propio INBOX/ARCHIVE.
-    inbox_dir = base_dir / ORG_ID / "INBOX"
-    archive_dir = base_dir / ORG_ID / "ARCHIVE"
+    inbox_dir = base_dir / ORG_ID / "RYZOS_INBOX"
+    archive_dir = base_dir / ORG_ID / "RYZOS_ARCHIVE"
     inbox_dir.mkdir(parents=True, exist_ok=True)
     archive_dir.mkdir(parents=True, exist_ok=True)
     return inbox_dir, archive_dir

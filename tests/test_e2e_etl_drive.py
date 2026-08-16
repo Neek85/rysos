@@ -39,8 +39,8 @@ class TestE2EDirectoryScaffolding(unittest.TestCase):
 
         self.assertTrue(inbox_dir.exists())
         self.assertTrue(archive_dir.exists())
-        self.assertEqual(inbox_dir, self.base_dir / ORG_ID / "INBOX")
-        self.assertEqual(archive_dir, self.base_dir / ORG_ID / "ARCHIVE")
+        self.assertEqual(inbox_dir, self.base_dir / ORG_ID / "RYZOS_INBOX")
+        self.assertEqual(archive_dir, self.base_dir / ORG_ID / "RYZOS_ARCHIVE")
 
 
 class TestE2EPipelineOrchestration(unittest.TestCase):
