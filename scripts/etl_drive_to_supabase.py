@@ -26,9 +26,23 @@ MONITOREO_LAYER_PREFIX = "EUDR_MONITOREO"
 
 # INVARIANTE: QField exporta la capa de monitoreo y sus atributos con nombres que
 # varian segun la version del formulario de campo; se resuelve por orden de prioridad,
-# prefiriendo siempre el nombre canonico de columna de EUDR_MONITOREO.
-PARCELA_FIELD_CANDIDATES = ("ID_Parcela_Fija", "parcela_nombre", "ID_Parcela")
-SOCIO_FIELD_CANDIDATES = ("ID_Socio", "nuevo_productor_nombre", "nombre_productor", "productor")
+# prefiriendo siempre el identificador estricto (ID/codigo) cuando esta presente. Los
+# candidatos de nombre libre (persona/parcela) nunca se mezclan en una columna de ID
+# estricto: se capturan aparte (nuevo_productor_nombre / observaciones) para no
+# corromper una columna pensada como identificador formal.
+SOCIO_ID_CANDIDATES = ("ID_Socio",)
+PARCELA_STRICT_CANDIDATES = ("ID_Parcela_Fija", "ID_Parcela", "parcela_codigo", "Codigo")
+PARCELA_NOMBRE_CANDIDATES = ("parcela_nombre", "Parcela")
+PARCELA_FIELD_CANDIDATES = PARCELA_STRICT_CANDIDATES + PARCELA_NOMBRE_CANDIDATES
+PRODUCTOR_NOMBRE_CANDIDATES = (
+    "nuevo_productor_nombre",
+    "productor",
+    "nombre_productor",
+    "socio_nombre_completo",
+    "socio_nombre",
+    "Productor",
+    "Nombre",
+)
 
 
 class DriveZipETLPipeline:
@@ -157,17 +171,30 @@ class DriveZipETLPipeline:
         id_monitoreo = str(uuid.uuid4())
         geom_json = mapping(row.geometry) if row.geometry else None
 
+        id_parcela_fija = self.resolve_field_with_fallback(row, PARCELA_FIELD_CANDIDATES)
+        parcela_id_estricto = self.resolve_field_with_fallback(row, PARCELA_STRICT_CANDIDATES)
+        nuevo_productor_nombre = self.resolve_field_with_fallback(row, PRODUCTOR_NOMBRE_CANDIDATES)
+
+        observaciones = row.get("observaciones") or ""
+        # INVARIANTE: si la parcela solo se identifico por nombre (sin ID/codigo estricto),
+        # se deja constancia en observaciones para que el revisor QC no confunda el valor
+        # de ID_Parcela_Fija con un codigo formal.
+        if id_parcela_fija is not None and parcela_id_estricto is None:
+            nota = f"[Parcela identificada solo por nombre: {id_parcela_fija}]"
+            observaciones = f"{observaciones} {nota}".strip()
+
         payload = {
             "id_monitoreo": id_monitoreo,
             "ID_Organizacion": org_id,
-            "ID_Parcela_Fija": self.resolve_field_with_fallback(row, PARCELA_FIELD_CANDIDATES),
-            "ID_Socio": self.resolve_field_with_fallback(row, SOCIO_FIELD_CANDIDATES),
+            "ID_Parcela_Fija": id_parcela_fija,
+            "ID_Socio": self.resolve_field_with_fallback(row, SOCIO_ID_CANDIDATES),
+            "nuevo_productor_nombre": nuevo_productor_nombre,
             "fecha_monitoreo": self.resolve_fecha_monitoreo(row.get("fecha_monitoreo"), now=now),
             "tecnico_responsable": row.get("tecnico_responsable", "Tecnico Campo"),
             "precision_gps": row.get("precision_gps"),
             "evidencia_foto": row.get("evidencia_foto"),
             "cumple_eudr": row.get("cumple_eudr", "SI"),
-            "observaciones": row.get("observaciones", ""),
+            "observaciones": observaciones,
             "geom_inspeccion": geom_json,
             "estado_revision": "PENDIENTE",  # INVARIANTE: nunca omitir
         }

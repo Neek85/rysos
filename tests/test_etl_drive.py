@@ -212,11 +212,60 @@ class TestFieldNameFallback(unittest.TestCase):
         )
         row = gdf.iloc[0]
 
-        from scripts.etl_drive_to_supabase import SOCIO_FIELD_CANDIDATES
+        from scripts.etl_drive_to_supabase import PRODUCTOR_NOMBRE_CANDIDATES
 
-        value = pipeline.resolve_field_with_fallback(row, SOCIO_FIELD_CANDIDATES)
+        value = pipeline.resolve_field_with_fallback(row, PRODUCTOR_NOMBRE_CANDIDATES)
 
         self.assertEqual(value, "Juan Perez")
+
+    def test_resolve_field_with_fallback_covers_expanded_productor_variants(self):
+        pipeline = self._pipeline()
+        from scripts.etl_drive_to_supabase import PRODUCTOR_NOMBRE_CANDIDATES
+
+        for column_name in ("socio_nombre_completo", "socio_nombre", "Productor", "Nombre"):
+            gdf = gpd.GeoDataFrame(
+                {column_name: ["Maria Lopez"]},
+                geometry=[Point(-77.0, -12.0)],
+                crs="EPSG:4326",
+            )
+            row = gdf.iloc[0]
+
+            value = pipeline.resolve_field_with_fallback(row, PRODUCTOR_NOMBRE_CANDIDATES)
+
+            self.assertEqual(value, "Maria Lopez", f"fallo para columna {column_name}")
+
+    def test_resolve_field_with_fallback_covers_expanded_parcela_variants(self):
+        pipeline = self._pipeline()
+        from scripts.etl_drive_to_supabase import PARCELA_FIELD_CANDIDATES
+
+        for column_name in ("parcela_codigo", "Parcela", "Codigo"):
+            gdf = gpd.GeoDataFrame(
+                {column_name: ["VALOR-001"]},
+                geometry=[Point(-77.0, -12.0)],
+                crs="EPSG:4326",
+            )
+            row = gdf.iloc[0]
+
+            value = pipeline.resolve_field_with_fallback(row, PARCELA_FIELD_CANDIDATES)
+
+            self.assertEqual(value, "VALOR-001", f"fallo para columna {column_name}")
+
+    def test_id_socio_never_falls_back_to_free_text_name(self):
+        # INVARIANTE: ID_Socio es un identificador estricto; un nombre libre de
+        # productor nunca debe terminar en esa columna, solo en nuevo_productor_nombre.
+        pipeline = self._pipeline()
+        from scripts.etl_drive_to_supabase import SOCIO_ID_CANDIDATES
+
+        gdf = gpd.GeoDataFrame(
+            {"productor": ["Juan Perez"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        value = pipeline.resolve_field_with_fallback(row, SOCIO_ID_CANDIDATES)
+
+        self.assertIsNone(value)
 
     def test_resolve_field_with_fallback_skips_blank_and_missing_columns(self):
         pipeline = self._pipeline()
@@ -267,7 +316,33 @@ class TestFieldNameFallback(unittest.TestCase):
         payload = pipeline.build_monitoreo_payload(row, "ORG-001")
 
         self.assertEqual(payload["ID_Parcela_Fija"], "Lote El Mirador")
-        self.assertEqual(payload["ID_Socio"], "Juan Perez")
+        self.assertIsNone(payload["ID_Socio"])
+        self.assertEqual(payload["nuevo_productor_nombre"], "Juan Perez")
+        self.assertIn("Lote El Mirador", payload["observaciones"])
+
+    def test_build_monitoreo_payload_no_annotation_when_strict_parcela_id_present(self):
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["PARC-010"],
+                "ID_Socio": ["SOC-010"],
+                "fecha_monitoreo": ["2026-08-16"],
+                "tecnico_responsable": ["Ana Gomez"],
+                "precision_gps": [2.1],
+                "evidencia_foto": ["foto_01.jpg"],
+                "cumple_eudr": ["SI"],
+                "observaciones": ["nota original"],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        payload = pipeline.build_monitoreo_payload(row, "ORG-001")
+
+        self.assertEqual(payload["ID_Parcela_Fija"], "PARC-010")
+        self.assertEqual(payload["ID_Socio"], "SOC-010")
+        self.assertEqual(payload["observaciones"], "nota original")
 
 
 class TestPayloadRestructuring(unittest.TestCase):
