@@ -1,4 +1,5 @@
 import math
+import mimetypes
 import os
 import re
 import sys
@@ -148,13 +149,17 @@ class DriveZipETLPipeline:
         return self.load_layer(geo_path, self.find_monitoreo_layer(geo_path))
 
     def find_photos(self, extracted_dir: Path) -> list[Path]:
+        # INVARIANTE: QField exporta las fotos bajo DCIM/ (a veces anidada varios
+        # niveles, ej. DCIM/100QFIELD/...); rglob("*") recorre todo el arbol de
+        # directorios sin importar el nombre/mayusculas de la carpeta contenedora,
+        # asi que cualquier .jpg/.jpeg/.png dentro de DCIM o dcim se detecta igual.
         return sorted(
             p for p in extracted_dir.rglob("*")
             if p.is_file() and p.suffix.lower() in PHOTO_EXTENSIONS
         )
 
-    def build_storage_path(self, org_id: str, record_id: str, photo_path: Path) -> str:
-        return f"{org_id}/{record_id}/{photo_path.name}"
+    def build_storage_path(self, org_id: str, photo_path: Path) -> str:
+        return f"{org_id}/{photo_path.name}"
 
     def resolve_fecha_monitoreo(self, raw_value, now: datetime | None = None) -> str:
         # INVARIANTE: nunca insertar un string invalido ("None"/"NaT"/"") en una columna date.
@@ -298,11 +303,16 @@ class DriveZipETLPipeline:
         raise ValueError(f"Tabla EUDR no reconocida: {table_name}")
 
     def upload_evidence_photo(self, photo_path: Path, storage_path: str) -> str:
+        content_type = mimetypes.guess_type(photo_path.name)[0] or "image/jpeg"
         with open(photo_path, "rb") as f:
             self.supabase.storage.from_(EVIDENCIA_BUCKET).upload(
                 path=storage_path,
                 file=f,
-                file_options={"content-type": "image/jpeg"},
+                # INVARIANTE: la ruta de Storage es {org_id}/{filename}, sin carpeta por
+                # registro; dos fotos con el mismo nombre de archivo (comun en camaras
+                # QField) colisionan en la misma ruta. upsert evita que la segunda falle
+                # con 409 Duplicate; la ultima subida gana.
+                file_options={"content-type": content_type, "upsert": "true"},
             )
         return storage_path
 
@@ -339,10 +349,14 @@ class DriveZipETLPipeline:
             storage_path = _UNSET
             if table_name in TABLES_WITH_EVIDENCIA_FOTO:
                 foto_name = row.get("evidencia_foto")
-                photo_path = photos_by_name.get(foto_name) if foto_name else None
+                # INVARIANTE: QField a veces guarda la ruta relativa del adjunto
+                # (ej. "DCIM/foto_01.jpg") en vez del nombre de archivo suelto; se
+                # compara siempre por os.path.basename() contra photos_by_name.
+                foto_basename = os.path.basename(foto_name) if foto_name else None
+                photo_path = photos_by_name.get(foto_basename) if foto_basename else None
                 storage_path = None
                 if photo_path is not None:
-                    storage_path = self.build_storage_path(org_id, record_id, photo_path)
+                    storage_path = self.build_storage_path(org_id, photo_path)
                     self.upload_evidence_photo(photo_path, storage_path)
                     uploaded_photos.append(storage_path)
 

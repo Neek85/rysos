@@ -77,7 +77,7 @@ class TestE2EPipelineOrchestration(unittest.TestCase):
         result = pipeline.process_package(zip_path, execute_move=True)
 
         storage_path = verify_photo_criterion(result)
-        self.assertEqual(storage_path, f"{ORG_ID}/{result['inserted_ids'][0]}/{PHOTO_NAME}")
+        self.assertEqual(storage_path, f"{ORG_ID}/{PHOTO_NAME}")
         mock_supabase.storage.from_.assert_called_with(EVIDENCIA_BUCKET)
 
     def test_criterio_3_geometria_wgs84_y_estado_pendiente(self):

@@ -121,6 +121,44 @@ class TestZipExtraction(unittest.TestCase):
             self.assertEqual(len(photos), 1)
             self.assertEqual(photos[0].name, "foto_01.jpg")
 
+    def test_find_photos_locates_files_in_nested_dcim_folder(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            zip_path = drive_root / "paquete.zip"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("inspeccion.geojson", json.dumps(GEOJSON_ORG001))
+                zf.writestr("DCIM/100QFIELD/foto_anidada.jpg", b"fake-jpeg-bytes")
+
+            pipeline, _ = build_pipeline(drive_root)
+            extract_to = drive_root / "extracted"
+            extract_to.mkdir()
+            pipeline.extract_package(zip_path, extract_to)
+
+            photos = pipeline.find_photos(extract_to)
+            self.assertEqual(len(photos), 1)
+            self.assertEqual(photos[0].name, "foto_anidada.jpg")
+
+    def test_find_photos_locates_files_in_lowercase_dcim_folder(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            zip_path = drive_root / "paquete.zip"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("inspeccion.geojson", json.dumps(GEOJSON_ORG001))
+                zf.writestr("dcim/foto_lowercase.png", b"fake-png-bytes")
+
+            pipeline, _ = build_pipeline(drive_root)
+            extract_to = drive_root / "extracted"
+            extract_to.mkdir()
+            pipeline.extract_package(zip_path, extract_to)
+
+            photos = pipeline.find_photos(extract_to)
+            self.assertEqual(len(photos), 1)
+            self.assertEqual(photos[0].name, "foto_lowercase.png")
+
 
 class TestDynamicLayerDetection(unittest.TestCase):
     def _pipeline(self):
@@ -560,6 +598,93 @@ class TestMultiLayerIngestion(unittest.TestCase):
         self.assertIsNone(insert_calls[-1].args[0]["evidencia_foto"])
 
 
+class TestEvidenciaFotoBasenameMatching(unittest.TestCase):
+    def _pipeline(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, mock_supabase = build_pipeline(Path(tmp))
+        return pipeline, mock_supabase
+
+    def test_matches_photo_when_evidencia_foto_is_a_relative_dcim_path(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, _ = build_pipeline(Path(tmp))
+            dcim_dir = Path(tmp) / "DCIM"
+            dcim_dir.mkdir()
+            photo_file = dcim_dir / "foto_01.jpg"
+            photo_file.write_bytes(b"fake-jpeg-bytes")
+
+            gdf = gpd.GeoDataFrame(
+                {
+                    "ID_Parcela_Fija": ["PARC-001"],
+                    "ID_Socio": ["SOC-001"],
+                    "fecha_monitoreo": ["2026-08-16"],
+                    "evidencia_foto": ["DCIM/foto_01.jpg"],
+                },
+                geometry=[Point(-77.0, -12.0)],
+                crs="EPSG:4326",
+            )
+            photos_by_name = {"foto_01.jpg": photo_file}
+
+            ids, photos = pipeline.process_layer_rows(
+                gdf, "EUDR_MONITOREO", "ORG-001", photos_by_name
+            )
+
+            self.assertEqual(len(photos), 1)
+            self.assertEqual(photos[0], "ORG-001/foto_01.jpg")
+
+    def test_matches_photo_when_evidencia_foto_is_a_deeply_nested_dcim_path(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, _ = build_pipeline(Path(tmp))
+            nested_dir = Path(tmp) / "DCIM" / "100QFIELD"
+            nested_dir.mkdir(parents=True)
+            photo_file = nested_dir / "foto_instalacion.jpg"
+            photo_file.write_bytes(b"fake-jpeg-bytes")
+
+            gdf = gpd.GeoDataFrame(
+                {
+                    "id_parcela": ["PARC-001"],
+                    "tipo_infra": ["Beneficio Humedo"],
+                    "evidencia_foto": ["DCIM/100QFIELD/foto_instalacion.jpg"],
+                },
+                geometry=[Point(-77.0, -12.0)],
+                crs="EPSG:4326",
+            )
+            photos_by_name = {"foto_instalacion.jpg": photo_file}
+
+            ids, photos = pipeline.process_layer_rows(
+                gdf, "EUDR_INSTALACIONES", "ORG-001", photos_by_name
+            )
+
+            self.assertEqual(len(photos), 1)
+            self.assertEqual(photos[0], "ORG-001/foto_instalacion.jpg")
+
+    def test_storage_path_is_org_and_filename_only(self):
+        pipeline, _ = self._pipeline()
+
+        storage_path = pipeline.build_storage_path("ORG-COOP-NORTE", Path("foto_campo.jpg"))
+
+        self.assertEqual(storage_path, "ORG-COOP-NORTE/foto_campo.jpg")
+
+    def test_upload_evidence_photo_sets_content_type_and_upsert(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, mock_supabase = build_pipeline(Path(tmp))
+            photo_path = Path(tmp) / "foto.png"
+            photo_path.write_bytes(b"fake-png-bytes")
+
+            pipeline.upload_evidence_photo(photo_path, "ORG-001/foto.png")
+
+            upload_kwargs = mock_supabase.storage.from_.return_value.upload.call_args.kwargs
+            self.assertEqual(upload_kwargs["file_options"]["content-type"], "image/png")
+            self.assertEqual(upload_kwargs["file_options"]["upsert"], "true")
+
+
 class TestPayloadRestructuring(unittest.TestCase):
     def test_build_monitoreo_payload_sets_pendiente(self):
         import tempfile
@@ -596,12 +721,10 @@ class TestPayloadRestructuring(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             pipeline, _ = build_pipeline(Path(tmp))
 
-        storage_path = pipeline.build_storage_path(
-            "ORG-001", "uuid-monitoreo-123", Path("foto_01.jpg")
-        )
+        storage_path = pipeline.build_storage_path("ORG-001", Path("foto_01.jpg"))
 
-        self.assertEqual(storage_path, "ORG-001/uuid-monitoreo-123/foto_01.jpg")
-        self.assertEqual(len(storage_path.split("/")), 3)
+        self.assertEqual(storage_path, "ORG-001/foto_01.jpg")
+        self.assertEqual(len(storage_path.split("/")), 2)
 
 
 class TestFechaMonitoreoNullHandling(unittest.TestCase):
