@@ -1,3 +1,4 @@
+import math
 import os
 import re
 import sys
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from shapely.geometry import mapping
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from supabase import create_client, Client
 
@@ -87,24 +89,49 @@ class DriveZipETLPipeline:
 
         return (now or datetime.now()).strftime("%Y-%m-%d")
 
+    def sanitize_json_value(self, value):
+        # INVARIANTE: JSON/Postgres no aceptan NaN/Infinity ni tipos numpy/pandas;
+        # todo valor del payload se normaliza a un tipo nativo de Python o None.
+        if value is None or isinstance(value, (dict, list)):
+            return value
+
+        if isinstance(value, (np.floating, float)):
+            value = float(value)
+            return None if math.isnan(value) or math.isinf(value) else value
+
+        if isinstance(value, np.integer):
+            return int(value)
+
+        if isinstance(value, np.bool_):
+            return bool(value)
+
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
+
+        return value
+
     def build_monitoreo_payload(self, row, org_id: str, now: datetime | None = None) -> dict:
         id_monitoreo = str(uuid.uuid4())
         geom_json = mapping(row.geometry) if row.geometry else None
 
-        return {
+        payload = {
             "id_monitoreo": id_monitoreo,
             "ID_Organizacion": org_id,
             "ID_Parcela_Fija": row.get("ID_Parcela_Fija"),
             "ID_Socio": row.get("ID_Socio"),
             "fecha_monitoreo": self.resolve_fecha_monitoreo(row.get("fecha_monitoreo"), now=now),
             "tecnico_responsable": row.get("tecnico_responsable", "Tecnico Campo"),
-            "precision_gps": float(row.get("precision_gps") or 0.0),
+            "precision_gps": row.get("precision_gps"),
             "evidencia_foto": row.get("evidencia_foto"),
             "cumple_eudr": row.get("cumple_eudr", "SI"),
             "observaciones": row.get("observaciones", ""),
             "geom_inspeccion": geom_json,
             "estado_revision": "PENDIENTE",  # INVARIANTE: nunca omitir
         }
+        return {key: self.sanitize_json_value(value) for key, value in payload.items()}
 
     def upload_evidence_photo(self, photo_path: Path, storage_path: str) -> str:
         with open(photo_path, "rb") as f:

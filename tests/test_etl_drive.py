@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from shapely.geometry import Point
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 
 
@@ -229,6 +230,93 @@ class TestFechaMonitoreoNullHandling(unittest.TestCase):
 
         self.assertEqual(payload["fecha_monitoreo"], "2026-08-16")
         self.assertNotEqual(payload["fecha_monitoreo"], "None")
+
+
+class TestPayloadJSONSanitization(unittest.TestCase):
+    def _pipeline(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, _ = build_pipeline(Path(tmp))
+        return pipeline
+
+    def test_sanitize_json_value_replaces_nan_with_none(self):
+        pipeline = self._pipeline()
+        self.assertIsNone(pipeline.sanitize_json_value(float("nan")))
+        self.assertIsNone(pipeline.sanitize_json_value(np.float64("nan")))
+
+    def test_sanitize_json_value_replaces_inf_with_none(self):
+        pipeline = self._pipeline()
+        self.assertIsNone(pipeline.sanitize_json_value(float("inf")))
+        self.assertIsNone(pipeline.sanitize_json_value(float("-inf")))
+
+    def test_sanitize_json_value_converts_numpy_float_to_native_float(self):
+        pipeline = self._pipeline()
+        result = pipeline.sanitize_json_value(np.float64(2.1))
+        self.assertEqual(result, 2.1)
+        self.assertIs(type(result), float)
+
+    def test_sanitize_json_value_converts_numpy_int_to_native_int(self):
+        pipeline = self._pipeline()
+        result = pipeline.sanitize_json_value(np.int64(5))
+        self.assertEqual(result, 5)
+        self.assertIs(type(result), int)
+
+    def test_sanitize_json_value_passes_through_none_and_regular_values(self):
+        pipeline = self._pipeline()
+        self.assertIsNone(pipeline.sanitize_json_value(None))
+        self.assertEqual(pipeline.sanitize_json_value("SI"), "SI")
+        self.assertEqual(pipeline.sanitize_json_value(3), 3)
+
+    def test_sanitize_json_value_leaves_geometry_dict_untouched(self):
+        pipeline = self._pipeline()
+        geom = {"type": "Point", "coordinates": (-77.0, -12.0)}
+        self.assertEqual(pipeline.sanitize_json_value(geom), geom)
+
+    def test_build_monitoreo_payload_replaces_nan_precision_with_none(self):
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["PARC-003"],
+                "ID_Socio": ["SOC-003"],
+                "fecha_monitoreo": ["2026-08-16"],
+                "tecnico_responsable": ["Ana Gomez"],
+                "precision_gps": [float("nan")],
+                "evidencia_foto": ["foto_01.jpg"],
+                "cumple_eudr": ["SI"],
+                "observaciones": [""],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        payload = pipeline.build_monitoreo_payload(row, "ORG-001")
+
+        self.assertIsNone(payload["precision_gps"])
+
+    def test_build_monitoreo_payload_precision_gps_is_native_float(self):
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["PARC-004"],
+                "ID_Socio": ["SOC-004"],
+                "fecha_monitoreo": ["2026-08-16"],
+                "tecnico_responsable": ["Ana Gomez"],
+                "precision_gps": [2.1],
+                "evidencia_foto": ["foto_01.jpg"],
+                "cumple_eudr": ["SI"],
+                "observaciones": [""],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        payload = pipeline.build_monitoreo_payload(row, "ORG-001")
+
+        self.assertIs(type(payload["precision_gps"]), float)
+        self.assertNotIsInstance(payload["precision_gps"], np.floating)
 
 
 class TestArchiveRenaming(unittest.TestCase):
