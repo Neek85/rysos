@@ -9,7 +9,7 @@
    - `find_geo_layer(extracted_dir)`: localizar `.gpkg` (prioridad) o `.geojson`.
    - `load_and_reproject(geo_path)`: leer capa y forzar EPSG:4326.
    - `find_photos(extracted_dir)`: localizar archivos `.jpg/.jpeg/.png`.
-   - `build_storage_path(org_id, id_monitoreo, photo_path)`: construir ruta `{org}/{id_monitoreo}/{foto}` para el bucket `evidencias-eudr`.
+   - `build_storage_path(org_id, id_monitoreo, photo_path)`: construir ruta `{org}/{id_monitoreo}/{foto}` para el bucket `evidencias_eudr`.
    - `build_monitoreo_payload(row, org_id)`: construir payload con `estado_revision = 'PENDIENTE'`.
    - `build_archive_destination(zip_path, org_id, archive_root, timestamp)`: calcular ruta y nombre `PROCESADO_YYYYMMDD_HHMMSS_{filename}.zip`.
    - `archive_package(zip_path, org_id, archive_root, execute_move)`: mover el archivo (o simular) al destino calculado.
@@ -27,7 +27,4 @@ En caso de falla durante la ingesta de un paquete:
 - El paquete NO se archiva si el proceso falla antes de completar la inserción y carga de evidencias (se mantiene en `INBOX/{ID_Organizacion}/` para reintento).
 - Los registros insertados con `estado_revision = 'PENDIENTE'` no afectan la vista `view_eudr_dashboard_aprobados` (filtra solo `APROBADO`).
 - Ejecutar `DELETE FROM public."EUDR_MONITOREO" WHERE estado_revision = 'PENDIENTE' AND "ID_Organizacion" = '<org>' AND fecha_monitoreo = '<fecha_lote>';` para eliminar un lote parcialmente insertado antes de reintentar.
-- Las fotos subidas a `evidencias-eudr/{org}/{id_monitoreo}/` pueden eliminarse desde el Dashboard de Supabase Storage antes del reintento.
-
-## 3. Pendiente de Reconciliación (no bloqueante para esta tarea)
-- Confirmar con el usuario si el bucket `evidencias-eudr` (Tarea 7.5) debe unificarse con `evidencias_eudr` (Fase 2, ya existente) o permanecer como bucket independiente para el flujo de Drive.
+- Las fotos subidas a `evidencias_eudr/{org}/{id_monitoreo}/` pueden eliminarse desde el Dashboard de Supabase Storage antes del reintento.
