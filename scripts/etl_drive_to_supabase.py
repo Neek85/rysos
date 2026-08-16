@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from shapely.geometry import mapping
+import fiona
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -21,6 +22,13 @@ ARCHIVE_FILENAME_PATTERN = re.compile(r"^PROCESADO_\d{8}_\d{6}_.+\.zip$")
 INBOX_DIRNAME = "RYZOS_INBOX"
 ARCHIVE_DIRNAME = "RYZOS_ARCHIVE"
 INVALID_DATE_TOKENS = {"", "none", "nan", "nat", "null"}
+MONITOREO_LAYER_PREFIX = "EUDR_MONITOREO"
+
+# INVARIANTE: QField exporta la capa de monitoreo y sus atributos con nombres que
+# varian segun la version del formulario de campo; se resuelve por orden de prioridad,
+# prefiriendo siempre el nombre canonico de columna de EUDR_MONITOREO.
+PARCELA_FIELD_CANDIDATES = ("ID_Parcela_Fija", "parcela_nombre", "ID_Parcela")
+SOCIO_FIELD_CANDIDATES = ("ID_Socio", "nuevo_productor_nombre", "nombre_productor", "productor")
 
 
 class DriveZipETLPipeline:
@@ -54,10 +62,24 @@ class DriveZipETLPipeline:
             return geojson_files[0]
         return None
 
-    def load_and_reproject(self, geo_path: Path) -> gpd.GeoDataFrame:
+    def find_monitoreo_layer(self, geo_path: Path) -> str | None:
+        # INVARIANTE: la capa de monitoreo puede exportarse con sufijos dinamicos
+        # (fecha, version de formulario, etc.); se busca por prefijo, no por nombre exacto.
         try:
-            gdf = gpd.read_file(geo_path, layer="EUDR_MONITOREO")
+            layers = fiona.listlayers(str(geo_path))
         except Exception:
+            return None
+
+        for layer in layers:
+            if layer.upper().startswith(MONITOREO_LAYER_PREFIX):
+                return layer
+        return None
+
+    def load_and_reproject(self, geo_path: Path) -> gpd.GeoDataFrame:
+        layer_name = self.find_monitoreo_layer(geo_path)
+        if layer_name is not None:
+            gdf = gpd.read_file(geo_path, layer=layer_name)
+        else:
             gdf = gpd.read_file(geo_path)
 
         # INVARIANTE: toda geometría de campo se fuerza a WGS84 antes de insertar.
@@ -113,6 +135,24 @@ class DriveZipETLPipeline:
 
         return value
 
+    def resolve_field_with_fallback(self, row, candidates: tuple[str, ...]):
+        # INVARIANTE: se recorre la lista de candidatos en orden de prioridad y se usa
+        # el primer valor presente y no vacio; nunca el nombre de columna en si.
+        for field_name in candidates:
+            value = row.get(field_name)
+            if value is None:
+                continue
+            try:
+                is_missing = pd.isna(value)
+            except (TypeError, ValueError):
+                is_missing = False
+            if is_missing:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            return value
+        return None
+
     def build_monitoreo_payload(self, row, org_id: str, now: datetime | None = None) -> dict:
         id_monitoreo = str(uuid.uuid4())
         geom_json = mapping(row.geometry) if row.geometry else None
@@ -120,8 +160,8 @@ class DriveZipETLPipeline:
         payload = {
             "id_monitoreo": id_monitoreo,
             "ID_Organizacion": org_id,
-            "ID_Parcela_Fija": row.get("ID_Parcela_Fija"),
-            "ID_Socio": row.get("ID_Socio"),
+            "ID_Parcela_Fija": self.resolve_field_with_fallback(row, PARCELA_FIELD_CANDIDATES),
+            "ID_Socio": self.resolve_field_with_fallback(row, SOCIO_FIELD_CANDIDATES),
             "fecha_monitoreo": self.resolve_fecha_monitoreo(row.get("fecha_monitoreo"), now=now),
             "tecnico_responsable": row.get("tecnico_responsable", "Tecnico Campo"),
             "precision_gps": row.get("precision_gps"),

@@ -122,6 +122,154 @@ class TestZipExtraction(unittest.TestCase):
             self.assertEqual(photos[0].name, "foto_01.jpg")
 
 
+class TestDynamicLayerDetection(unittest.TestCase):
+    def _pipeline(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, _ = build_pipeline(Path(tmp))
+        return pipeline
+
+    def _write_gpkg(self, path: Path, layer_name: str, extra_columns: dict | None = None) -> Path:
+        columns = {
+            "ID_Parcela_Fija": ["PARC-001"],
+            "ID_Socio": ["SOC-001"],
+            "fecha_monitoreo": ["2026-08-16"],
+        }
+        if extra_columns:
+            columns.update(extra_columns)
+
+        gdf = gpd.GeoDataFrame(columns, geometry=[Point(-77.0, -12.0)], crs="EPSG:4326")
+        gdf.to_file(path, layer=layer_name, driver="GPKG")
+        return path
+
+    def test_find_monitoreo_layer_matches_dynamic_suffix(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = self._pipeline()
+            gpkg_path = self._write_gpkg(
+                Path(tmp) / "inspeccion.gpkg", "EUDR_MONITOREO_2026_08_16"
+            )
+
+            layer_name = pipeline.find_monitoreo_layer(gpkg_path)
+
+            self.assertEqual(layer_name, "EUDR_MONITOREO_2026_08_16")
+
+    def test_find_monitoreo_layer_returns_none_when_no_match(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = self._pipeline()
+            gpkg_path = self._write_gpkg(Path(tmp) / "otra_capa.gpkg", "OTRA_CAPA_SIN_RELACION")
+
+            layer_name = pipeline.find_monitoreo_layer(gpkg_path)
+
+            self.assertIsNone(layer_name)
+
+    def test_load_and_reproject_reads_dynamically_named_layer(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline = self._pipeline()
+            gpkg_path = self._write_gpkg(
+                Path(tmp) / "inspeccion.gpkg", "EUDR_MONITOREO_v2_campo"
+            )
+
+            gdf = pipeline.load_and_reproject(gpkg_path)
+
+            self.assertEqual(len(gdf), 1)
+            self.assertEqual(gdf.iloc[0]["ID_Parcela_Fija"], "PARC-001")
+
+
+class TestFieldNameFallback(unittest.TestCase):
+    def _pipeline(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, _ = build_pipeline(Path(tmp))
+        return pipeline
+
+    def test_resolve_field_with_fallback_prefers_canonical_name(self):
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"ID_Socio": ["SOC-CANONICAL"], "productor": ["Nombre Productor"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        value = pipeline.resolve_field_with_fallback(row, ("ID_Socio", "productor"))
+
+        self.assertEqual(value, "SOC-CANONICAL")
+
+    def test_resolve_field_with_fallback_uses_qfield_variant_when_canonical_missing(self):
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"nuevo_productor_nombre": ["Juan Perez"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        from scripts.etl_drive_to_supabase import SOCIO_FIELD_CANDIDATES
+
+        value = pipeline.resolve_field_with_fallback(row, SOCIO_FIELD_CANDIDATES)
+
+        self.assertEqual(value, "Juan Perez")
+
+    def test_resolve_field_with_fallback_skips_blank_and_missing_columns(self):
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"ID_Parcela_Fija": [""], "parcela_nombre": ["Lote El Mirador"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        from scripts.etl_drive_to_supabase import PARCELA_FIELD_CANDIDATES
+
+        value = pipeline.resolve_field_with_fallback(row, PARCELA_FIELD_CANDIDATES)
+
+        self.assertEqual(value, "Lote El Mirador")
+
+    def test_resolve_field_with_fallback_returns_none_when_all_candidates_missing(self):
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"otra_columna": ["valor"]}, geometry=[Point(-77.0, -12.0)], crs="EPSG:4326"
+        )
+        row = gdf.iloc[0]
+
+        from scripts.etl_drive_to_supabase import PARCELA_FIELD_CANDIDATES
+
+        value = pipeline.resolve_field_with_fallback(row, PARCELA_FIELD_CANDIDATES)
+
+        self.assertIsNone(value)
+
+    def test_build_monitoreo_payload_maps_qfield_variant_columns(self):
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {
+                "parcela_nombre": ["Lote El Mirador"],
+                "nuevo_productor_nombre": ["Juan Perez"],
+                "fecha_monitoreo": ["2026-08-16"],
+                "tecnico_responsable": ["Ana Gomez"],
+                "precision_gps": [2.1],
+                "evidencia_foto": ["foto_01.jpg"],
+                "cumple_eudr": ["SI"],
+                "observaciones": [""],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        payload = pipeline.build_monitoreo_payload(row, "ORG-001")
+
+        self.assertEqual(payload["ID_Parcela_Fija"], "Lote El Mirador")
+        self.assertEqual(payload["ID_Socio"], "Juan Perez")
+
+
 class TestPayloadRestructuring(unittest.TestCase):
     def test_build_monitoreo_payload_sets_pendiente(self):
         import tempfile
