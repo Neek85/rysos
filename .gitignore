@@ -15,6 +15,14 @@ htmlcov/
 .env.*
 *.env
 
+# Next.js
+.next/
+out/
+
+# Node
+node_modules/
+npm-debug.log*
+
 # IDE / Claude Code local settings
 .claude/
 
