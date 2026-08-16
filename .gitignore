@@ -30,3 +30,6 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# E2E ETL Drive — artefactos generados localmente (scripts/run_e2e_etl_test.py)
+temp_drive/
