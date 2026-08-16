@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import { useEffect, useState } from 'react'
 import nextDynamic from 'next/dynamic'
-import { supabase } from '@/lib/supabaseClient'
+import { getSupabaseClient } from '@/lib/supabaseClient'
 import RiskBadge from '@/components/RiskBadge'
 
 const EUDRMap = nextDynamic(() => import('@/components/EUDRMap'), { ssr: false })
@@ -26,6 +26,13 @@ export default function DashboardPage() {
   const [error, setError] = useState(null)
 
   async function fetchRecords() {
+    const supabase = getSupabaseClient()
+    if (!supabase) {
+      setError('Cliente Supabase no configurado (revisa las variables de entorno).')
+      setLoading(false)
+      return
+    }
+
     const { data, error: err } = await supabase
       .from('view_eudr_dashboard_aprobados')
       .select(VIEW_COLUMNS)
@@ -40,6 +47,9 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchRecords()
+
+    const supabase = getSupabaseClient()
+    if (!supabase) return
 
     // Realtime: Supabase no soporta suscripción directa a vistas;
     // observamos la tabla subyacente y refrescamos la vista.
