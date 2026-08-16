@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from shapely.geometry import Point
 import geopandas as gpd
+import pandas as pd
 
 
 GEOJSON_ORG001 = {
@@ -148,6 +149,7 @@ class TestPayloadRestructuring(unittest.TestCase):
         self.assertEqual(payload["estado_revision"], "PENDIENTE")
         self.assertEqual(payload["ID_Organizacion"], "ORG-001")
         self.assertTrue(payload["id_monitoreo"])
+        self.assertEqual(payload["fecha_monitoreo"], "2026-08-16")
 
     def test_build_storage_path_structure(self):
         import tempfile
@@ -161,6 +163,72 @@ class TestPayloadRestructuring(unittest.TestCase):
 
         self.assertEqual(storage_path, "ORG-001/uuid-monitoreo-123/foto_01.jpg")
         self.assertEqual(len(storage_path.split("/")), 3)
+
+
+class TestFechaMonitoreoNullHandling(unittest.TestCase):
+    FIXED_NOW = datetime(2026, 8, 16, 9, 0, 0)
+
+    def _pipeline(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, _ = build_pipeline(Path(tmp))
+        return pipeline
+
+    def test_resolve_fecha_monitoreo_preserves_valid_date(self):
+        pipeline = self._pipeline()
+        self.assertEqual(
+            pipeline.resolve_fecha_monitoreo("2026-08-16", now=self.FIXED_NOW), "2026-08-16"
+        )
+
+    def test_resolve_fecha_monitoreo_none_falls_back_to_today(self):
+        pipeline = self._pipeline()
+        self.assertEqual(pipeline.resolve_fecha_monitoreo(None, now=self.FIXED_NOW), "2026-08-16")
+
+    def test_resolve_fecha_monitoreo_string_none_falls_back_to_today(self):
+        pipeline = self._pipeline()
+        self.assertEqual(
+            pipeline.resolve_fecha_monitoreo("None", now=self.FIXED_NOW), "2026-08-16"
+        )
+
+    def test_resolve_fecha_monitoreo_empty_string_falls_back_to_today(self):
+        pipeline = self._pipeline()
+        self.assertEqual(pipeline.resolve_fecha_monitoreo("  ", now=self.FIXED_NOW), "2026-08-16")
+
+    def test_resolve_fecha_monitoreo_nan_falls_back_to_today(self):
+        pipeline = self._pipeline()
+        self.assertEqual(
+            pipeline.resolve_fecha_monitoreo(float("nan"), now=self.FIXED_NOW), "2026-08-16"
+        )
+
+    def test_resolve_fecha_monitoreo_nat_falls_back_to_today(self):
+        pipeline = self._pipeline()
+        self.assertEqual(
+            pipeline.resolve_fecha_monitoreo(pd.NaT, now=self.FIXED_NOW), "2026-08-16"
+        )
+
+    def test_build_monitoreo_payload_with_missing_date_uses_fallback(self):
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["PARC-002"],
+                "ID_Socio": ["SOC-002"],
+                "fecha_monitoreo": [None],
+                "tecnico_responsable": ["Ana Gomez"],
+                "precision_gps": [2.1],
+                "evidencia_foto": ["foto_01.jpg"],
+                "cumple_eudr": ["SI"],
+                "observaciones": [""],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        payload = pipeline.build_monitoreo_payload(row, "ORG-001", now=self.FIXED_NOW)
+
+        self.assertEqual(payload["fecha_monitoreo"], "2026-08-16")
+        self.assertNotEqual(payload["fecha_monitoreo"], "None")
 
 
 class TestArchiveRenaming(unittest.TestCase):

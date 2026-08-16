@@ -10,6 +10,7 @@ from pathlib import Path
 
 from shapely.geometry import mapping
 import geopandas as gpd
+import pandas as pd
 from supabase import create_client, Client
 
 EVIDENCIA_BUCKET = "evidencias_eudr"
@@ -17,6 +18,7 @@ PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 ARCHIVE_FILENAME_PATTERN = re.compile(r"^PROCESADO_\d{8}_\d{6}_.+\.zip$")
 INBOX_DIRNAME = "RYZOS_INBOX"
 ARCHIVE_DIRNAME = "RYZOS_ARCHIVE"
+INVALID_DATE_TOKENS = {"", "none", "nan", "nat", "null"}
 
 
 class DriveZipETLPipeline:
@@ -70,7 +72,22 @@ class DriveZipETLPipeline:
     def build_storage_path(self, org_id: str, id_monitoreo: str, photo_path: Path) -> str:
         return f"{org_id}/{id_monitoreo}/{photo_path.name}"
 
-    def build_monitoreo_payload(self, row, org_id: str) -> dict:
+    def resolve_fecha_monitoreo(self, raw_value, now: datetime | None = None) -> str:
+        # INVARIANTE: nunca insertar un string invalido ("None"/"NaT"/"") en una columna date.
+        # Si el paquete de campo no trae fecha valida, se usa la fecha actual de procesamiento.
+        if raw_value is not None:
+            try:
+                is_missing = pd.isna(raw_value)
+            except (TypeError, ValueError):
+                is_missing = False
+            if not is_missing:
+                value_str = str(raw_value).strip()
+                if value_str.lower() not in INVALID_DATE_TOKENS:
+                    return value_str
+
+        return (now or datetime.now()).strftime("%Y-%m-%d")
+
+    def build_monitoreo_payload(self, row, org_id: str, now: datetime | None = None) -> dict:
         id_monitoreo = str(uuid.uuid4())
         geom_json = mapping(row.geometry) if row.geometry else None
 
@@ -79,7 +96,7 @@ class DriveZipETLPipeline:
             "ID_Organizacion": org_id,
             "ID_Parcela_Fija": row.get("ID_Parcela_Fija"),
             "ID_Socio": row.get("ID_Socio"),
-            "fecha_monitoreo": str(row.get("fecha_monitoreo")),
+            "fecha_monitoreo": self.resolve_fecha_monitoreo(row.get("fecha_monitoreo"), now=now),
             "tecnico_responsable": row.get("tecnico_responsable", "Tecnico Campo"),
             "precision_gps": float(row.get("precision_gps") or 0.0),
             "evidencia_foto": row.get("evidencia_foto"),
