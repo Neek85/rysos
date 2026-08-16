@@ -161,6 +161,18 @@ class DriveZipETLPipeline:
     def build_storage_path(self, org_id: str, photo_path: Path) -> str:
         return f"{org_id}/{photo_path.name}"
 
+    def resolve_photo_basename(self, foto_name) -> str | None:
+        # INVARIANTE: cuando evidencia_foto viene vacio en el GeoPackage, geopandas
+        # puede tipar la columna como float64 y devolver NaN (no None ni "") — NaN es
+        # truthy en Python, asi que nunca se debe pasar algo no-string a
+        # os.path.basename() sin antes descartar float/NaN/otros tipos numericos.
+        if not isinstance(foto_name, str):
+            return None
+        foto_name = foto_name.strip()
+        if not foto_name:
+            return None
+        return os.path.basename(foto_name)
+
     def resolve_fecha_monitoreo(self, raw_value, now: datetime | None = None) -> str:
         # INVARIANTE: nunca insertar un string invalido ("None"/"NaT"/"") en una columna date.
         # Si el paquete de campo no trae fecha valida, se usa la fecha actual de procesamiento.
@@ -352,7 +364,7 @@ class DriveZipETLPipeline:
                 # INVARIANTE: QField a veces guarda la ruta relativa del adjunto
                 # (ej. "DCIM/foto_01.jpg") en vez del nombre de archivo suelto; se
                 # compara siempre por os.path.basename() contra photos_by_name.
-                foto_basename = os.path.basename(foto_name) if foto_name else None
+                foto_basename = self.resolve_photo_basename(foto_name)
                 photo_path = photos_by_name.get(foto_basename) if foto_basename else None
                 storage_path = None
                 if photo_path is not None:

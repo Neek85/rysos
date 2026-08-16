@@ -606,6 +606,50 @@ class TestEvidenciaFotoBasenameMatching(unittest.TestCase):
             pipeline, mock_supabase = build_pipeline(Path(tmp))
         return pipeline, mock_supabase
 
+    def test_resolve_photo_basename_rejects_float_nan(self):
+        pipeline, _ = self._pipeline()
+        self.assertIsNone(pipeline.resolve_photo_basename(float("nan")))
+        self.assertIsNone(pipeline.resolve_photo_basename(np.nan))
+
+    def test_resolve_photo_basename_rejects_none_and_numeric_types(self):
+        pipeline, _ = self._pipeline()
+        self.assertIsNone(pipeline.resolve_photo_basename(None))
+        self.assertIsNone(pipeline.resolve_photo_basename(123))
+        self.assertIsNone(pipeline.resolve_photo_basename(1.5))
+        self.assertIsNone(pipeline.resolve_photo_basename(np.float64(2.1)))
+
+    def test_resolve_photo_basename_rejects_blank_strings(self):
+        pipeline, _ = self._pipeline()
+        self.assertIsNone(pipeline.resolve_photo_basename(""))
+        self.assertIsNone(pipeline.resolve_photo_basename("   "))
+
+    def test_resolve_photo_basename_extracts_basename_from_path(self):
+        pipeline, _ = self._pipeline()
+        self.assertEqual(pipeline.resolve_photo_basename("DCIM/foto_01.jpg"), "foto_01.jpg")
+        self.assertEqual(pipeline.resolve_photo_basename("foto_01.jpg"), "foto_01.jpg")
+
+    def test_process_layer_rows_does_not_raise_when_evidencia_foto_column_is_nan_float(self):
+        # INVARIANTE: geopandas puede tipar evidencia_foto como float64 (NaN) cuando
+        # todas las filas de la capa vienen sin foto; no debe lanzar TypeError.
+        pipeline, _ = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["PARC-001"],
+                "ID_Socio": ["SOC-001"],
+                "fecha_monitoreo": ["2026-08-16"],
+                "evidencia_foto": [float("nan")],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        self.assertEqual(gdf["evidencia_foto"].dtype.kind, "f")
+
+        ids, photos = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+
+        self.assertEqual(photos, [])
+        insert_calls = pipeline.supabase.table.return_value.insert.call_args_list
+        self.assertIsNone(insert_calls[-1].args[0]["evidencia_foto"])
+
     def test_matches_photo_when_evidencia_foto_is_a_relative_dcim_path(self):
         import tempfile
 
