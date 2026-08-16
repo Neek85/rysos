@@ -22,7 +22,30 @@ ARCHIVE_FILENAME_PATTERN = re.compile(r"^PROCESADO_\d{8}_\d{6}_.+\.zip$")
 INBOX_DIRNAME = "RYZOS_INBOX"
 ARCHIVE_DIRNAME = "RYZOS_ARCHIVE"
 INVALID_DATE_TOKENS = {"", "none", "nan", "nat", "null"}
+
+MONITOREO_TABLE = "EUDR_MONITOREO"
+USO_SUELO_TABLE = "EUDR_USO_SUELO"
+INSTALACIONES_TABLE = "EUDR_INSTALACIONES"
 MONITOREO_LAYER_PREFIX = "EUDR_MONITOREO"
+USO_SUELO_LAYER_PREFIX = "EUDR_USO_SUELO"
+INSTALACIONES_LAYER_PREFIX = "EUDR_INSTALACIONES"
+
+# INVARIANTE: un GeoPackage de QField puede traer varias capas vectoriales, cada una
+# destinada a una tabla distinta; se clasifica por prefijo de nombre de capa, nunca
+# por posicion u orden dentro del archivo.
+LAYER_PREFIX_TABLE_MAP = (
+    (MONITOREO_LAYER_PREFIX, MONITOREO_TABLE),
+    (USO_SUELO_LAYER_PREFIX, USO_SUELO_TABLE),
+    (INSTALACIONES_LAYER_PREFIX, INSTALACIONES_TABLE),
+)
+
+# INVARIANTE: solo estas tablas tienen columna evidencia_foto; las demas nunca
+# intentan asociar una foto subida a Supabase Storage.
+TABLES_WITH_EVIDENCIA_FOTO = (MONITOREO_TABLE, INSTALACIONES_TABLE)
+
+# Sentinela para distinguir "no se paso evidencia_foto" (usar el valor crudo de la fila)
+# de "se paso explicitamente None" (ya se intento subir la foto y no habia ninguna).
+_UNSET = object()
 
 # INVARIANTE: QField exporta la capa de monitoreo y sus atributos con nombres que
 # varian segun la version del formulario de campo; se resuelve por orden de prioridad,
@@ -76,21 +99,41 @@ class DriveZipETLPipeline:
             return geojson_files[0]
         return None
 
-    def find_monitoreo_layer(self, geo_path: Path) -> str | None:
-        # INVARIANTE: la capa de monitoreo puede exportarse con sufijos dinamicos
-        # (fecha, version de formulario, etc.); se busca por prefijo, no por nombre exacto.
+    def list_layer_names(self, geo_path: Path) -> list[str]:
         try:
-            layers = fiona.listlayers(str(geo_path))
+            return list(fiona.listlayers(str(geo_path)))
         except Exception:
-            return None
+            return []
 
-        for layer in layers:
-            if layer.upper().startswith(MONITOREO_LAYER_PREFIX):
+    def find_layer_by_prefix(self, geo_path: Path, prefix: str) -> str | None:
+        # INVARIANTE: las capas se exportan con sufijos dinamicos (fecha, version de
+        # formulario, etc.); se buscan por prefijo, no por nombre exacto.
+        for layer in self.list_layer_names(geo_path):
+            if layer.upper().startswith(prefix):
                 return layer
         return None
 
-    def load_and_reproject(self, geo_path: Path) -> gpd.GeoDataFrame:
-        layer_name = self.find_monitoreo_layer(geo_path)
+    def find_monitoreo_layer(self, geo_path: Path) -> str | None:
+        return self.find_layer_by_prefix(geo_path, MONITOREO_LAYER_PREFIX)
+
+    def classify_layers(self, geo_path: Path) -> list[tuple[str | None, str]]:
+        """Devuelve pares (nombre_de_capa, tabla_destino) para cada capa reconocida."""
+        classified: list[tuple[str | None, str]] = []
+        for layer in self.list_layer_names(geo_path):
+            layer_upper = layer.upper()
+            for prefix, table_name in LAYER_PREFIX_TABLE_MAP:
+                if layer_upper.startswith(prefix):
+                    classified.append((layer, table_name))
+                    break
+
+        if not classified:
+            # INVARIANTE: retrocompatibilidad — un archivo de una sola capa sin prefijo
+            # EUDR_* reconocido (ej. GeoJSON simple de QField) se trata como EUDR_MONITOREO.
+            classified.append((None, MONITOREO_TABLE))
+
+        return classified
+
+    def load_layer(self, geo_path: Path, layer_name: str | None) -> gpd.GeoDataFrame:
         if layer_name is not None:
             gdf = gpd.read_file(geo_path, layer=layer_name)
         else:
@@ -101,14 +144,17 @@ class DriveZipETLPipeline:
             gdf = gdf.to_crs(epsg=4326)
         return gdf
 
+    def load_and_reproject(self, geo_path: Path) -> gpd.GeoDataFrame:
+        return self.load_layer(geo_path, self.find_monitoreo_layer(geo_path))
+
     def find_photos(self, extracted_dir: Path) -> list[Path]:
         return sorted(
             p for p in extracted_dir.rglob("*")
             if p.is_file() and p.suffix.lower() in PHOTO_EXTENSIONS
         )
 
-    def build_storage_path(self, org_id: str, id_monitoreo: str, photo_path: Path) -> str:
-        return f"{org_id}/{id_monitoreo}/{photo_path.name}"
+    def build_storage_path(self, org_id: str, record_id: str, photo_path: Path) -> str:
+        return f"{org_id}/{record_id}/{photo_path.name}"
 
     def resolve_fecha_monitoreo(self, raw_value, now: datetime | None = None) -> str:
         # INVARIANTE: nunca insertar un string invalido ("None"/"NaT"/"") en una columna date.
@@ -167,13 +213,21 @@ class DriveZipETLPipeline:
             return value
         return None
 
-    def build_monitoreo_payload(self, row, org_id: str, now: datetime | None = None) -> dict:
-        id_monitoreo = str(uuid.uuid4())
+    def build_monitoreo_payload(
+        self,
+        row,
+        org_id: str,
+        record_id: str | None = None,
+        evidencia_foto=_UNSET,
+        now: datetime | None = None,
+    ) -> dict:
+        id_monitoreo = record_id or str(uuid.uuid4())
         geom_json = mapping(row.geometry) if row.geometry else None
 
         id_parcela_fija = self.resolve_field_with_fallback(row, PARCELA_FIELD_CANDIDATES)
         parcela_id_estricto = self.resolve_field_with_fallback(row, PARCELA_STRICT_CANDIDATES)
         nuevo_productor_nombre = self.resolve_field_with_fallback(row, PRODUCTOR_NOMBRE_CANDIDATES)
+        foto_value = row.get("evidencia_foto") if evidencia_foto is _UNSET else evidencia_foto
 
         observaciones = row.get("observaciones") or ""
         # INVARIANTE: si la parcela solo se identifico por nombre (sin ID/codigo estricto),
@@ -192,13 +246,56 @@ class DriveZipETLPipeline:
             "fecha_monitoreo": self.resolve_fecha_monitoreo(row.get("fecha_monitoreo"), now=now),
             "tecnico_responsable": row.get("tecnico_responsable", "Tecnico Campo"),
             "precision_gps": row.get("precision_gps"),
-            "evidencia_foto": row.get("evidencia_foto"),
+            "evidencia_foto": foto_value,
             "cumple_eudr": row.get("cumple_eudr", "SI"),
             "observaciones": observaciones,
             "geom_inspeccion": geom_json,
             "estado_revision": "PENDIENTE",  # INVARIANTE: nunca omitir
         }
         return {key: self.sanitize_json_value(value) for key, value in payload.items()}
+
+    def build_uso_suelo_payload(self, row, org_id: str) -> dict:
+        geom_json = mapping(row.geometry) if row.geometry else None
+        payload = {
+            "id_parcela": self.resolve_field_with_fallback(row, ("id_parcela",)),
+            "tipo_uso": self.resolve_field_with_fallback(row, ("tipo_uso",)),
+            "geom": geom_json,
+            "ID_Organizacion": org_id,
+            "estado_revision": "PENDIENTE",  # INVARIANTE: nunca omitir
+        }
+        return {key: self.sanitize_json_value(value) for key, value in payload.items()}
+
+    def build_instalaciones_payload(self, row, org_id: str, evidencia_foto=_UNSET) -> dict:
+        geom_json = mapping(row.geometry) if row.geometry else None
+        foto_value = row.get("evidencia_foto") if evidencia_foto is _UNSET else evidencia_foto
+        payload = {
+            "id_parcela": self.resolve_field_with_fallback(row, ("id_parcela",)),
+            "tipo_infra": self.resolve_field_with_fallback(row, ("tipo_infra",)),
+            "evidencia_foto": foto_value,
+            "geom": geom_json,
+            "ID_Organizacion": org_id,
+            "estado_revision": "PENDIENTE",  # INVARIANTE: nunca omitir
+        }
+        return {key: self.sanitize_json_value(value) for key, value in payload.items()}
+
+    def build_payload_for_table(
+        self,
+        table_name: str,
+        row,
+        org_id: str,
+        record_id: str,
+        evidencia_foto=_UNSET,
+        now: datetime | None = None,
+    ) -> dict:
+        if table_name == MONITOREO_TABLE:
+            return self.build_monitoreo_payload(
+                row, org_id, record_id=record_id, evidencia_foto=evidencia_foto, now=now
+            )
+        if table_name == USO_SUELO_TABLE:
+            return self.build_uso_suelo_payload(row, org_id)
+        if table_name == INSTALACIONES_TABLE:
+            return self.build_instalaciones_payload(row, org_id, evidencia_foto=evidencia_foto)
+        raise ValueError(f"Tabla EUDR no reconocida: {table_name}")
 
     def upload_evidence_photo(self, photo_path: Path, storage_path: str) -> str:
         with open(photo_path, "rb") as f:
@@ -229,6 +326,34 @@ class DriveZipETLPipeline:
             shutil.move(str(zip_path), str(dest_path))
         return dest_path
 
+    def process_layer_rows(
+        self, gdf: gpd.GeoDataFrame, table_name: str, org_id: str, photos_by_name: dict[str, Path]
+    ) -> tuple[list[str], list[str]]:
+        """Inserta cada fila de una capa en su tabla destino; devuelve (ids, fotos_subidas)."""
+        inserted_ids = []
+        uploaded_photos = []
+
+        for _, row in gdf.iterrows():
+            record_id = str(uuid.uuid4())
+
+            storage_path = _UNSET
+            if table_name in TABLES_WITH_EVIDENCIA_FOTO:
+                foto_name = row.get("evidencia_foto")
+                photo_path = photos_by_name.get(foto_name) if foto_name else None
+                storage_path = None
+                if photo_path is not None:
+                    storage_path = self.build_storage_path(org_id, record_id, photo_path)
+                    self.upload_evidence_photo(photo_path, storage_path)
+                    uploaded_photos.append(storage_path)
+
+            payload = self.build_payload_for_table(
+                table_name, row, org_id, record_id=record_id, evidencia_foto=storage_path
+            )
+            self.supabase.table(table_name).insert(payload).execute()
+            inserted_ids.append(payload.get("id_monitoreo") or record_id)
+
+        return inserted_ids, uploaded_photos
+
     def process_package(self, zip_path: Path, execute_move: bool = True) -> dict:
         org_id = self.get_org_id_from_path(zip_path)
 
@@ -241,26 +366,21 @@ class DriveZipETLPipeline:
                     f"No se encontro capa .gpkg/.geojson en el paquete: {zip_path.name}"
                 )
 
-            gdf = self.load_and_reproject(geo_path)
             photos = self.find_photos(extracted_dir)
             photos_by_name = {p.name: p for p in photos}
 
             inserted_ids = []
             uploaded_photos = []
+            records_by_table: dict[str, int] = {}
 
-            for _, row in gdf.iterrows():
-                payload = self.build_monitoreo_payload(row, org_id)
-                self.supabase.table("EUDR_MONITOREO").insert(payload).execute()
-                inserted_ids.append(payload["id_monitoreo"])
-
-                foto_name = row.get("evidencia_foto")
-                photo_path = photos_by_name.get(foto_name) if foto_name else None
-                if photo_path is not None:
-                    storage_path = self.build_storage_path(
-                        org_id, payload["id_monitoreo"], photo_path
-                    )
-                    self.upload_evidence_photo(photo_path, storage_path)
-                    uploaded_photos.append(storage_path)
+            for layer_name, table_name in self.classify_layers(geo_path):
+                gdf = self.load_layer(geo_path, layer_name)
+                layer_ids, layer_photos = self.process_layer_rows(
+                    gdf, table_name, org_id, photos_by_name
+                )
+                inserted_ids.extend(layer_ids)
+                uploaded_photos.extend(layer_photos)
+                records_by_table[table_name] = records_by_table.get(table_name, 0) + len(layer_ids)
 
             archive_dest = self.archive_package(zip_path, org_id, execute_move=execute_move)
 
@@ -268,6 +388,7 @@ class DriveZipETLPipeline:
             "org_id": org_id,
             "inserted_ids": inserted_ids,
             "uploaded_photos": uploaded_photos,
+            "records_by_table": records_by_table,
             "archive_dest": archive_dest,
         }
 
@@ -276,9 +397,12 @@ class DriveZipETLPipeline:
         for zip_path in self.discover_packages():
             print(f"[ETL-DRIVE] Procesando paquete: {zip_path}")
             result = self.process_package(zip_path, execute_move=execute_move)
+            tablas = ", ".join(
+                f"{tabla}={cantidad}" for tabla, cantidad in result["records_by_table"].items()
+            )
             print(
                 f"  -> Org: {result['org_id']} | "
-                f"Registros: {len(result['inserted_ids'])} | "
+                f"Registros: {len(result['inserted_ids'])} ({tablas}) | "
                 f"Fotos: {len(result['uploaded_photos'])} | "
                 f"Archivado en: {result['archive_dest']}"
             )

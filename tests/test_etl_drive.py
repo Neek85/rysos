@@ -345,6 +345,221 @@ class TestFieldNameFallback(unittest.TestCase):
         self.assertEqual(payload["observaciones"], "nota original")
 
 
+class TestMultiLayerIngestion(unittest.TestCase):
+    def _build_multilayer_zip(self, org_dir: Path) -> Path:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            gpkg_path = Path(tmp) / "paquete_multicapa.gpkg"
+
+            monitoreo_gdf = gpd.GeoDataFrame(
+                {
+                    "ID_Parcela_Fija": ["PARC-001"],
+                    "ID_Socio": ["SOC-001"],
+                    "fecha_monitoreo": ["2026-08-16"],
+                    "evidencia_foto": ["foto_monitoreo.jpg"],
+                    "cumple_eudr": ["SI"],
+                    "observaciones": [""],
+                },
+                geometry=[Point(-77.0, -12.0)],
+                crs="EPSG:4326",
+            )
+            monitoreo_gdf.to_file(gpkg_path, layer="EUDR_MONITOREO", driver="GPKG")
+
+            uso_suelo_gdf = gpd.GeoDataFrame(
+                {"id_parcela": ["PARC-001"], "tipo_uso": ["Cafetal"]},
+                geometry=[Point(-77.1, -12.1)],
+                crs="EPSG:4326",
+            )
+            uso_suelo_gdf.to_file(gpkg_path, layer="EUDR_USO_SUELO", driver="GPKG", mode="a")
+
+            instalaciones_gdf = gpd.GeoDataFrame(
+                {
+                    "id_parcela": ["PARC-001"],
+                    "tipo_infra": ["Beneficio Humedo"],
+                    "evidencia_foto": ["foto_instalacion.jpg"],
+                },
+                geometry=[Point(-77.2, -12.2)],
+                crs="EPSG:4326",
+            )
+            instalaciones_gdf.to_file(
+                gpkg_path, layer="EUDR_INSTALACIONES", driver="GPKG", mode="a"
+            )
+
+            zip_path = org_dir / "paquete_multicapa.zip"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.write(gpkg_path, arcname="paquete_multicapa.gpkg")
+                zf.writestr("foto_monitoreo.jpg", b"fake-jpeg-monitoreo")
+                zf.writestr("foto_instalacion.jpg", b"fake-jpeg-instalacion")
+
+        return zip_path
+
+    def test_classify_layers_detects_all_three_tables(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
+            org_dir.mkdir(parents=True)
+            zip_path = self._build_multilayer_zip(org_dir)
+
+            pipeline, _ = build_pipeline(drive_root)
+            extract_to = drive_root / "extracted"
+            extract_to.mkdir()
+            pipeline.extract_package(zip_path, extract_to)
+            geo_path = pipeline.find_geo_layer(extract_to)
+
+            classified = pipeline.classify_layers(geo_path)
+            tables = {table_name for _, table_name in classified}
+
+            self.assertEqual(len(classified), 3)
+            self.assertEqual(tables, {"EUDR_MONITOREO", "EUDR_USO_SUELO", "EUDR_INSTALACIONES"})
+
+    def test_process_package_inserts_into_all_three_tables(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
+            org_dir.mkdir(parents=True)
+            zip_path = self._build_multilayer_zip(org_dir)
+
+            pipeline, mock_supabase = build_pipeline(drive_root)
+            result = pipeline.process_package(zip_path, execute_move=True)
+
+            self.assertEqual(
+                result["records_by_table"],
+                {"EUDR_MONITOREO": 1, "EUDR_USO_SUELO": 1, "EUDR_INSTALACIONES": 1},
+            )
+            self.assertEqual(len(result["inserted_ids"]), 3)
+
+            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
+            self.assertEqual(
+                set(table_calls), {"EUDR_MONITOREO", "EUDR_USO_SUELO", "EUDR_INSTALACIONES"}
+            )
+
+    def test_process_package_uploads_photos_for_monitoreo_and_instalaciones(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
+            org_dir.mkdir(parents=True)
+            zip_path = self._build_multilayer_zip(org_dir)
+
+            pipeline, _ = build_pipeline(drive_root)
+            result = pipeline.process_package(zip_path, execute_move=True)
+
+            self.assertEqual(len(result["uploaded_photos"]), 2)
+            self.assertTrue(any(p.endswith("/foto_monitoreo.jpg") for p in result["uploaded_photos"]))
+            self.assertTrue(
+                any(p.endswith("/foto_instalacion.jpg") for p in result["uploaded_photos"])
+            )
+
+    def test_process_package_evidencia_foto_holds_storage_path_not_raw_filename(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
+            org_dir.mkdir(parents=True)
+            zip_path = self._build_multilayer_zip(org_dir)
+
+            pipeline, mock_supabase = build_pipeline(drive_root)
+            pipeline.process_package(zip_path, execute_move=True)
+
+            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
+            insert_payloads = [
+                c.args[0] for c in mock_supabase.table.return_value.insert.call_args_list
+            ]
+            payload_by_table = dict(zip(table_calls, insert_payloads))
+
+            monitoreo_foto = payload_by_table["EUDR_MONITOREO"]["evidencia_foto"]
+            instalaciones_foto = payload_by_table["EUDR_INSTALACIONES"]["evidencia_foto"]
+
+            self.assertNotEqual(monitoreo_foto, "foto_monitoreo.jpg")
+            self.assertTrue(monitoreo_foto.startswith("ORG-001/"))
+            self.assertTrue(monitoreo_foto.endswith("/foto_monitoreo.jpg"))
+
+            self.assertNotEqual(instalaciones_foto, "foto_instalacion.jpg")
+            self.assertTrue(instalaciones_foto.startswith("ORG-001/"))
+            self.assertTrue(instalaciones_foto.endswith("/foto_instalacion.jpg"))
+
+    def test_process_package_uso_suelo_payload_has_no_evidencia_foto(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
+            org_dir.mkdir(parents=True)
+            zip_path = self._build_multilayer_zip(org_dir)
+
+            pipeline, mock_supabase = build_pipeline(drive_root)
+            pipeline.process_package(zip_path, execute_move=True)
+
+            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
+            insert_payloads = [
+                c.args[0] for c in mock_supabase.table.return_value.insert.call_args_list
+            ]
+            payload_by_table = dict(zip(table_calls, insert_payloads))
+
+            uso_suelo_payload = payload_by_table["EUDR_USO_SUELO"]
+            self.assertNotIn("evidencia_foto", uso_suelo_payload)
+            self.assertEqual(uso_suelo_payload["id_parcela"], "PARC-001")
+            self.assertEqual(uso_suelo_payload["tipo_uso"], "Cafetal")
+            self.assertEqual(uso_suelo_payload["ID_Organizacion"], "ORG-001")
+            self.assertEqual(uso_suelo_payload["estado_revision"], "PENDIENTE")
+
+    def test_process_package_instalaciones_payload_fields(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            org_dir = drive_root / "ORG-001" / "RYZOS_INBOX"
+            org_dir.mkdir(parents=True)
+            zip_path = self._build_multilayer_zip(org_dir)
+
+            pipeline, mock_supabase = build_pipeline(drive_root)
+            pipeline.process_package(zip_path, execute_move=True)
+
+            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
+            insert_payloads = [
+                c.args[0] for c in mock_supabase.table.return_value.insert.call_args_list
+            ]
+            payload_by_table = dict(zip(table_calls, insert_payloads))
+
+            instalaciones_payload = payload_by_table["EUDR_INSTALACIONES"]
+            self.assertEqual(instalaciones_payload["id_parcela"], "PARC-001")
+            self.assertEqual(instalaciones_payload["tipo_infra"], "Beneficio Humedo")
+            self.assertEqual(instalaciones_payload["ID_Organizacion"], "ORG-001")
+            self.assertEqual(instalaciones_payload["estado_revision"], "PENDIENTE")
+
+    def test_evidencia_foto_is_none_when_no_matching_photo_found(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            pipeline, _ = build_pipeline(drive_root)
+
+        gdf = gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["PARC-001"],
+                "ID_Socio": ["SOC-001"],
+                "fecha_monitoreo": ["2026-08-16"],
+                "evidencia_foto": ["foto_inexistente.jpg"],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        ids, photos = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+
+        self.assertEqual(photos, [])
+        insert_calls = pipeline.supabase.table.return_value.insert.call_args_list
+        self.assertIsNone(insert_calls[-1].args[0]["evidencia_foto"])
+
+
 class TestPayloadRestructuring(unittest.TestCase):
     def test_build_monitoreo_payload_sets_pendiente(self):
         import tempfile
