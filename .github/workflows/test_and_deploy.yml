@@ -1,0 +1,46 @@
+name: RYZOS CI/CD — Test & Quality Assurance
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test-suite:
+    name: Suite Completa de Tests RYZOS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código fuente
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Instalar dependencias del sistema (GDAL para geopandas)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libgdal-dev gdal-bin
+
+      - name: Instalar dependencias Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ejecutar suite completa de tests RYZOS
+        run: |
+          python -m pytest tests/ -v --tb=short
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      - name: Verificar salud del entorno staging
+        if: env.SUPABASE_URL != ''
+        run: python scripts/verify_staging_health.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
