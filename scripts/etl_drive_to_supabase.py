@@ -12,7 +12,7 @@ from shapely.geometry import mapping
 import geopandas as gpd
 from supabase import create_client, Client
 
-EVIDENCIA_BUCKET = "evidencias-eudr"
+EVIDENCIA_BUCKET = "evidencias_eudr"
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 ARCHIVE_FILENAME_PATTERN = re.compile(r"^PROCESADO_\d{8}_\d{6}_.+\.zip$")
 

@@ -280,7 +280,7 @@ class TestPipelineIntegration(unittest.TestCase):
             self.assertTrue(uploaded_path.startswith("ORG-001/"))
             self.assertTrue(uploaded_path.endswith("/foto_01.jpg"))
 
-            mock_supabase.storage.from_.assert_called_with("evidencias-eudr")
+            mock_supabase.storage.from_.assert_called_with("evidencias_eudr")
 
     def test_process_package_raises_when_no_geo_layer_found(self):
         import tempfile
