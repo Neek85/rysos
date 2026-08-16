@@ -15,23 +15,26 @@ from supabase import create_client, Client
 EVIDENCIA_BUCKET = "evidencias_eudr"
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 ARCHIVE_FILENAME_PATTERN = re.compile(r"^PROCESADO_\d{8}_\d{6}_.+\.zip$")
+INBOX_DIRNAME = "INBOX"
+ARCHIVE_DIRNAME = "ARCHIVE"
 
 
 class DriveZipETLPipeline:
     def __init__(self, supabase_url: str, supabase_key: str, drive_root: str):
         self.supabase: Client = create_client(supabase_url, supabase_key)
+        # INVARIANTE: drive_root es la carpeta RYZOS_CLIENTES; cada organizacion es una
+        # subcarpeta directa con su propio INBOX/ y ARCHIVE/ (jerarquia tenant-first).
         self.drive_root = Path(drive_root)
-        self.inbox_dir = self.drive_root / "INBOX"
-        self.archive_dir = self.drive_root / "ARCHIVE"
 
     def discover_packages(self) -> list[Path]:
-        if not self.inbox_dir.exists():
+        if not self.drive_root.exists():
             return []
-        return sorted(self.inbox_dir.glob("*/*.zip"))
+        return sorted(self.drive_root.glob(f"*/{INBOX_DIRNAME}/*.zip"))
 
     def get_org_id_from_path(self, zip_path: Path) -> str:
-        # INVARIANTE: la organización se deriva de la carpeta emisora, nunca del nombre del archivo.
-        return zip_path.parent.name
+        # INVARIANTE: la organizacion se deriva de RYZOS_CLIENTES/{ID_Organizacion}/,
+        # dos niveles arriba del .zip (padre inmediato = INBOX/), nunca del nombre del archivo.
+        return zip_path.parent.parent.name
 
     def extract_package(self, zip_path: Path, dest_dir: Path) -> Path:
         with zipfile.ZipFile(zip_path, "r") as zf:
@@ -100,7 +103,7 @@ class DriveZipETLPipeline:
     ) -> Path:
         ts = (timestamp or datetime.now()).strftime("%Y%m%d_%H%M%S")
         new_name = f"PROCESADO_{ts}_{zip_path.name}"
-        return self.archive_dir / org_id / new_name
+        return self.drive_root / org_id / ARCHIVE_DIRNAME / new_name
 
     def archive_package(
         self,
@@ -180,7 +183,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if len(sys.argv) < 2:
-        print("Uso: python etl_drive_to_supabase.py <drive_root> [--dry-run]")
+        print("Uso: python etl_drive_to_supabase.py <ruta_RYZOS_CLIENTES> [--dry-run]")
         sys.exit(1)
 
     dry_run = "--dry-run" in sys.argv

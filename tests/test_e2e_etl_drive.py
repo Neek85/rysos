@@ -34,13 +34,13 @@ class TestE2EDirectoryScaffolding(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def test_setup_directories_creates_ryzos_inbox_and_archive(self):
+    def test_setup_directories_creates_org_scoped_inbox_and_archive(self):
         inbox_dir, archive_dir = setup_directories(self.base_dir)
 
         self.assertTrue(inbox_dir.exists())
         self.assertTrue(archive_dir.exists())
-        self.assertEqual(inbox_dir, self.base_dir / "RYZOS_INBOX" / ORG_ID)
-        self.assertEqual(archive_dir, self.base_dir / "RYZOS_ARCHIVE" / ORG_ID)
+        self.assertEqual(inbox_dir, self.base_dir / ORG_ID / "INBOX")
+        self.assertEqual(archive_dir, self.base_dir / ORG_ID / "ARCHIVE")
 
 
 class TestE2EPipelineOrchestration(unittest.TestCase):

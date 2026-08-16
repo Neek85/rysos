@@ -23,8 +23,9 @@ ARCHIVED_ZIP_PATTERN = re.compile(rf"^PROCESADO_\d{{8}}_\d{{6}}_{re.escape(ZIP_N
 
 
 def setup_directories(base_dir: Path) -> tuple[Path, Path]:
-    inbox_dir = base_dir / "RYZOS_INBOX" / ORG_ID
-    archive_dir = base_dir / "RYZOS_ARCHIVE" / ORG_ID
+    # base_dir representa RYZOS_CLIENTES; cada organizacion tiene su propio INBOX/ARCHIVE.
+    inbox_dir = base_dir / ORG_ID / "INBOX"
+    archive_dir = base_dir / ORG_ID / "ARCHIVE"
     inbox_dir.mkdir(parents=True, exist_ok=True)
     archive_dir.mkdir(parents=True, exist_ok=True)
     return inbox_dir, archive_dir
@@ -86,9 +87,6 @@ def build_pipeline(
     else:
         pipeline = DriveZipETLPipeline(supabase_url, supabase_key, str(base_dir))
 
-    # Tarea 7.5 usa INBOX/ARCHIVE; este escenario E2E usa la convencion RYZOS_INBOX/RYZOS_ARCHIVE.
-    pipeline.inbox_dir = base_dir / "RYZOS_INBOX"
-    pipeline.archive_dir = base_dir / "RYZOS_ARCHIVE"
     return pipeline
 
 
