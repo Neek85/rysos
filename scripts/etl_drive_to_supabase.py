@@ -48,6 +48,12 @@ TABLES_WITH_EVIDENCIA_FOTO = (MONITOREO_TABLE, INSTALACIONES_TABLE)
 # de "se paso explicitamente None" (ya se intento subir la foto y no habia ninguna).
 _UNSET = object()
 
+# INVARIANTE: namespace fijo (arbitrario, nunca cambiar) para derivar UUIDs
+# deterministicos vía uuid5. La misma clave natural siempre produce el mismo id,
+# lo que hace que un upsert repetido sobre ON CONFLICT nunca "pise" el id de un
+# registro existente con un uuid4 aleatorio nuevo.
+RYZOS_DEDUP_NAMESPACE = uuid.UUID("2f6c9d1e-9b0a-4b7e-9c1a-8e3f2a6d5b4f")
+
 # INVARIANTE: QField exporta la capa de monitoreo y sus atributos con nombres que
 # varian segun la version del formulario de campo; se resuelve por orden de prioridad,
 # prefiriendo siempre el identificador estricto (ID/codigo) cuando esta presente. Los
@@ -135,10 +141,13 @@ class DriveZipETLPipeline:
         return classified
 
     def load_layer(self, geo_path: Path, layer_name: str | None) -> gpd.GeoDataFrame:
+        # INVARIANTE: fid_as_index=True expone el FID nativo de OGR (GeoPackage/GeoJSON)
+        # como indice del GeoDataFrame; se usa como clave de deduplicacion de respaldo
+        # cuando no hay suficiente identidad de negocio (parcela/fecha) para el upsert.
         if layer_name is not None:
-            gdf = gpd.read_file(geo_path, layer=layer_name)
+            gdf = gpd.read_file(geo_path, layer=layer_name, fid_as_index=True)
         else:
-            gdf = gpd.read_file(geo_path)
+            gdf = gpd.read_file(geo_path, fid_as_index=True)
 
         # INVARIANTE: toda geometría de campo se fuerza a WGS84 antes de insertar.
         if gdf.crs is None or gdf.crs.to_epsg() != 4326:
@@ -171,7 +180,16 @@ class DriveZipETLPipeline:
         foto_name = foto_name.strip()
         if not foto_name:
             return None
-        return os.path.basename(foto_name)
+        # INVARIANTE: la comparacion es insensible a mayusculas/minusculas — QField y
+        # el sistema de archivos de origen no siempre coinciden en el casing del nombre.
+        return os.path.basename(foto_name).lower()
+
+    def compute_deterministic_id(self, *parts) -> str:
+        # INVARIANTE: la misma clave natural siempre produce el mismo UUID; esto es lo
+        # que permite que un upsert repetido actualice el registro existente en vez de
+        # generarle un id nuevo (evita "romper" referencias externas al reprocesar).
+        key = "|".join("" if part is None else str(part) for part in parts)
+        return str(uuid.uuid5(RYZOS_DEDUP_NAMESPACE, key))
 
     def resolve_fecha_monitoreo(self, raw_value, now: datetime | None = None) -> str:
         # INVARIANTE: nunca insertar un string invalido ("None"/"NaT"/"") en una columna date.
@@ -234,17 +252,31 @@ class DriveZipETLPipeline:
         self,
         row,
         org_id: str,
+        fid=None,
         record_id: str | None = None,
         evidencia_foto=_UNSET,
         now: datetime | None = None,
     ) -> dict:
-        id_monitoreo = record_id or str(uuid.uuid4())
         geom_json = mapping(row.geometry) if row.geometry else None
 
         id_parcela_fija = self.resolve_field_with_fallback(row, PARCELA_FIELD_CANDIDATES)
         parcela_id_estricto = self.resolve_field_with_fallback(row, PARCELA_STRICT_CANDIDATES)
         nuevo_productor_nombre = self.resolve_field_with_fallback(row, PRODUCTOR_NOMBRE_CANDIDATES)
         foto_value = row.get("evidencia_foto") if evidencia_foto is _UNSET else evidencia_foto
+        fecha_monitoreo = self.resolve_fecha_monitoreo(row.get("fecha_monitoreo"), now=now)
+
+        # INVARIANTE: id_monitoreo se deriva de forma deterministica de la clave natural
+        # (organizacion + parcela + fecha) para que un upsert repetido actualice SIEMPRE
+        # el mismo registro. Si no hay parcela resuelta, se usa el fid del GeoPackage
+        # como respaldo; solo si tampoco hay fid se genera un uuid4 aleatorio.
+        if id_parcela_fija is not None:
+            id_monitoreo = self.compute_deterministic_id(
+                MONITOREO_TABLE, org_id, id_parcela_fija, fecha_monitoreo
+            )
+        elif fid is not None:
+            id_monitoreo = self.compute_deterministic_id(MONITOREO_TABLE, org_id, "fid", fid)
+        else:
+            id_monitoreo = record_id or str(uuid.uuid4())
 
         observaciones = row.get("observaciones") or ""
         # INVARIANTE: si la parcela solo se identifico por nombre (sin ID/codigo estricto),
@@ -260,7 +292,7 @@ class DriveZipETLPipeline:
             "ID_Parcela_Fija": id_parcela_fija,
             "ID_Socio": self.resolve_field_with_fallback(row, SOCIO_ID_CANDIDATES),
             "nuevo_productor_nombre": nuevo_productor_nombre,
-            "fecha_monitoreo": self.resolve_fecha_monitoreo(row.get("fecha_monitoreo"), now=now),
+            "fecha_monitoreo": fecha_monitoreo,
             "tecnico_responsable": row.get("tecnico_responsable", "Tecnico Campo"),
             "precision_gps": row.get("precision_gps"),
             "evidencia_foto": foto_value,
@@ -268,10 +300,11 @@ class DriveZipETLPipeline:
             "observaciones": observaciones,
             "geom_inspeccion": geom_json,
             "estado_revision": "PENDIENTE",  # INVARIANTE: nunca omitir
+            "fid": fid,
         }
         return {key: self.sanitize_json_value(value) for key, value in payload.items()}
 
-    def build_uso_suelo_payload(self, row, org_id: str) -> dict:
+    def build_uso_suelo_payload(self, row, org_id: str, fid=None) -> dict:
         geom_json = mapping(row.geometry) if row.geometry else None
         payload = {
             "id_parcela": self.resolve_field_with_fallback(row, ("id_parcela",)),
@@ -279,10 +312,11 @@ class DriveZipETLPipeline:
             "geom": geom_json,
             "ID_Organizacion": org_id,
             "estado_revision": "PENDIENTE",  # INVARIANTE: nunca omitir
+            "fid": fid,
         }
         return {key: self.sanitize_json_value(value) for key, value in payload.items()}
 
-    def build_instalaciones_payload(self, row, org_id: str, evidencia_foto=_UNSET) -> dict:
+    def build_instalaciones_payload(self, row, org_id: str, fid=None, evidencia_foto=_UNSET) -> dict:
         geom_json = mapping(row.geometry) if row.geometry else None
         foto_value = row.get("evidencia_foto") if evidencia_foto is _UNSET else evidencia_foto
         payload = {
@@ -292,6 +326,7 @@ class DriveZipETLPipeline:
             "geom": geom_json,
             "ID_Organizacion": org_id,
             "estado_revision": "PENDIENTE",  # INVARIANTE: nunca omitir
+            "fid": fid,
         }
         return {key: self.sanitize_json_value(value) for key, value in payload.items()}
 
@@ -300,19 +335,30 @@ class DriveZipETLPipeline:
         table_name: str,
         row,
         org_id: str,
-        record_id: str,
+        fid=None,
+        record_id: str | None = None,
         evidencia_foto=_UNSET,
         now: datetime | None = None,
     ) -> dict:
         if table_name == MONITOREO_TABLE:
             return self.build_monitoreo_payload(
-                row, org_id, record_id=record_id, evidencia_foto=evidencia_foto, now=now
+                row, org_id, fid=fid, record_id=record_id, evidencia_foto=evidencia_foto, now=now
             )
         if table_name == USO_SUELO_TABLE:
-            return self.build_uso_suelo_payload(row, org_id)
+            return self.build_uso_suelo_payload(row, org_id, fid=fid)
         if table_name == INSTALACIONES_TABLE:
-            return self.build_instalaciones_payload(row, org_id, evidencia_foto=evidencia_foto)
+            return self.build_instalaciones_payload(row, org_id, fid=fid, evidencia_foto=evidencia_foto)
         raise ValueError(f"Tabla EUDR no reconocida: {table_name}")
+
+    def resolve_upsert_conflict_target(self, table_name: str, payload: dict) -> str:
+        # INVARIANTE: el conflict target debe coincidir con una restriccion UNIQUE real
+        # en Supabase. EUDR_MONITOREO con parcela resuelta usa la clave de negocio
+        # (organizacion + parcela + fecha); en cualquier otro caso (o para
+        # EUDR_USO_SUELO / EUDR_INSTALACIONES) se usa fid + organizacion, que identifica
+        # la feature de origen del GeoPackage dentro de esa organizacion.
+        if table_name == MONITOREO_TABLE and payload.get("ID_Parcela_Fija"):
+            return "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo"
+        return "ID_Organizacion,fid"
 
     def upload_evidence_photo(self, photo_path: Path, storage_path: str) -> str:
         content_type = mimetypes.guess_type(photo_path.name)[0] or "image/jpeg"
@@ -349,13 +395,13 @@ class DriveZipETLPipeline:
         return dest_path
 
     def process_layer_rows(
-        self, gdf: gpd.GeoDataFrame, table_name: str, org_id: str, photos_by_name: dict[str, Path]
+        self, gdf: gpd.GeoDataFrame, table_name: str, org_id: str, photo_map: dict[str, Path]
     ) -> tuple[list[str], list[str]]:
-        """Inserta cada fila de una capa en su tabla destino; devuelve (ids, fotos_subidas)."""
+        """Hace upsert de cada fila de una capa en su tabla destino; devuelve (ids, fotos_subidas)."""
         inserted_ids = []
         uploaded_photos = []
 
-        for _, row in gdf.iterrows():
+        for fid, row in gdf.iterrows():
             record_id = str(uuid.uuid4())
 
             storage_path = _UNSET
@@ -363,9 +409,9 @@ class DriveZipETLPipeline:
                 foto_name = row.get("evidencia_foto")
                 # INVARIANTE: QField a veces guarda la ruta relativa del adjunto
                 # (ej. "DCIM/foto_01.jpg") en vez del nombre de archivo suelto; se
-                # compara siempre por os.path.basename() contra photos_by_name.
+                # compara siempre por os.path.basename().lower() contra photo_map.
                 foto_basename = self.resolve_photo_basename(foto_name)
-                photo_path = photos_by_name.get(foto_basename) if foto_basename else None
+                photo_path = photo_map.get(foto_basename) if foto_basename else None
                 storage_path = None
                 if photo_path is not None:
                     storage_path = self.build_storage_path(org_id, photo_path)
@@ -373,9 +419,12 @@ class DriveZipETLPipeline:
                     uploaded_photos.append(storage_path)
 
             payload = self.build_payload_for_table(
-                table_name, row, org_id, record_id=record_id, evidencia_foto=storage_path
+                table_name, row, org_id, fid=fid, record_id=record_id, evidencia_foto=storage_path
             )
-            self.supabase.table(table_name).insert(payload).execute()
+            # INVARIANTE: upsert (no insert) por clave de negocio/fid — reprocesar el
+            # mismo paquete actualiza los registros existentes en vez de duplicarlos.
+            on_conflict = self.resolve_upsert_conflict_target(table_name, payload)
+            self.supabase.table(table_name).upsert(payload, on_conflict=on_conflict).execute()
             inserted_ids.append(payload.get("id_monitoreo") or record_id)
 
         return inserted_ids, uploaded_photos
@@ -393,7 +442,9 @@ class DriveZipETLPipeline:
                 )
 
             photos = self.find_photos(extracted_dir)
-            photos_by_name = {p.name: p for p in photos}
+            # INVARIANTE: indexado por nombre base en minusculas para que el
+            # emparejamiento con evidencia_foto sea insensible a mayusculas/minusculas.
+            photo_map = {p.name.lower(): p for p in photos}
 
             inserted_ids = []
             uploaded_photos = []
@@ -402,7 +453,7 @@ class DriveZipETLPipeline:
             for layer_name, table_name in self.classify_layers(geo_path):
                 gdf = self.load_layer(geo_path, layer_name)
                 layer_ids, layer_photos = self.process_layer_rows(
-                    gdf, table_name, org_id, photos_by_name
+                    gdf, table_name, org_id, photo_map
                 )
                 inserted_ids.extend(layer_ids)
                 uploaded_photos.extend(layer_photos)

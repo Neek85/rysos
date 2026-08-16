@@ -45,7 +45,7 @@ def build_pipeline(drive_root: Path):
     with patch("scripts.etl_drive_to_supabase.create_client") as mock_create_client:
         mock_supabase = MagicMock()
         mock_create_client.return_value = mock_supabase
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock()
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
         pipeline = DriveZipETLPipeline("https://fake.supabase.co", "fake-key", str(drive_root))
     return pipeline, mock_supabase
 
@@ -508,7 +508,7 @@ class TestMultiLayerIngestion(unittest.TestCase):
 
             table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
             insert_payloads = [
-                c.args[0] for c in mock_supabase.table.return_value.insert.call_args_list
+                c.args[0] for c in mock_supabase.table.return_value.upsert.call_args_list
             ]
             payload_by_table = dict(zip(table_calls, insert_payloads))
 
@@ -537,7 +537,7 @@ class TestMultiLayerIngestion(unittest.TestCase):
 
             table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
             insert_payloads = [
-                c.args[0] for c in mock_supabase.table.return_value.insert.call_args_list
+                c.args[0] for c in mock_supabase.table.return_value.upsert.call_args_list
             ]
             payload_by_table = dict(zip(table_calls, insert_payloads))
 
@@ -562,7 +562,7 @@ class TestMultiLayerIngestion(unittest.TestCase):
 
             table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
             insert_payloads = [
-                c.args[0] for c in mock_supabase.table.return_value.insert.call_args_list
+                c.args[0] for c in mock_supabase.table.return_value.upsert.call_args_list
             ]
             payload_by_table = dict(zip(table_calls, insert_payloads))
 
@@ -594,7 +594,7 @@ class TestMultiLayerIngestion(unittest.TestCase):
         ids, photos = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
 
         self.assertEqual(photos, [])
-        insert_calls = pipeline.supabase.table.return_value.insert.call_args_list
+        insert_calls = pipeline.supabase.table.return_value.upsert.call_args_list
         self.assertIsNone(insert_calls[-1].args[0]["evidencia_foto"])
 
 
@@ -647,7 +647,7 @@ class TestEvidenciaFotoBasenameMatching(unittest.TestCase):
         ids, photos = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
 
         self.assertEqual(photos, [])
-        insert_calls = pipeline.supabase.table.return_value.insert.call_args_list
+        insert_calls = pipeline.supabase.table.return_value.upsert.call_args_list
         self.assertIsNone(insert_calls[-1].args[0]["evidencia_foto"])
 
     def test_matches_photo_when_evidencia_foto_is_a_relative_dcim_path(self):
@@ -727,6 +727,144 @@ class TestEvidenciaFotoBasenameMatching(unittest.TestCase):
             upload_kwargs = mock_supabase.storage.from_.return_value.upload.call_args.kwargs
             self.assertEqual(upload_kwargs["file_options"]["content-type"], "image/png")
             self.assertEqual(upload_kwargs["file_options"]["upsert"], "true")
+
+
+class TestUpsertIdempotency(unittest.TestCase):
+    def _pipeline(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, mock_supabase = build_pipeline(Path(tmp))
+        return pipeline, mock_supabase
+
+    def _monitoreo_row(self, **overrides):
+        data = {
+            "ID_Parcela_Fija": ["PARC-001"],
+            "ID_Socio": ["SOC-001"],
+            "fecha_monitoreo": ["2026-08-16"],
+            "evidencia_foto": [None],
+        }
+        data.update({k: [v] for k, v in overrides.items()})
+        gdf = gpd.GeoDataFrame(
+            data, geometry=[Point(-77.0, -12.0)], crs="EPSG:4326"
+        )
+        return gdf.iloc[0]
+
+    def test_compute_deterministic_id_is_stable_across_calls(self):
+        pipeline, _ = self._pipeline()
+        id_a = pipeline.compute_deterministic_id("EUDR_MONITOREO", "ORG-001", "PARC-001", "2026-08-16")
+        id_b = pipeline.compute_deterministic_id("EUDR_MONITOREO", "ORG-001", "PARC-001", "2026-08-16")
+        self.assertEqual(id_a, id_b)
+
+    def test_compute_deterministic_id_differs_for_different_inputs(self):
+        pipeline, _ = self._pipeline()
+        id_a = pipeline.compute_deterministic_id("EUDR_MONITOREO", "ORG-001", "PARC-001", "2026-08-16")
+        id_b = pipeline.compute_deterministic_id("EUDR_MONITOREO", "ORG-001", "PARC-002", "2026-08-16")
+        self.assertNotEqual(id_a, id_b)
+
+    def test_build_monitoreo_payload_id_is_deterministic_from_natural_key(self):
+        pipeline, _ = self._pipeline()
+        row = self._monitoreo_row()
+
+        payload_run1 = pipeline.build_monitoreo_payload(row, "ORG-001", fid=1)
+        payload_run2 = pipeline.build_monitoreo_payload(row, "ORG-001", fid=99)
+
+        self.assertEqual(payload_run1["id_monitoreo"], payload_run2["id_monitoreo"])
+
+    def test_build_monitoreo_payload_falls_back_to_fid_when_no_parcela(self):
+        pipeline, _ = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"fecha_monitoreo": ["2026-08-16"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        payload_run1 = pipeline.build_monitoreo_payload(row, "ORG-001", fid=7)
+        payload_run2 = pipeline.build_monitoreo_payload(row, "ORG-001", fid=7)
+        payload_other_fid = pipeline.build_monitoreo_payload(row, "ORG-001", fid=8)
+
+        self.assertIsNone(payload_run1["ID_Parcela_Fija"])
+        self.assertEqual(payload_run1["id_monitoreo"], payload_run2["id_monitoreo"])
+        self.assertNotEqual(payload_run1["id_monitoreo"], payload_other_fid["id_monitoreo"])
+
+    def test_resolve_upsert_conflict_target_uses_natural_key_when_parcela_present(self):
+        pipeline, _ = self._pipeline()
+        payload = {"ID_Parcela_Fija": "PARC-001"}
+        target = pipeline.resolve_upsert_conflict_target("EUDR_MONITOREO", payload)
+        self.assertEqual(target, "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo")
+
+    def test_resolve_upsert_conflict_target_uses_fid_when_parcela_missing(self):
+        pipeline, _ = self._pipeline()
+        payload = {"ID_Parcela_Fija": None}
+        target = pipeline.resolve_upsert_conflict_target("EUDR_MONITOREO", payload)
+        self.assertEqual(target, "ID_Organizacion,fid")
+
+    def test_resolve_upsert_conflict_target_uso_suelo_and_instalaciones_use_fid(self):
+        pipeline, _ = self._pipeline()
+        self.assertEqual(
+            pipeline.resolve_upsert_conflict_target("EUDR_USO_SUELO", {}), "ID_Organizacion,fid"
+        )
+        self.assertEqual(
+            pipeline.resolve_upsert_conflict_target("EUDR_INSTALACIONES", {}),
+            "ID_Organizacion,fid",
+        )
+
+    def test_build_uso_suelo_payload_includes_fid(self):
+        pipeline, _ = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"id_parcela": ["PARC-001"], "tipo_uso": ["Cafetal"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+        payload = pipeline.build_uso_suelo_payload(row, "ORG-001", fid=5)
+        self.assertEqual(payload["fid"], 5)
+
+    def test_build_instalaciones_payload_includes_fid(self):
+        pipeline, _ = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"id_parcela": ["PARC-001"], "tipo_infra": ["Beneficio"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+        payload = pipeline.build_instalaciones_payload(row, "ORG-001", fid=6)
+        self.assertEqual(payload["fid"], 6)
+
+    def test_process_layer_rows_calls_upsert_not_insert(self):
+        pipeline, mock_supabase = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"id_parcela": ["PARC-001"], "tipo_uso": ["Cafetal"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+
+        pipeline.process_layer_rows(gdf, "EUDR_USO_SUELO", "ORG-001", {})
+
+        mock_supabase.table.return_value.upsert.assert_called_once()
+        mock_supabase.table.return_value.insert.assert_not_called()
+        call_kwargs = mock_supabase.table.return_value.upsert.call_args.kwargs
+        self.assertEqual(call_kwargs["on_conflict"], "ID_Organizacion,fid")
+
+    def test_process_layer_rows_reruns_produce_same_id_monitoreo(self):
+        # INVARIANTE central de esta tarea: reprocesar el mismo paquete debe
+        # actualizar el mismo registro, no crear uno nuevo cada vez.
+        pipeline, mock_supabase = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["PARC-001"],
+                "ID_Socio": ["SOC-001"],
+                "fecha_monitoreo": ["2026-08-16"],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+
+        ids_run1, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+        ids_run2, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+
+        self.assertEqual(ids_run1, ids_run2)
 
 
 class TestPayloadRestructuring(unittest.TestCase):
@@ -1033,7 +1171,7 @@ class TestPipelineIntegration(unittest.TestCase):
             self.assertTrue(result["archive_dest"].exists())
             self.assertFalse(zip_path.exists())
 
-            insert_payload = mock_supabase.table.return_value.insert.call_args[0][0]
+            insert_payload = mock_supabase.table.return_value.upsert.call_args[0][0]
             self.assertEqual(insert_payload["estado_revision"], "PENDIENTE")
             self.assertEqual(insert_payload["ID_Organizacion"], "ORG-001")
 

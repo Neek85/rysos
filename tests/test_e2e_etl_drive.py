@@ -22,7 +22,7 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 def make_mock_supabase() -> MagicMock:
     mock_supabase = MagicMock()
-    mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock()
+    mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
     return mock_supabase
 
 
@@ -91,7 +91,7 @@ class TestE2EPipelineOrchestration(unittest.TestCase):
         pipeline = build_pipeline(self.base_dir, "https://fake.supabase.co", "fake-key", mock_supabase=mock_supabase)
         pipeline.process_package(zip_path, execute_move=True)
 
-        insert_payload = mock_supabase.table.return_value.insert.call_args[0][0]
+        insert_payload = mock_supabase.table.return_value.upsert.call_args[0][0]
         self.assertEqual(insert_payload["estado_revision"], "PENDIENTE")
         self.assertIsNotNone(insert_payload["geom_inspeccion"])
         self.assertEqual(insert_payload["ID_Organizacion"], ORG_ID)

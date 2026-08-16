@@ -123,7 +123,7 @@ def run_e2e(base_dir: Path, mock_supabase: MagicMock | None = None) -> dict:
     storage_path = verify_photo_criterion(result)
 
     if mock_supabase is not None:
-        insert_payload = mock_supabase.table.return_value.insert.call_args[0][0]
+        insert_payload = mock_supabase.table.return_value.upsert.call_args[0][0]
         estado_revision = insert_payload["estado_revision"]
     else:
         response = (
@@ -155,7 +155,7 @@ def main() -> int:
             "Ejecutando en MODO SIMULADO (cliente Supabase mockeado) — no hay ingesta real."
         )
         mock_supabase = MagicMock()
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock()
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
 
     print(f"[E2E-DRIVE] Base dir: {DEFAULT_BASE_DIR}")
     outcome = run_e2e(DEFAULT_BASE_DIR, mock_supabase=mock_supabase)
