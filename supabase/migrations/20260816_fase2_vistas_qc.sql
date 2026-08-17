@@ -43,7 +43,14 @@
 
 BEGIN;
 
-DROP VIEW IF EXISTS public.vw_monitoreo_web;
+-- CASCADE en vw_monitoreo_web: evita el error 42P16 (invalid_table_definition,
+-- "cannot drop view ... because other objects depend on it" / conflicto de
+-- columnas al recrear) si algun objeto externo a esta migracion (ej. creado
+-- manualmente en el SQL Editor durante pruebas) quedo dependiendo de esta
+-- vista. Las columnas de vw_monitoreo_web cambiaron entre iteraciones
+-- (se agregaron clasificacion y geom_geojson), por lo que un DROP simple que
+-- fallara por dependencias dejaria la version vieja de la vista activa.
+DROP VIEW IF EXISTS public.vw_monitoreo_web CASCADE;
 DROP VIEW IF EXISTS public.vw_monitoreo_poligonos;
 DROP VIEW IF EXISTS public.vw_monitoreo_puntos;
 
