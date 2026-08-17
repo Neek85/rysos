@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
+import { exportTracesDDS, resolveOrganizationId, EUDRValidationError } from '@/lib/eudrDdsExporter'
 
 const EVIDENCIA_BUCKET = 'evidencias_eudr'
 const SIGNED_URL_TTL_SECONDS = 3600
@@ -324,6 +325,52 @@ export default function MapDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [mapError, setMapError] = useState(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportToast, setExportToast] = useState(null)
+
+  // El toast de exportación se autolimpia — no requiere interacción del
+  // usuario para desaparecer, igual que el resto de los estados efímeros
+  // de este componente (loading/error).
+  useEffect(() => {
+    if (!exportToast) return
+    const timer = setTimeout(() => setExportToast(null), 6000)
+    return () => clearTimeout(timer)
+  }, [exportToast])
+
+  // Genera y descarga la DDS TRACES UE (JSON + GeoJSON) a partir de los
+  // registros aprobados ya cargados. La validación multi-tenant y la regla
+  // de polígono obligatorio (>= 4 ha) viven en lib/eudrDdsExporter.js — acá
+  // solo se traduce el resultado a estado de UI (spinner + toast).
+  async function handleExportDDS() {
+    if (exporting) return
+    setExporting(true)
+    setExportToast(null)
+    try {
+      const organizationId = resolveOrganizationId(records)
+      if (!organizationId) {
+        throw new EUDRValidationError(
+          'No hay registros aprobados cargados para generar la DDS.'
+        )
+      }
+      const payload = exportTracesDDS(records, organizationId)
+      setExportToast({
+        type: 'success',
+        message:
+          `DDS exportada: ${payload.total_plots} parcela(s), ` +
+          `${payload.total_hectares} ha certificadas.`,
+      })
+    } catch (err) {
+      setExportToast({
+        type: 'error',
+        message:
+          err instanceof EUDRValidationError
+            ? err.message
+            : err?.message || 'No se pudo generar la DDS.',
+      })
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // Carga de datos: vw_monitoreo_web ya filtra estrictamente estado_revision = 'APROBADO'.
   useEffect(() => {
@@ -341,7 +388,7 @@ export default function MapDashboard() {
         const { data, error: err } = await supabase
           .from('vw_monitoreo_web')
           .select(
-            'tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
+            'tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,cumple_eudr,geom_geojson'
           )
 
         if (cancelled) return
@@ -611,6 +658,40 @@ export default function MapDashboard() {
 
   return (
     <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs text-gray-400">
+          {records.length} registro(s) aprobado(s) cargado(s)
+        </span>
+        <button
+          type="button"
+          onClick={handleExportDDS}
+          disabled={exporting || records.length === 0}
+          className="inline-flex items-center gap-2 rounded-lg bg-green-800 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {exporting ? (
+            <>
+              <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              Generando DDS…
+            </>
+          ) : (
+            <>📄 Exportar DDS (TRACES UE)</>
+          )}
+        </button>
+      </div>
+
+      {exportToast && (
+        <p
+          className={`text-sm rounded p-2 ${
+            exportToast.type === 'success'
+              ? 'bg-emerald-50 text-emerald-700'
+              : 'bg-red-50 text-red-600'
+          }`}
+        >
+          {exportToast.type === 'success' ? '✓ ' : '⚠ '}
+          {exportToast.message}
+        </p>
+      )}
+
       <div
         ref={containerRef}
         style={{ height: '600px' }}
