@@ -928,15 +928,20 @@ class TestUpsertIdempotency(unittest.TestCase):
         self.assertNotIn("fid", payload_con_parcela)
         self.assertNotIn("fid", payload_sin_parcela)
 
-    def test_resolve_upsert_conflict_target_uses_natural_key_when_parcela_present(self):
+    def test_resolve_upsert_conflict_target_monitoreo_uses_primary_key(self):
+        # INVARIANTE: id_monitoreo se deriva deterministicamente (uuid5) de la clave
+        # de negocio en build_monitoreo_payload, asi que conflictuar sobre la PK
+        # misma es equivalente a conflictuar sobre esa clave, pero sin depender de
+        # que ID_Parcela_Fija sea NOT NULL (NULL != NULL en una restriccion UNIQUE
+        # compuesta, lo que impedia deduplicar filas sin parcela resuelta).
         pipeline, _ = self._pipeline()
         payload = {"ID_Parcela_Fija": "PARC-001"}
         target = pipeline.resolve_upsert_conflict_target("EUDR_MONITOREO", payload)
-        self.assertEqual(target, "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo")
+        self.assertEqual(target, "id_monitoreo")
 
     def test_resolve_upsert_conflict_target_monitoreo_never_uses_fid(self):
         # INVARIANTE: EUDR_MONITOREO no tiene columna fid; usarla en on_conflict
-        # produce PGRST204. Debe usar SIEMPRE la clave de negocio, con o sin parcela.
+        # produce PGRST204. Debe usar SIEMPRE la PK, con o sin parcela.
         pipeline, _ = self._pipeline()
         payload_sin_parcela = {"ID_Parcela_Fija": None}
         payload_con_parcela = {"ID_Parcela_Fija": "PARC-001"}
@@ -948,8 +953,8 @@ class TestUpsertIdempotency(unittest.TestCase):
             "EUDR_MONITOREO", payload_con_parcela
         )
 
-        self.assertEqual(target_sin_parcela, "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo")
-        self.assertEqual(target_con_parcela, "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo")
+        self.assertEqual(target_sin_parcela, "id_monitoreo")
+        self.assertEqual(target_con_parcela, "id_monitoreo")
 
     def test_resolve_upsert_conflict_target_uso_suelo_and_instalaciones_use_fid(self):
         pipeline, _ = self._pipeline()
@@ -1013,9 +1018,7 @@ class TestUpsertIdempotency(unittest.TestCase):
         call_args = mock_supabase.table.return_value.upsert.call_args
         sent_payload = call_args.args[0]
         self.assertNotIn("fid", sent_payload)
-        self.assertEqual(
-            call_args.kwargs["on_conflict"], "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo"
-        )
+        self.assertEqual(call_args.kwargs["on_conflict"], "id_monitoreo")
 
     def test_process_layer_rows_reruns_produce_same_id_monitoreo(self):
         # INVARIANTE central de esta tarea: reprocesar el mismo paquete debe
@@ -1035,6 +1038,24 @@ class TestUpsertIdempotency(unittest.TestCase):
         ids_run2, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
 
         self.assertEqual(ids_run1, ids_run2)
+
+    def test_process_layer_rows_reruns_dedupe_even_without_parcela_resuelta(self):
+        # Cubre la limitacion que existia con el conflict target compuesto: al
+        # conflictuar sobre la PK (deterministica via fid), una fila sin parcela
+        # resuelta tambien debe deduplicar entre corridas, no solo insertarse de nuevo.
+        pipeline, mock_supabase = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"fecha_monitoreo": ["2026-08-16"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+
+        ids_run1, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+        ids_run2, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+
+        self.assertEqual(ids_run1, ids_run2)
+        for call in mock_supabase.table.return_value.upsert.call_args_list:
+            self.assertEqual(call.kwargs["on_conflict"], "id_monitoreo")
 
 
 class TestPayloadRestructuring(unittest.TestCase):

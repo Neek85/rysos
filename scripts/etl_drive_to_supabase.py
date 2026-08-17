@@ -384,12 +384,17 @@ class DriveZipETLPipeline:
 
     def resolve_upsert_conflict_target(self, table_name: str, payload: dict) -> str:
         # INVARIANTE: el conflict target debe coincidir con una restriccion UNIQUE real
-        # en Supabase. EUDR_MONITOREO no tiene columna fid (PGRST204 si se la nombra
-        # aqui) asi que usa ESTRICTAMENTE su clave de negocio, nunca fid. Solo
-        # EUDR_USO_SUELO / EUDR_INSTALACIONES tienen fid y lo usan junto a la
-        # organizacion para identificar la feature de origen del GeoPackage.
+        # en Supabase. EUDR_MONITOREO conflictua sobre su propia Primary Key
+        # (id_monitoreo), que compute_deterministic_id() ya deriva de la clave de
+        # negocio (organizacion + parcela + fecha, o organizacion + fid de respaldo);
+        # como nunca es NULL, esto tambien deduplica correctamente las filas sin
+        # parcela resuelta, algo que el conflict target compuesto no lograba (NULL no
+        # es igual a NULL para una restriccion UNIQUE). EUDR_MONITOREO no tiene columna
+        # fid (PGRST204 si se la nombra), asi que jamas debe usarse como conflict target
+        # para esa tabla. Solo EUDR_USO_SUELO / EUDR_INSTALACIONES tienen fid y lo usan
+        # junto a la organizacion para identificar la feature de origen del GeoPackage.
         if table_name == MONITOREO_TABLE:
-            return "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo"
+            return "id_monitoreo"
         return "ID_Organizacion,fid"
 
     def upload_evidence_photo(self, photo_path: Path, storage_path: str) -> str:
