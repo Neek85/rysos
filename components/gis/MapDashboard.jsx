@@ -81,7 +81,7 @@ export default function MapDashboard() {
       const { data, error: err } = await supabase
         .from('vw_monitoreo_web')
         .select(
-          'tipo_geometria,tabla_origen,registro_id,ID_Organizacion,ID_Parcela_Fija,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
+          'tabla_origen,registro_id,ID_Organizacion,ID_Parcela_Fija,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
         )
 
       if (cancelled) return
