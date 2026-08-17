@@ -83,7 +83,7 @@ export default function MapDashboard() {
         const { data, error: err } = await supabase
           .from('vw_monitoreo_web')
           .select(
-            'tabla_origen,registro_id,ID_Organizacion,ID_Parcela_Fija,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
+            'tabla_origen,ID_Organizacion,ID_Parcela_Fija,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
           )
 
         if (cancelled) return
@@ -108,7 +108,18 @@ export default function MapDashboard() {
   // Inicialización del mapa (una sola vez). Leaflet requiere `window`, por eso
   // el import es dinámico y se ejecuta solo dentro de useEffect (cliente).
   useEffect(() => {
-    let map
+    // INVARIANTE: la limpieza NUNCA debe depender de una variable local
+    // asignada dentro de init() (async) — si el efecto se desmonta antes de
+    // que los `await` resuelvan (ej. React 18 Strict Mode en dev, que monta/
+    // desmonta/remonta cada efecto una vez para detectar exactamente este
+    // tipo de bug), esa variable local seguiria `undefined` al momento de
+    // limpiar, el mapa nunca se removeria de verdad, y un remontaje
+    // posterior llamaria L.map() de nuevo sobre el mismo contenedor DOM ya
+    // inicializado -> Leaflet lanza "Map container is already initialized".
+    // Por eso la limpieza y el guard de creacion usan siempre mapRef.current
+    // (estable), y `cancelled` evita que la continuacion asincrona cree un
+    // mapa despues de que el componente ya se desmonto.
+    let cancelled = false
 
     async function init() {
       if (!containerRef.current || mapRef.current) return
@@ -117,6 +128,7 @@ export default function MapDashboard() {
         const leaflet = await import('leaflet')
         const L = leaflet.default
         await import('leaflet/dist/leaflet.css')
+        if (cancelled) return
         leafletRef.current = L
 
         // Fix de iconos default rotos por el bundling de webpack.
@@ -127,7 +139,8 @@ export default function MapDashboard() {
           shadowUrl: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-shadow.png',
         })
 
-        map = L.map(containerRef.current).setView([-6.5, -77.5], 8)
+        if (mapRef.current) return // otra inicializacion ya gano la carrera
+        const map = L.map(containerRef.current).setView([-6.5, -77.5], 8)
         mapRef.current = map
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -140,15 +153,18 @@ export default function MapDashboard() {
         // debe tumbar el arbol de React entero — no hay ErrorBoundary en la app,
         // asi que una excepcion sin capturar en render/efecto deja la pagina en
         // blanco. Se degrada a un mensaje de error en vez de propagar.
-        setMapError(err?.message || 'No se pudo inicializar el mapa.')
+        if (!cancelled) setMapError(err?.message || 'No se pudo inicializar el mapa.')
       }
     }
 
     init()
 
     return () => {
-      map?.remove()
-      mapRef.current = null
+      cancelled = true
+      if (mapRef.current) {
+        mapRef.current.remove()
+        mapRef.current = null
+      }
       layersRef.current = []
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
