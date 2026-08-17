@@ -87,13 +87,31 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
 }
 
-// INVARIANTE: vw_monitoreo_web solo expone "ID_Parcela_Fija" (ver
-// supabase/migrations/20260816_fase2_vistas_qc.sql); `id_parcela` no existe
-// en esa vista hoy, pero la cadena de fallback queda defensiva por si el
-// shape de la vista cambia a futuro, sin depender de que exista ninguna de
-// las dos columnas.
+// INVARIANTE: "ID_Parcela_Fija" es un identificador interno de fila (con
+// frecuencia con forma de UUID, ej. "{2bad5d16-...}") y NUNCA debe
+// mostrarse en pantalla. Desde 20260817_refine_vw_monitoreo_web.sql,
+// vw_monitoreo_web expone parcela_codigo (PADRON_PARCELAS.parcela_codigo,
+// el codigo legible real, ej. "COOP-JS-003") — es la fuente preferida.
+// sanitizeCode() queda como ultima linea de defensa: si por lo que sea el
+// unico valor disponible tiene forma de UUID (con o sin llaves), se
+// descarta en vez de mostrarlo, para que un dato mal cargado en
+// PADRON_PARCELAS nunca filtre un identificador tecnico a la UI.
+const UUID_PATTERN = /^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$/i
+
+function sanitizeCode(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed || UUID_PATTERN.test(trimmed)) return null
+  return trimmed
+}
+
 function resolveParcelaCodigo(record, fallback = 'S/C') {
-  return record?.id_parcela || record?.['ID_Parcela_Fija'] || fallback
+  return (
+    sanitizeCode(record?.parcela_codigo) ||
+    sanitizeCode(record?.id_parcela) ||
+    sanitizeCode(record?.['ID_Parcela_Fija']) ||
+    fallback
+  )
 }
 
 function formatArea(record) {
@@ -104,37 +122,51 @@ function formatNombreParcela(record) {
   return record?.parcela_nombre ? ` — ${escapeHtml(record.parcela_nombre)}` : ''
 }
 
-// Contenido de tooltip por nivel jerarquico. `category`/`isPoint` se
-// calculan en onEachFeature, que tiene acceso directo a feature.geometry.type
-// (mas confiable que inferir el tipo desde los datos del registro).
+// Contenido de tooltip por nivel jerarquico. A diferencia de `category`
+// (derivada de resolveCategory para fines de ESTILO, donde un punto
+// MONITOREO se agrupa junto al perimetro), el contenido textual del
+// tooltip se decide directamente por tabla_origen: es la unica columna que
+// distingue sin ambiguedad los 3 niveles (EUDR_MONITOREO / EUDR_USO_SUELO /
+// EUDR_INSTALACIONES), sin depender de inferir el tipo de geometria.
 //
-// El nivel Perimetro (la parcela completa) muestra codigo+nombre, productor
-// y area — son atributos de la PARCELA. Los niveles Subdivision/
-// Infraestructura mantienen su etiqueta especifica (Uso/Infraestructura,
-// el dato mas relevante para esa capa puntual) y agregan el contexto de la
-// finca (codigo+nombre+area) debajo, pero NO "Productor": ese campo solo
-// existe en filas EUDR_MONITOREO (ver resolveCategory) y siempre es NULL
-// para EUDR_USO_SUELO/EUDR_INSTALACIONES — mostrarlo ahi seria ruido, no dato.
-function tooltipHtml(record, category, isPoint) {
+// - EUDR_MONITOREO (Perimetro): codigo+nombre de la parcela, Productor y
+//   "Área Total" (area_ha de PADRON_PARCELAS, la parcela completa).
+// - EUDR_USO_SUELO (Subdivision, siempre poligono): "🌾 Uso: [tipo_uso]",
+//   la finca contenedora (codigo+nombre), Productor (via el LEFT JOIN
+//   LATERAL de 20260817_refine_vw_monitoreo_web.sql) y "Área del Lote".
+// - EUDR_INSTALACIONES (Punto, siempre punto): "📍 Infraestructura:
+//   [tipo_infra]", la finca contenedora y Productor — el Área se OMITE a
+//   proposito: una instalacion puntual (tulpa, beneficio, etc.) no tiene
+//   una extension propia que mostrar, y repetir el area de la parcela ahi
+//   induciria a pensar que es el area de la instalacion.
+function tooltipHtml(record) {
   const codigoParcela = escapeHtml(resolveParcelaCodigo(record, 'Parcela'))
   const nombreParcela = formatNombreParcela(record)
-  const area = formatArea(record)
+  const productor = record?.productor ? escapeHtml(record.productor) : 'Sin registrar'
+  const clasificacion = record?.clasificacion ? escapeHtml(record.clasificacion) : 'Sin clasificar'
 
-  if (category === 'MONITOREO_PERIMETRAL') {
-    const productor = record?.productor ? escapeHtml(record.productor) : 'Socio'
+  if (record?.tabla_origen === 'EUDR_USO_SUELO') {
     return (
-      `<strong>${codigoParcela}${nombreParcela}</strong><br/>` +
+      `<strong>🌾 Uso: ${clasificacion}</strong><br/>` +
+      `Finca: ${codigoParcela}${nombreParcela}<br/>` +
       `Productor: ${productor}<br/>` +
-      `Área: ${area}`
+      `Área del Lote: ${formatArea(record)}`
     )
   }
 
-  const clasificacion = record?.clasificacion ? escapeHtml(record.clasificacion) : 'Sin clasificar'
-  const etiqueta = isPoint ? 'Infraestructura' : 'Uso'
+  if (record?.tabla_origen === 'EUDR_INSTALACIONES') {
+    return (
+      `<strong>📍 Infraestructura: ${clasificacion}</strong><br/>` +
+      `Finca: ${codigoParcela}${nombreParcela}<br/>` +
+      `Productor: ${productor}`
+    )
+  }
+
+  // EUDR_MONITOREO (Perímetro) — nivel por defecto.
   return (
-    `<strong>${etiqueta}: ${clasificacion}</strong><br/>` +
-    `Finca: ${codigoParcela}${nombreParcela}<br/>` +
-    `Área: ${area}`
+    `<strong>${codigoParcela}${nombreParcela}</strong><br/>` +
+    `Productor: ${productor}<br/>` +
+    `Área Total: ${formatArea(record)}`
   )
 }
 
@@ -151,17 +183,23 @@ function estadoBadgeHtml(estado) {
 }
 
 // Tarjeta visual del popup (click): encabezado con codigo/nombre de parcela
-// + badge de estado EUDR, luego productor/area, y la foto de evidencia al
-// final (se completa de forma asincrona via loadPhoto/setPopupContent, el
-// bucket es privado).
+// + badge de estado EUDR, luego productor/area (misma logica de
+// tabla_origen que tooltipHtml — area oculta para EUDR_INSTALACIONES), y la
+// foto de evidencia al final (se completa de forma asincrona via
+// loadPhoto/setPopupContent, el bucket es privado).
 function popupHtml(record, photoUrl) {
   const productor = record.productor ? escapeHtml(record.productor) : 'Sin registrar'
   const codigoParcela = escapeHtml(resolveParcelaCodigo(record))
   const nombreParcela = record.parcela_nombre
     ? `<div style="color:#475569;margin-bottom:6px;">${escapeHtml(record.parcela_nombre)}</div>`
     : ''
-  const area = formatArea(record)
   const estado = record.estado_revision ? escapeHtml(record.estado_revision) : '—'
+  const esInfraestructura = record.tabla_origen === 'EUDR_INSTALACIONES'
+  const areaLabel =
+    record.tabla_origen === 'EUDR_USO_SUELO' ? 'Área del Lote' : 'Área Total'
+  const areaHtml = esInfraestructura
+    ? ''
+    : `<div><strong>${areaLabel}:</strong> ${formatArea(record)}</div>`
 
   let fotoHtml = '<span style="color:#94a3b8;">Sin foto</span>'
   if (record.evidencia_foto) {
@@ -178,7 +216,7 @@ function popupHtml(record, photoUrl) {
     '</div>' +
     nombreParcela +
     `<div><strong>Productor:</strong> ${productor}</div>` +
-    `<div><strong>Área:</strong> ${area}</div>` +
+    areaHtml +
     `<div>${fotoHtml}</div>` +
     '</div>'
   )
@@ -211,7 +249,7 @@ export default function MapDashboard() {
         const { data, error: err } = await supabase
           .from('vw_monitoreo_web')
           .select(
-            'tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_nombre,area_ha,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
+            'tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
           )
 
         if (cancelled) return
@@ -406,7 +444,7 @@ export default function MapDashboard() {
             // satura el mapa. `feature` aca es el GeoJSON Feature completo;
             // los datos reales del registro viven en `feature.properties`.
             onEachFeature: (feature, featureLayer) => {
-              featureLayer.bindTooltip(tooltipHtml(feature.properties, category, isPoint), {
+              featureLayer.bindTooltip(tooltipHtml(feature.properties), {
                 sticky: true,
               })
             },
