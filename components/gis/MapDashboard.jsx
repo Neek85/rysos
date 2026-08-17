@@ -147,7 +147,7 @@ function tooltipHtml(record) {
 
   if (record?.tabla_origen === 'EUDR_USO_SUELO') {
     return (
-      `<strong>🌾 Uso: ${clasificacion}</strong><br/>` +
+      `<strong>🌾 Uso de Suelo: ${clasificacion}</strong><br/>` +
       `Finca: ${codigoParcela}${nombreParcela}<br/>` +
       `Productor: ${productor}<br/>` +
       `Área del Lote: ${formatArea(record)}`
@@ -182,24 +182,41 @@ function estadoBadgeHtml(estado) {
   )
 }
 
-// Tarjeta visual del popup (click): encabezado con codigo/nombre de parcela
-// + badge de estado EUDR, luego productor/area (misma logica de
-// tabla_origen que tooltipHtml — area oculta para EUDR_INSTALACIONES), y la
-// foto de evidencia al final (se completa de forma asincrona via
-// loadPhoto/setPopupContent, el bucket es privado).
+// Tarjeta visual del popup (click): mismo criterio de tabla_origen que
+// tooltipHtml, para que encabezado y contenido no queden desalineados entre
+// hover y click. Perimetro conserva codigo+nombre de parcela como
+// encabezado (es el sujeto de esa fila); Subdivision/Infraestructura usan
+// el mismo encabezado emoji+tipo del tooltip y bajan la parcela a una fila
+// "Finca:" — nunca se renderiza una fila vacia (formatNombreParcela ya
+// devuelve '' sin parcela_nombre, y Área se omite por completo, no en
+// blanco, para EUDR_INSTALACIONES). La foto de evidencia se completa de
+// forma asincrona via loadPhoto/setPopupContent (el bucket es privado).
 function popupHtml(record, photoUrl) {
-  const productor = record.productor ? escapeHtml(record.productor) : 'Sin registrar'
   const codigoParcela = escapeHtml(resolveParcelaCodigo(record))
-  const nombreParcela = record.parcela_nombre
-    ? `<div style="color:#475569;margin-bottom:6px;">${escapeHtml(record.parcela_nombre)}</div>`
-    : ''
+  const nombreParcela = formatNombreParcela(record)
+  const productor = record?.productor ? escapeHtml(record.productor) : 'Sin registrar'
+  const clasificacion = record?.clasificacion ? escapeHtml(record.clasificacion) : 'Sin clasificar'
   const estado = record.estado_revision ? escapeHtml(record.estado_revision) : '—'
-  const esInfraestructura = record.tabla_origen === 'EUDR_INSTALACIONES'
-  const areaLabel =
-    record.tabla_origen === 'EUDR_USO_SUELO' ? 'Área del Lote' : 'Área Total'
-  const areaHtml = esInfraestructura
-    ? ''
-    : `<div><strong>${areaLabel}:</strong> ${formatArea(record)}</div>`
+
+  let headerHtml
+  let bodyHtml
+  if (record.tabla_origen === 'EUDR_USO_SUELO') {
+    headerHtml = `<strong style="font-size:14px;">🌾 Uso de Suelo: ${clasificacion}</strong>`
+    bodyHtml =
+      `<div><strong>Finca:</strong> ${codigoParcela}${nombreParcela}</div>` +
+      `<div><strong>Productor:</strong> ${productor}</div>` +
+      `<div><strong>Área del Lote:</strong> ${formatArea(record)}</div>`
+  } else if (record.tabla_origen === 'EUDR_INSTALACIONES') {
+    headerHtml = `<strong style="font-size:14px;">📍 Infraestructura: ${clasificacion}</strong>`
+    bodyHtml =
+      `<div><strong>Finca:</strong> ${codigoParcela}${nombreParcela}</div>` +
+      `<div><strong>Productor:</strong> ${productor}</div>`
+  } else {
+    headerHtml = `<strong style="font-size:14px;">${codigoParcela}${nombreParcela}</strong>`
+    bodyHtml =
+      `<div><strong>Productor:</strong> ${productor}</div>` +
+      `<div><strong>Área Total:</strong> ${formatArea(record)}</div>`
+  }
 
   let fotoHtml = '<span style="color:#94a3b8;">Sin foto</span>'
   if (record.evidencia_foto) {
@@ -210,13 +227,11 @@ function popupHtml(record, photoUrl) {
 
   return (
     '<div style="font-size:13px;line-height:1.6;min-width:200px;max-width:240px;">' +
-    '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">' +
-    `<strong style="font-size:14px;">${codigoParcela}</strong>` +
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">' +
+    headerHtml +
     estadoBadgeHtml(estado) +
     '</div>' +
-    nombreParcela +
-    `<div><strong>Productor:</strong> ${productor}</div>` +
-    areaHtml +
+    bodyHtml +
     `<div>${fotoHtml}</div>` +
     '</div>'
   )
