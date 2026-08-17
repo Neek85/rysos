@@ -1,3 +1,4 @@
+import io
 import json
 import unittest
 import zipfile
@@ -158,6 +159,76 @@ class TestZipExtraction(unittest.TestCase):
             photos = pipeline.find_photos(extract_to)
             self.assertEqual(len(photos), 1)
             self.assertEqual(photos[0].name, "foto_lowercase.png")
+
+    def _make_zip_bytes(self, entries: dict) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            for name, content in entries.items():
+                zf.writestr(name, content)
+        return buffer.getvalue()
+
+    def test_extract_package_decompresses_nested_dcim_zip(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            zip_path = drive_root / "paquete.zip"
+            dcim_zip_bytes = self._make_zip_bytes({"foto_anidada.jpg": b"fake-jpeg-bytes"})
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("inspeccion.geojson", json.dumps(GEOJSON_ORG001))
+                zf.writestr("DCIM.zip", dcim_zip_bytes)
+
+            pipeline, _ = build_pipeline(drive_root)
+            extract_to = drive_root / "extracted"
+            extract_to.mkdir()
+            pipeline.extract_package(zip_path, extract_to)
+
+            photos = pipeline.find_photos(extract_to)
+            self.assertEqual(len(photos), 1)
+            self.assertEqual(photos[0].name, "foto_anidada.jpg")
+
+    def test_extract_package_decompresses_multiple_levels_of_nested_zips(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            zip_path = drive_root / "paquete.zip"
+
+            innermost_zip_bytes = self._make_zip_bytes({"foto_profunda.png": b"fake-png-bytes"})
+            middle_zip_bytes = self._make_zip_bytes({"dcim.zip": innermost_zip_bytes})
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("inspeccion.geojson", json.dumps(GEOJSON_ORG001))
+                zf.writestr("adjuntos.zip", middle_zip_bytes)
+
+            pipeline, _ = build_pipeline(drive_root)
+            extract_to = drive_root / "extracted"
+            extract_to.mkdir()
+            pipeline.extract_package(zip_path, extract_to)
+
+            photos = pipeline.find_photos(extract_to)
+            self.assertEqual(len(photos), 1)
+            self.assertEqual(photos[0].name, "foto_profunda.png")
+
+    def test_extract_package_ignores_corrupt_nested_zip(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            drive_root = Path(tmp)
+            zip_path = drive_root / "paquete.zip"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("inspeccion.geojson", json.dumps(GEOJSON_ORG001))
+                zf.writestr("DCIM.zip", b"esto-no-es-un-zip-valido")
+                zf.writestr("foto_01.jpg", b"fake-jpeg-bytes")
+
+            pipeline, _ = build_pipeline(drive_root)
+            extract_to = drive_root / "extracted"
+            extract_to.mkdir()
+            # No debe lanzar excepcion aunque DCIM.zip este corrupto.
+            pipeline.extract_package(zip_path, extract_to)
+
+            photos = pipeline.find_photos(extract_to)
+            self.assertEqual(len(photos), 1)
+            self.assertEqual(photos[0].name, "foto_01.jpg")
 
 
 class TestDynamicLayerDetection(unittest.TestCase):
@@ -727,6 +798,54 @@ class TestEvidenciaFotoBasenameMatching(unittest.TestCase):
             upload_kwargs = mock_supabase.storage.from_.return_value.upload.call_args.kwargs
             self.assertEqual(upload_kwargs["file_options"]["content-type"], "image/png")
             self.assertEqual(upload_kwargs["file_options"]["upsert"], "true")
+
+    def test_matches_photo_via_foto_column_when_evidencia_foto_absent(self):
+        # INVARIANTE: formularios QField mas simples usan la columna "foto" en vez
+        # de "evidencia_foto"; ambos nombres deben resolver al mismo archivo.
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, _ = build_pipeline(Path(tmp))
+            photo_file = Path(tmp) / "foto_simple.jpg"
+            photo_file.write_bytes(b"fake-jpeg-bytes")
+
+            gdf = gpd.GeoDataFrame(
+                {
+                    "ID_Parcela_Fija": ["PARC-001"],
+                    "ID_Socio": ["SOC-001"],
+                    "fecha_monitoreo": ["2026-08-16"],
+                    "foto": ["foto_simple.jpg"],
+                },
+                geometry=[Point(-77.0, -12.0)],
+                crs="EPSG:4326",
+            )
+            photo_map = {"foto_simple.jpg": photo_file}
+
+            ids, photos = pipeline.process_layer_rows(
+                gdf, "EUDR_MONITOREO", "ORG-001", photo_map
+            )
+
+            self.assertEqual(len(photos), 1)
+            self.assertEqual(photos[0], "ORG-001/foto_simple.jpg")
+
+    def test_evidencia_foto_column_takes_priority_over_foto(self):
+        import tempfile
+
+        from scripts.etl_drive_to_supabase import EVIDENCIA_FOTO_CANDIDATES
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, _ = build_pipeline(Path(tmp))
+
+        gdf = gpd.GeoDataFrame(
+            {"evidencia_foto": ["principal.jpg"], "foto": ["alterna.jpg"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        value = pipeline.resolve_field_with_fallback(row, EVIDENCIA_FOTO_CANDIDATES)
+
+        self.assertEqual(value, "principal.jpg")
 
 
 class TestUpsertIdempotency(unittest.TestCase):

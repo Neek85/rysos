@@ -73,6 +73,7 @@ PRODUCTOR_NOMBRE_CANDIDATES = (
     "Productor",
     "Nombre",
 )
+EVIDENCIA_FOTO_CANDIDATES = ("evidencia_foto", "foto")
 
 
 class DriveZipETLPipeline:
@@ -95,7 +96,28 @@ class DriveZipETLPipeline:
     def extract_package(self, zip_path: Path, dest_dir: Path) -> Path:
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(dest_dir)
+        self.extract_nested_zips(dest_dir)
         return dest_dir
+
+    def extract_nested_zips(self, extracted_dir: Path) -> None:
+        # INVARIANTE: QField a veces empaqueta las fotos en un .zip anidado dentro del
+        # paquete principal (ej. DCIM.zip); se descomprime en el lugar recursivamente,
+        # repitiendo la busqueda hasta que no queden .zip sin procesar, para soportar
+        # cualquier nivel de anidamiento (zip dentro de zip dentro de zip...).
+        processed: set[Path] = set()
+        while True:
+            nested_zips = [
+                p for p in extracted_dir.rglob("*.zip") if p.is_file() and p not in processed
+            ]
+            if not nested_zips:
+                break
+            for nested_zip in nested_zips:
+                processed.add(nested_zip)
+                try:
+                    with zipfile.ZipFile(nested_zip, "r") as zf:
+                        zf.extractall(nested_zip.parent)
+                except zipfile.BadZipFile:
+                    continue
 
     def find_geo_layer(self, extracted_dir: Path) -> Path | None:
         gpkg_files = sorted(extracted_dir.rglob("*.gpkg"))
@@ -262,7 +284,11 @@ class DriveZipETLPipeline:
         id_parcela_fija = self.resolve_field_with_fallback(row, PARCELA_FIELD_CANDIDATES)
         parcela_id_estricto = self.resolve_field_with_fallback(row, PARCELA_STRICT_CANDIDATES)
         nuevo_productor_nombre = self.resolve_field_with_fallback(row, PRODUCTOR_NOMBRE_CANDIDATES)
-        foto_value = row.get("evidencia_foto") if evidencia_foto is _UNSET else evidencia_foto
+        foto_value = (
+            self.resolve_field_with_fallback(row, EVIDENCIA_FOTO_CANDIDATES)
+            if evidencia_foto is _UNSET
+            else evidencia_foto
+        )
         fecha_monitoreo = self.resolve_fecha_monitoreo(row.get("fecha_monitoreo"), now=now)
 
         # INVARIANTE: id_monitoreo se deriva de forma deterministica de la clave natural
@@ -320,7 +346,11 @@ class DriveZipETLPipeline:
 
     def build_instalaciones_payload(self, row, org_id: str, fid=None, evidencia_foto=_UNSET) -> dict:
         geom_json = mapping(row.geometry) if row.geometry else None
-        foto_value = row.get("evidencia_foto") if evidencia_foto is _UNSET else evidencia_foto
+        foto_value = (
+            self.resolve_field_with_fallback(row, EVIDENCIA_FOTO_CANDIDATES)
+            if evidencia_foto is _UNSET
+            else evidencia_foto
+        )
         payload = {
             "id_parcela": self.resolve_field_with_fallback(row, ("id_parcela",)),
             "tipo_infra": self.resolve_field_with_fallback(row, ("tipo_infra",)),
@@ -408,7 +438,9 @@ class DriveZipETLPipeline:
 
             storage_path = _UNSET
             if table_name in TABLES_WITH_EVIDENCIA_FOTO:
-                foto_name = row.get("evidencia_foto")
+                # INVARIANTE: QField nombra el atributo de evidencia "evidencia_foto"
+                # o, en formularios mas simples, solo "foto".
+                foto_name = self.resolve_field_with_fallback(row, EVIDENCIA_FOTO_CANDIDATES)
                 # INVARIANTE: QField a veces guarda la ruta relativa del adjunto
                 # (ej. "DCIM/foto_01.jpg") en vez del nombre de archivo suelto; se
                 # compara siempre por os.path.basename().lower() contra photo_map.
