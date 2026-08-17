@@ -37,7 +37,13 @@ function escapeHtml(value) {
 
 function popupHtml(record, photoUrl) {
   const productor = record.productor ? escapeHtml(record.productor) : 'Sin registrar'
-  const parcela = record['ID_Parcela_Fija'] ? escapeHtml(record['ID_Parcela_Fija']) : 'Sin registrar'
+  // INVARIANTE: vw_monitoreo_web solo expone "ID_Parcela_Fija" (ver
+  // supabase/migrations/20260816_fase2_vistas_qc.sql); `id_parcela` no existe
+  // en esa vista hoy, pero la cadena de fallback queda defensiva por si el
+  // shape de la vista cambia a futuro, sin depender de que exista ninguna de
+  // las dos columnas.
+  const codigoParcela = record.id_parcela || record['ID_Parcela_Fija'] || 'S/C'
+  const parcela = escapeHtml(codigoParcela)
   const estado = record.estado_revision ? escapeHtml(record.estado_revision) : '—'
 
   let fotoHtml = '<span style="color:#94a3b8;">Sin foto</span>'
