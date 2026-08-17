@@ -76,6 +76,29 @@ function resolveInfraStyle(clasificacion) {
   return INFRA_BY_KEY[normalizeKey(clasificacion)] ?? DEFAULT_INFRA_STYLE
 }
 
+// Badge HTML (L.divIcon) para puntos de infraestructura, en vez de un
+// circleMarker generico — asi el emoji sobre el mapa coincide exactamente
+// con el que se muestra en la leyenda para la misma categoria. `L` se recibe
+// por parametro porque Leaflet solo existe tras el import dinamico en el
+// efecto de inicializacion del mapa (no hay import estatico a nivel modulo).
+function createInfraIcon(L, clasificacion) {
+  const style = resolveInfraStyle(clasificacion)
+  return L.divIcon({
+    className: 'custom-infra-marker',
+    html:
+      `<div style="` +
+      `background-color:${style.color};` +
+      'width:28px;height:28px;border-radius:50%;' +
+      'border:2px solid #ffffff;box-shadow:0 2px 6px rgba(0,0,0,0.4);' +
+      'display:flex;align-items:center;justify-content:center;' +
+      'font-size:14px;cursor:pointer;">' +
+      `${style.icon}</div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14],
+  })
+}
+
 // Capa perimetral contenedora (EUDR_MONITOREO, poligono o punto): borde
 // marcado, relleno casi transparente para nunca tapar las subdivisiones.
 const PERIMETRAL_STYLE = {
@@ -481,15 +504,11 @@ export default function MapDashboard() {
                 })
               }
               // INVARIANTE: unico origen posible de un punto que no es
-              // MONITOREO es EUDR_INSTALACIONES — recibe el color de su
-              // categoria de infraestructura, en su propio pane elevado.
-              const cfg = resolveInfraStyle(record.clasificacion)
-              return L.circleMarker(latlng, {
-                radius: 8,
-                color: '#ffffff',
-                weight: 2,
-                fillColor: cfg.color,
-                fillOpacity: 0.9,
+              // MONITOREO es EUDR_INSTALACIONES — recibe un badge (divIcon)
+              // con el mismo emoji que su categoria en la leyenda, en su
+              // propio pane elevado.
+              return L.marker(latlng, {
+                icon: createInfraIcon(L, record.clasificacion),
                 pane: INFRA_PANE_NAME,
               })
             },
