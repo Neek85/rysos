@@ -96,41 +96,89 @@ function resolveParcelaCodigo(record, fallback = 'S/C') {
   return record?.id_parcela || record?.['ID_Parcela_Fija'] || fallback
 }
 
+function formatArea(record) {
+  return record?.area_ha ? `${record.area_ha} ha` : 'N/A'
+}
+
+function formatNombreParcela(record) {
+  return record?.parcela_nombre ? ` — ${escapeHtml(record.parcela_nombre)}` : ''
+}
+
 // Contenido de tooltip por nivel jerarquico. `category`/`isPoint` se
 // calculan en onEachFeature, que tiene acceso directo a feature.geometry.type
 // (mas confiable que inferir el tipo desde los datos del registro).
+//
+// El nivel Perimetro (la parcela completa) muestra codigo+nombre, productor
+// y area — son atributos de la PARCELA. Los niveles Subdivision/
+// Infraestructura mantienen su etiqueta especifica (Uso/Infraestructura,
+// el dato mas relevante para esa capa puntual) y agregan el contexto de la
+// finca (codigo+nombre+area) debajo, pero NO "Productor": ese campo solo
+// existe en filas EUDR_MONITOREO (ver resolveCategory) y siempre es NULL
+// para EUDR_USO_SUELO/EUDR_INSTALACIONES — mostrarlo ahi seria ruido, no dato.
 function tooltipHtml(record, category, isPoint) {
   const codigoParcela = escapeHtml(resolveParcelaCodigo(record, 'Parcela'))
+  const nombreParcela = formatNombreParcela(record)
+  const area = formatArea(record)
 
   if (category === 'MONITOREO_PERIMETRAL') {
-    const productor = record?.productor ? escapeHtml(record.productor) : 'Sin registrar'
-    return `<strong>Límite Parcela: ${codigoParcela}</strong><br/>Productor: ${productor}`
+    const productor = record?.productor ? escapeHtml(record.productor) : 'Socio'
+    return (
+      `<strong>${codigoParcela}${nombreParcela}</strong><br/>` +
+      `Productor: ${productor}<br/>` +
+      `Área: ${area}`
+    )
   }
 
   const clasificacion = record?.clasificacion ? escapeHtml(record.clasificacion) : 'Sin clasificar'
-  if (isPoint) {
-    return `<strong>Infraestructura: ${clasificacion}</strong><br/>Finca: ${codigoParcela}`
-  }
-  return `<strong>Uso: ${clasificacion}</strong><br/>Finca: ${codigoParcela}`
+  const etiqueta = isPoint ? 'Infraestructura' : 'Uso'
+  return (
+    `<strong>${etiqueta}: ${clasificacion}</strong><br/>` +
+    `Finca: ${codigoParcela}${nombreParcela}<br/>` +
+    `Área: ${area}`
+  )
 }
 
+function estadoBadgeHtml(estado) {
+  const esAprobado = estado === 'APROBADO'
+  const bg = esAprobado ? '#d1fae5' : '#f1f5f9'
+  const fg = esAprobado ? '#065f46' : '#475569'
+  const texto = esAprobado ? `✓ ${estado}` : estado || '—'
+  return (
+    `<span style="background:${bg};color:${fg};font-size:10px;font-weight:600;` +
+    'padding:2px 8px;border-radius:9999px;white-space:nowrap;">' +
+    `${escapeHtml(texto)}</span>`
+  )
+}
+
+// Tarjeta visual del popup (click): encabezado con codigo/nombre de parcela
+// + badge de estado EUDR, luego productor/area, y la foto de evidencia al
+// final (se completa de forma asincrona via loadPhoto/setPopupContent, el
+// bucket es privado).
 function popupHtml(record, photoUrl) {
   const productor = record.productor ? escapeHtml(record.productor) : 'Sin registrar'
-  const parcela = escapeHtml(resolveParcelaCodigo(record))
+  const codigoParcela = escapeHtml(resolveParcelaCodigo(record))
+  const nombreParcela = record.parcela_nombre
+    ? `<div style="color:#475569;margin-bottom:6px;">${escapeHtml(record.parcela_nombre)}</div>`
+    : ''
+  const area = formatArea(record)
   const estado = record.estado_revision ? escapeHtml(record.estado_revision) : '—'
 
   let fotoHtml = '<span style="color:#94a3b8;">Sin foto</span>'
   if (record.evidencia_foto) {
     fotoHtml = photoUrl
-      ? `<img src="${photoUrl}" alt="Evidencia de campo" style="width:100%;max-width:220px;border-radius:6px;margin-top:6px;display:block;" />`
+      ? `<img src="${photoUrl}" alt="Evidencia de campo" style="width:100%;max-width:220px;border-radius:6px;margin-top:8px;display:block;" />`
       : '<span style="color:#94a3b8;">Cargando foto…</span>'
   }
 
   return (
-    '<div style="font-size:13px;line-height:1.6;min-width:180px;">' +
-    `<strong>Productor:</strong> ${productor}<br/>` +
-    `<strong>Parcela:</strong> ${parcela}<br/>` +
-    `<strong>Estado EUDR:</strong> ${estado}<br/>` +
+    '<div style="font-size:13px;line-height:1.6;min-width:200px;max-width:240px;">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">' +
+    `<strong style="font-size:14px;">${codigoParcela}</strong>` +
+    estadoBadgeHtml(estado) +
+    '</div>' +
+    nombreParcela +
+    `<div><strong>Productor:</strong> ${productor}</div>` +
+    `<div><strong>Área:</strong> ${area}</div>` +
     `<div>${fotoHtml}</div>` +
     '</div>'
   )
@@ -163,7 +211,7 @@ export default function MapDashboard() {
         const { data, error: err } = await supabase
           .from('vw_monitoreo_web')
           .select(
-            'tabla_origen,ID_Organizacion,ID_Parcela_Fija,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
+            'tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_nombre,area_ha,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
           )
 
         if (cancelled) return

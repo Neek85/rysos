@@ -166,44 +166,61 @@ GRANT SELECT ON public.vw_monitoreo_puntos TO authenticated;
 -- hexadecimal EWKB, no GeoJSON, por lo que un cliente JS no puede parsearla
 -- directamente. `geom_geojson` expone el mismo valor ya convertido via
 -- ST_AsGeoJSON(...)::json, listo para usarse directo como Feature.geometry.
+--
+-- INVARIANTE PADRON_PARCELAS: parcela_nombre y area_ha (alias de
+-- PADRON_PARCELAS.totalh) no existen en EUDR_MONITOREO/EUDR_USO_SUELO/
+-- EUDR_INSTALACIONES; se enriquecen via LEFT JOIN sobre "ID_Parcela_Fija",
+-- el mismo patron ya usado en view_eudr_dashboard_aprobados (Fase 1). Solo
+-- se agrega aca (Dashboard Web) y no en vw_monitoreo_poligonos/puntos, que
+-- son para auditoria QGIS y no necesitan el nombre legible de la parcela.
+-- LEFT JOIN (no INNER) porque una parcela puede no tener fila en
+-- PADRON_PARCELAS todavia; el aislamiento multi-tenant del join lo cubre la
+-- propia RLS de PADRON_PARCELAS (rls_select_padron_parcelas), sin necesidad
+-- de repetir la condicion de ID_Organizacion aca.
 CREATE VIEW public.vw_monitoreo_web AS
 SELECT
     'poligono'      AS tipo_geometria,
-    tabla_origen,
-    registro_id,
-    "ID_Organizacion",
-    "ID_Parcela_Fija",
-    productor,
-    tipo_uso        AS clasificacion,
-    evidencia_foto,
-    estado_revision,
-    fecha_monitoreo,
-    observaciones,
-    cumple_eudr,
-    geom,
-    ST_AsGeoJSON(geom)::json AS geom_geojson
-FROM public.vw_monitoreo_poligonos
-WHERE estado_revision = 'APROBADO'
+    src.tabla_origen,
+    src.registro_id,
+    src."ID_Organizacion",
+    src."ID_Parcela_Fija",
+    src.productor,
+    src.tipo_uso    AS clasificacion,
+    src.evidencia_foto,
+    src.estado_revision,
+    src.fecha_monitoreo,
+    src.observaciones,
+    src.cumple_eudr,
+    pp.parcela_nombre,
+    pp.totalh       AS area_ha,
+    src.geom,
+    ST_AsGeoJSON(src.geom)::json AS geom_geojson
+FROM public.vw_monitoreo_poligonos src
+LEFT JOIN public."PADRON_PARCELAS" pp ON src."ID_Parcela_Fija" = pp."ID_Parcela_Fija"
+WHERE src.estado_revision = 'APROBADO'
 
 UNION ALL
 
 SELECT
     'punto'         AS tipo_geometria,
-    tabla_origen,
-    registro_id,
-    "ID_Organizacion",
-    "ID_Parcela_Fija",
-    productor,
-    tipo_infra      AS clasificacion,
-    evidencia_foto,
-    estado_revision,
-    fecha_monitoreo,
-    observaciones,
-    cumple_eudr,
-    geom,
-    ST_AsGeoJSON(geom)::json AS geom_geojson
-FROM public.vw_monitoreo_puntos
-WHERE estado_revision = 'APROBADO';
+    src.tabla_origen,
+    src.registro_id,
+    src."ID_Organizacion",
+    src."ID_Parcela_Fija",
+    src.productor,
+    src.tipo_infra  AS clasificacion,
+    src.evidencia_foto,
+    src.estado_revision,
+    src.fecha_monitoreo,
+    src.observaciones,
+    src.cumple_eudr,
+    pp.parcela_nombre,
+    pp.totalh       AS area_ha,
+    src.geom,
+    ST_AsGeoJSON(src.geom)::json AS geom_geojson
+FROM public.vw_monitoreo_puntos src
+LEFT JOIN public."PADRON_PARCELAS" pp ON src."ID_Parcela_Fija" = pp."ID_Parcela_Fija"
+WHERE src.estado_revision = 'APROBADO';
 
 GRANT SELECT ON public.vw_monitoreo_web TO authenticated;
 
