@@ -10,22 +10,74 @@ const SIGNED_URL_TTL_SECONDS = 3600
 // se deriva de tabla_origen (filas EUDR_MONITOREO son siempre el recorrido
 // perimetral de la visita) y de `clasificacion` (tipo_uso/tipo_infra) para
 // EUDR_USO_SUELO/EUDR_INSTALACIONES.
+//
+// JERARQUIA VISUAL DE 3 NIVELES:
+//   1. Perimetros (MONITOREO_PERIMETRAL, poligono o punto): borde marcado,
+//      relleno casi transparente — nunca debe tapar las subdivisiones.
+//   2. Subdivisiones de cultivo (Producción / Pan llevar, siempre poligono —
+//      EUDR_USO_SUELO nunca aporta geometrias puntuales): relleno solido por
+//      color tematico.
+//   3. Infraestructura (EUDR_INSTALACIONES, siempre punto — nunca aporta
+//      poligonos): circulos distintivos en un pane propio con z-index mayor,
+//      para que siempre queden encima de 1 y 2 sin importar el orden en que
+//      Supabase devuelva las filas.
 const CATEGORY_STYLES = {
-  MONITOREO_PERIMETRAL: { color: '#2563eb', fillColor: '#3b82f6', label: 'Monitoreo Perimetral' },
-  'Pan llevar': { color: '#a16207', fillColor: '#ca8a04', label: 'Pan llevar' },
-  Producción: { color: '#15803d', fillColor: '#22c55e', label: 'Producción' },
-  Vivienda: { color: '#b91c1c', fillColor: '#ef4444', label: 'Vivienda' },
+  MONITOREO_PERIMETRAL: {
+    label: 'Monitoreo Perimetral',
+    color: '#2563EB',
+    weight: 3,
+    fillColor: '#3B82F6',
+    fillOpacity: 0.05,
+  },
+  Producción: {
+    label: 'Producción',
+    color: '#15803D',
+    weight: 1.5,
+    fillColor: '#22C55E',
+    fillOpacity: 0.35,
+  },
+  'Pan llevar': {
+    label: 'Pan llevar',
+    color: '#B45309',
+    weight: 1.5,
+    fillColor: '#F59E0B',
+    fillOpacity: 0.35,
+  },
 }
-const DEFAULT_STYLE = { color: '#64748b', fillColor: '#94a3b8', label: 'Sin clasificar' }
+const DEFAULT_STYLE = {
+  label: 'Sin clasificar',
+  color: '#64748b',
+  weight: 1.5,
+  fillColor: '#94a3b8',
+  fillOpacity: 0.35,
+}
+
+// INVARIANTE: un punto MONITOREO (pin GPS de visita, sin recorrido de
+// perimetro) no es infraestructura — se dibuja pequeño y en el color del
+// nivel 1. Cualquier otro punto solo puede venir de EUDR_INSTALACIONES (el
+// unico origen de geometrias puntuales fuera de MONITOREO), asi que recibe
+// el estilo distintivo de infraestructura: circulo rojo con borde blanco.
+const INFRA_POINT_STYLE = {
+  radius: 8,
+  color: '#ffffff',
+  weight: 2,
+  fillColor: '#DC2626',
+  fillOpacity: 0.9,
+}
+// Pane propio con z-index entre markerPane (600) y tooltipPane (650) por
+// defecto de Leaflet, para que los puntos de infraestructura siempre se
+// dibujen sobre perimetros/subdivisiones sin tapar tooltips ni popups.
+const INFRA_PANE_NAME = 'infraestructuraPane'
+const INFRA_PANE_Z_INDEX = 645
 
 function resolveCategory(record) {
   if (record.tabla_origen === 'EUDR_MONITOREO') return 'MONITOREO_PERIMETRAL'
   return record.clasificacion || null
 }
 
-function categoryStyle(record) {
+function polygonStyle(record) {
   const cfg = CATEGORY_STYLES[resolveCategory(record)] ?? DEFAULT_STYLE
-  return { color: cfg.color, weight: 2, fillOpacity: 0.4, fillColor: cfg.fillColor }
+  return { color: cfg.color, weight: cfg.weight, fillOpacity: cfg.fillOpacity, fillColor: cfg.fillColor }
 }
 
 function escapeHtml(value) {
@@ -44,10 +96,22 @@ function resolveParcelaCodigo(record, fallback = 'S/C') {
   return record?.id_parcela || record?.['ID_Parcela_Fija'] || fallback
 }
 
-function tooltipHtml(record) {
-  const parcela = escapeHtml(resolveParcelaCodigo(record, 'Parcela'))
-  const detalle = record?.productor || record?.clasificacion || ''
-  return `<strong>${parcela}</strong>${detalle ? `<br/>${escapeHtml(detalle)}` : ''}`
+// Contenido de tooltip por nivel jerarquico. `category`/`isPoint` se
+// calculan en onEachFeature, que tiene acceso directo a feature.geometry.type
+// (mas confiable que inferir el tipo desde los datos del registro).
+function tooltipHtml(record, category, isPoint) {
+  const codigoParcela = escapeHtml(resolveParcelaCodigo(record, 'Parcela'))
+
+  if (category === 'MONITOREO_PERIMETRAL') {
+    const productor = record?.productor ? escapeHtml(record.productor) : 'Sin registrar'
+    return `<strong>Límite Parcela: ${codigoParcela}</strong><br/>Productor: ${productor}`
+  }
+
+  const clasificacion = record?.clasificacion ? escapeHtml(record.clasificacion) : 'Sin clasificar'
+  if (isPoint) {
+    return `<strong>Infraestructura: ${clasificacion}</strong><br/>Finca: ${codigoParcela}`
+  }
+  return `<strong>Uso: ${clasificacion}</strong><br/>Finca: ${codigoParcela}`
 }
 
 function popupHtml(record, photoUrl) {
@@ -77,6 +141,7 @@ export default function MapDashboard() {
   const mapRef = useRef(null)
   const leafletRef = useRef(null)
   const layersRef = useRef([])
+  const layerGroupsRef = useRef(null)
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -158,6 +223,9 @@ export default function MapDashboard() {
         const map = L.map(containerRef.current).setView([-6.5, -77.5], 8)
         mapRef.current = map
 
+        map.createPane(INFRA_PANE_NAME)
+        map.getPane(INFRA_PANE_NAME).style.zIndex = INFRA_PANE_Z_INDEX
+
         // INVARIANTE: Google Satelite Hibrido es la capa base por defecto (se
         // agrega directamente al mapa); las demas quedan definidas pero sin
         // addTo(map) — L.control.layers las agrega/quita segun cual elija el
@@ -185,7 +253,26 @@ export default function MapDashboard() {
           'Esri World Imagery': esriImagery,
           OpenStreetMap: osm,
         }
-        L.control.layers(baseMaps).addTo(map)
+
+        // INVARIANTE: capas superpuestas por nivel jerarquico — las 3 se
+        // agregan al mapa por defecto (visibles), y el control permite
+        // ocultarlas/mostrarlas independientemente.
+        const perimetralGroup = L.layerGroup().addTo(map)
+        const subdivisionGroup = L.layerGroup().addTo(map)
+        const infraestructuraGroup = L.layerGroup().addTo(map)
+        layerGroupsRef.current = {
+          perimetral: perimetralGroup,
+          subdivision: subdivisionGroup,
+          infraestructura: infraestructuraGroup,
+        }
+
+        const overlayMaps = {
+          'Perímetros de Monitoreo': perimetralGroup,
+          'Subdivisiones de Cultivo': subdivisionGroup,
+          Infraestructura: infraestructuraGroup,
+        }
+
+        L.control.layers(baseMaps, overlayMaps).addTo(map)
 
         renderLayers(L, map, records)
       } catch (err) {
@@ -206,6 +293,7 @@ export default function MapDashboard() {
         mapRef.current = null
       }
       layersRef.current = []
+      layerGroupsRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -221,7 +309,12 @@ export default function MapDashboard() {
   }, [records])
 
   function renderLayers(L, map, data) {
-    layersRef.current.forEach((layer) => layer.remove())
+    const groups = layerGroupsRef.current
+    if (!groups) return
+
+    groups.perimetral.clearLayers()
+    groups.subdivision.clearLayers()
+    groups.infraestructura.clearLayers()
     layersRef.current = []
 
     const bounds = []
@@ -237,25 +330,51 @@ export default function MapDashboard() {
             : record.geom_geojson
         if (!geometry) return
 
+        const category = resolveCategory(record)
+        const isPoint = geometry.type === 'Point' || geometry.type === 'MultiPoint'
+
         const layer = L.geoJSON(
           { type: 'Feature', geometry, properties: record },
           {
-            style: () => categoryStyle(record),
-            pointToLayer: (_feature, latlng) =>
-              L.circleMarker(latlng, { radius: 7, ...categoryStyle(record) }),
+            style: () => polygonStyle(record),
+            pointToLayer: (_feature, latlng) => {
+              if (category === 'MONITOREO_PERIMETRAL') {
+                const cfg = CATEGORY_STYLES.MONITOREO_PERIMETRAL
+                return L.circleMarker(latlng, {
+                  radius: 6,
+                  color: cfg.color,
+                  weight: 2,
+                  fillColor: cfg.fillColor,
+                  fillOpacity: 0.6,
+                })
+              }
+              // INVARIANTE: unico origen posible de un punto que no es
+              // MONITOREO es EUDR_INSTALACIONES — recibe el estilo
+              // distintivo de infraestructura, en su propio pane elevado.
+              return L.circleMarker(latlng, { ...INFRA_POINT_STYLE, pane: INFRA_PANE_NAME })
+            },
             // Tooltip al pasar el cursor (hover), no permanente — con muchas
             // parcelas visibles a la vez, un tooltip permanente por feature
             // satura el mapa. `feature` aca es el GeoJSON Feature completo;
             // los datos reales del registro viven en `feature.properties`.
             onEachFeature: (feature, featureLayer) => {
-              featureLayer.bindTooltip(tooltipHtml(feature.properties), { sticky: true })
+              featureLayer.bindTooltip(tooltipHtml(feature.properties, category, isPoint), {
+                sticky: true,
+              })
             },
           }
         )
 
         layer.bindPopup(popupHtml(record, null))
         layer.on('popupopen', () => loadPhoto(layer, record))
-        layer.addTo(map)
+
+        if (category === 'MONITOREO_PERIMETRAL') {
+          groups.perimetral.addLayer(layer)
+        } else if (isPoint) {
+          groups.infraestructura.addLayer(layer)
+        } else {
+          groups.subdivision.addLayer(layer)
+        }
         layersRef.current.push(layer)
 
         const layerBounds = layer.getBounds?.()
@@ -324,6 +443,13 @@ export default function MapDashboard() {
             {cfg.label}
           </span>
         ))}
+        <span className="flex items-center gap-1.5">
+          <span
+            className="w-3 h-3 rounded-full inline-block"
+            style={{ backgroundColor: INFRA_POINT_STYLE.fillColor }}
+          />
+          Infraestructura
+        </span>
         <span className="flex items-center gap-1.5">
           <span
             className="w-3 h-3 rounded-full inline-block"
