@@ -300,7 +300,9 @@ class DriveZipETLPipeline:
             "observaciones": observaciones,
             "geom_inspeccion": geom_json,
             "estado_revision": "PENDIENTE",  # INVARIANTE: nunca omitir
-            "fid": fid,
+            # INVARIANTE: EUDR_MONITOREO NO tiene columna fid (PGRST204 si se envia).
+            # fid solo se usa arriba, internamente, como respaldo para derivar
+            # id_monitoreo cuando no hay parcela resuelta — nunca como campo del payload.
         }
         return {key: self.sanitize_json_value(value) for key, value in payload.items()}
 
@@ -352,11 +354,11 @@ class DriveZipETLPipeline:
 
     def resolve_upsert_conflict_target(self, table_name: str, payload: dict) -> str:
         # INVARIANTE: el conflict target debe coincidir con una restriccion UNIQUE real
-        # en Supabase. EUDR_MONITOREO con parcela resuelta usa la clave de negocio
-        # (organizacion + parcela + fecha); en cualquier otro caso (o para
-        # EUDR_USO_SUELO / EUDR_INSTALACIONES) se usa fid + organizacion, que identifica
-        # la feature de origen del GeoPackage dentro de esa organizacion.
-        if table_name == MONITOREO_TABLE and payload.get("ID_Parcela_Fija"):
+        # en Supabase. EUDR_MONITOREO no tiene columna fid (PGRST204 si se la nombra
+        # aqui) asi que usa ESTRICTAMENTE su clave de negocio, nunca fid. Solo
+        # EUDR_USO_SUELO / EUDR_INSTALACIONES tienen fid y lo usan junto a la
+        # organizacion para identificar la feature de origen del GeoPackage.
+        if table_name == MONITOREO_TABLE:
             return "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo"
         return "ID_Organizacion,fid"
 

@@ -788,17 +788,49 @@ class TestUpsertIdempotency(unittest.TestCase):
         self.assertEqual(payload_run1["id_monitoreo"], payload_run2["id_monitoreo"])
         self.assertNotEqual(payload_run1["id_monitoreo"], payload_other_fid["id_monitoreo"])
 
+    def test_build_monitoreo_payload_never_includes_fid_field(self):
+        # INVARIANTE: EUDR_MONITOREO no tiene columna fid; enviarla causa PGRST204
+        # ("Column not found in schema cache"). fid puede usarse internamente para
+        # derivar id_monitoreo, pero nunca debe aparecer como clave del payload.
+        pipeline, _ = self._pipeline()
+        row = self._monitoreo_row()
+
+        payload_con_parcela = pipeline.build_monitoreo_payload(row, "ORG-001", fid=1)
+
+        gdf_sin_parcela = gpd.GeoDataFrame(
+            {"fecha_monitoreo": ["2026-08-16"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        payload_sin_parcela = pipeline.build_monitoreo_payload(
+            gdf_sin_parcela.iloc[0], "ORG-001", fid=1
+        )
+
+        self.assertNotIn("fid", payload_con_parcela)
+        self.assertNotIn("fid", payload_sin_parcela)
+
     def test_resolve_upsert_conflict_target_uses_natural_key_when_parcela_present(self):
         pipeline, _ = self._pipeline()
         payload = {"ID_Parcela_Fija": "PARC-001"}
         target = pipeline.resolve_upsert_conflict_target("EUDR_MONITOREO", payload)
         self.assertEqual(target, "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo")
 
-    def test_resolve_upsert_conflict_target_uses_fid_when_parcela_missing(self):
+    def test_resolve_upsert_conflict_target_monitoreo_never_uses_fid(self):
+        # INVARIANTE: EUDR_MONITOREO no tiene columna fid; usarla en on_conflict
+        # produce PGRST204. Debe usar SIEMPRE la clave de negocio, con o sin parcela.
         pipeline, _ = self._pipeline()
-        payload = {"ID_Parcela_Fija": None}
-        target = pipeline.resolve_upsert_conflict_target("EUDR_MONITOREO", payload)
-        self.assertEqual(target, "ID_Organizacion,fid")
+        payload_sin_parcela = {"ID_Parcela_Fija": None}
+        payload_con_parcela = {"ID_Parcela_Fija": "PARC-001"}
+
+        target_sin_parcela = pipeline.resolve_upsert_conflict_target(
+            "EUDR_MONITOREO", payload_sin_parcela
+        )
+        target_con_parcela = pipeline.resolve_upsert_conflict_target(
+            "EUDR_MONITOREO", payload_con_parcela
+        )
+
+        self.assertEqual(target_sin_parcela, "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo")
+        self.assertEqual(target_con_parcela, "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo")
 
     def test_resolve_upsert_conflict_target_uso_suelo_and_instalaciones_use_fid(self):
         pipeline, _ = self._pipeline()
@@ -846,6 +878,25 @@ class TestUpsertIdempotency(unittest.TestCase):
         mock_supabase.table.return_value.insert.assert_not_called()
         call_kwargs = mock_supabase.table.return_value.upsert.call_args.kwargs
         self.assertEqual(call_kwargs["on_conflict"], "ID_Organizacion,fid")
+
+    def test_process_layer_rows_monitoreo_without_parcela_never_sends_fid(self):
+        # Reproduce el error real PGRST204: una fila EUDR_MONITOREO sin parcela
+        # resuelta no debe enviar 'fid' en el payload ni en el on_conflict.
+        pipeline, mock_supabase = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"fecha_monitoreo": ["2026-08-16"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+
+        pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+
+        call_args = mock_supabase.table.return_value.upsert.call_args
+        sent_payload = call_args.args[0]
+        self.assertNotIn("fid", sent_payload)
+        self.assertEqual(
+            call_args.kwargs["on_conflict"], "ID_Organizacion,ID_Parcela_Fija,fecha_monitoreo"
+        )
 
     def test_process_layer_rows_reruns_produce_same_id_monitoreo(self):
         # INVARIANTE central de esta tarea: reprocesar el mismo paquete debe
