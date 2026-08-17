@@ -76,26 +76,44 @@ function resolveInfraStyle(clasificacion) {
   return INFRA_BY_KEY[normalizeKey(clasificacion)] ?? DEFAULT_INFRA_STYLE
 }
 
+// Dimensiones del badge de infraestructura segun nivel de zoom: pequeño en
+// vistas lejanas (para no tapar las parcelas cuando muchos puntos quedan
+// juntos en pantalla) y a tamaño completo en zoom cercano. Los umbrales
+// siguen los mismos que fitBounds({ maxZoom: 15 }) usa para el encuadre
+// inicial, para que el badge llegue a 28px justo cuando el usuario ya esta
+// mirando una sola parcela de cerca.
+function getIconDimensionsByZoom(zoom) {
+  if (zoom >= 15) return { size: 28, fontSize: 14, borderWidth: 2 }
+  if (zoom >= 12) return { size: 22, fontSize: 11, borderWidth: 2 }
+  if (zoom >= 9) return { size: 16, fontSize: 9, borderWidth: 1.5 }
+  return { size: 12, fontSize: 7, borderWidth: 1 }
+}
+
 // Badge HTML (L.divIcon) para puntos de infraestructura, en vez de un
 // circleMarker generico — asi el emoji sobre el mapa coincide exactamente
 // con el que se muestra en la leyenda para la misma categoria. `L` se recibe
 // por parametro porque Leaflet solo existe tras el import dinamico en el
 // efecto de inicializacion del mapa (no hay import estatico a nivel modulo).
-function createInfraIcon(L, clasificacion) {
+// El tamaño se recalcula en cada llamada segun `zoom` — el listener
+// 'zoomend' en el efecto de inicializacion vuelve a invocar esta funcion
+// con el zoom actual para reasignar el icono via marker.setIcon().
+function createCustomInfraIcon(L, clasificacion, zoom) {
   const style = resolveInfraStyle(clasificacion)
+  const { size, fontSize, borderWidth } = getIconDimensionsByZoom(zoom)
+  const half = size / 2
   return L.divIcon({
     className: 'custom-infra-marker',
     html:
       `<div style="` +
       `background-color:${style.color};` +
-      'width:28px;height:28px;border-radius:50%;' +
-      'border:2px solid #ffffff;box-shadow:0 2px 6px rgba(0,0,0,0.4);' +
+      `width:${size}px;height:${size}px;border-radius:50%;` +
+      `border:${borderWidth}px solid #ffffff;box-shadow:0 2px 6px rgba(0,0,0,0.4);` +
       'display:flex;align-items:center;justify-content:center;' +
-      'font-size:14px;cursor:pointer;">' +
+      `font-size:${fontSize}px;cursor:pointer;">` +
       `${style.icon}</div>`,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-    popupAnchor: [0, -14],
+    iconSize: [size, size],
+    iconAnchor: [half, half],
+    popupAnchor: [0, -half],
   })
 }
 
@@ -298,6 +316,10 @@ export default function MapDashboard() {
   const leafletRef = useRef(null)
   const layersRef = useRef([])
   const layerGroupsRef = useRef(null)
+  // Marcadores de infraestructura vivos (marker + su clasificacion), para
+  // que el listener 'zoomend' pueda reasignarles el icono con el tamaño
+  // correcto sin tener que volver a recorrer los datos ni recrear las capas.
+  const infraMarkersRef = useRef([])
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -430,6 +452,16 @@ export default function MapDashboard() {
 
         L.control.layers(baseMaps, overlayMaps).addTo(map)
 
+        // Reescala los badges de infraestructura cuando cambia el zoom, para
+        // que nunca tapen las subdivisiones/parcelas cuando el usuario aleja
+        // el mapa y muchos puntos quedan juntos en pocos pixeles.
+        map.on('zoomend', () => {
+          const zoom = map.getZoom()
+          infraMarkersRef.current.forEach(({ marker, clasificacion }) => {
+            marker.setIcon(createCustomInfraIcon(L, clasificacion, zoom))
+          })
+        })
+
         renderLayers(L, map, records)
       } catch (err) {
         // INVARIANTE: un fallo aca (ej. leaflet no pudo cargar, DOM no listo) no
@@ -450,6 +482,7 @@ export default function MapDashboard() {
       }
       layersRef.current = []
       layerGroupsRef.current = null
+      infraMarkersRef.current = []
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -472,9 +505,11 @@ export default function MapDashboard() {
     groups.subdivision.clearLayers()
     groups.infraestructura.clearLayers()
     layersRef.current = []
+    infraMarkersRef.current = []
 
     const bounds = []
     const safeData = Array.isArray(data) ? data : []
+    const currentZoom = map.getZoom()
 
     safeData.forEach((record) => {
       if (!record?.geom_geojson) return
@@ -506,11 +541,14 @@ export default function MapDashboard() {
               // INVARIANTE: unico origen posible de un punto que no es
               // MONITOREO es EUDR_INSTALACIONES — recibe un badge (divIcon)
               // con el mismo emoji que su categoria en la leyenda, en su
-              // propio pane elevado.
-              return L.marker(latlng, {
-                icon: createInfraIcon(L, record.clasificacion),
+              // propio pane elevado. Se registra en infraMarkersRef para que
+              // el listener 'zoomend' pueda reescalarlo mas adelante.
+              const marker = L.marker(latlng, {
+                icon: createCustomInfraIcon(L, record.clasificacion, currentZoom),
                 pane: INFRA_PANE_NAME,
               })
+              infraMarkersRef.current.push({ marker, clasificacion: record.clasificacion })
+              return marker
             },
             // Tooltip al pasar el cursor (hover), no permanente — con muchas
             // parcelas visibles a la vez, un tooltip permanente por feature
