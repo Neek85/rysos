@@ -3,11 +3,12 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-// INVARIANTE: solo "GIS & EUDR" tiene rutas reales implementadas. Las
-// demás categorías (Padrón, Acopio, Comercialización) son el andamiaje de
-// navegación modular pedido, pero enlazar a rutas inexistentes produciría
-// 404s — sus items quedan sin `href` y se renderizan deshabilitados
-// ("Próximamente") hasta que existan las páginas correspondientes.
+// INVARIANTE: la mayoría de los items son el andamiaje de navegación
+// modular pedido (Padrón, Acopio, "Contratos y Ventas" de
+// Comercialización) — enlazar a rutas inexistentes produciría 404s, así
+// que quedan sin `href` y se renderizan deshabilitados ("Próximamente")
+// hasta que existan las páginas correspondientes. "Lotes y Trazabilidad"
+// (Tarea 14) sí es una ruta real: app/dashboard/lotes/page.jsx.
 const NAV_GROUPS = [
   {
     label: 'GIS & EUDR',
@@ -26,7 +27,10 @@ const NAV_GROUPS = [
   },
   {
     label: 'Comercialización',
-    items: [{ label: 'Contratos y Ventas', href: null, icon: '💰' }],
+    items: [
+      { label: 'Lotes y Trazabilidad', href: '/dashboard/lotes', icon: '🔖' },
+      { label: 'Contratos y Ventas', href: null, icon: '💰' },
+    ],
   },
 ]
 
