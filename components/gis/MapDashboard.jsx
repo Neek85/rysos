@@ -65,6 +65,7 @@ export default function MapDashboard() {
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [mapError, setMapError] = useState(null)
 
   // Carga de datos: vw_monitoreo_web ya filtra estrictamente estado_revision = 'APROBADO'.
   useEffect(() => {
@@ -78,19 +79,24 @@ export default function MapDashboard() {
         return
       }
 
-      const { data, error: err } = await supabase
-        .from('vw_monitoreo_web')
-        .select(
-          'tabla_origen,registro_id,ID_Organizacion,ID_Parcela_Fija,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
-        )
+      try {
+        const { data, error: err } = await supabase
+          .from('vw_monitoreo_web')
+          .select(
+            'tabla_origen,registro_id,ID_Organizacion,ID_Parcela_Fija,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,geom_geojson'
+          )
 
-      if (cancelled) return
-      if (err) {
-        setError(err.message)
-      } else {
-        setRecords(data ?? [])
+        if (cancelled) return
+        if (err) {
+          setError(err.message)
+        } else {
+          setRecords(Array.isArray(data) ? data : [])
+        }
+      } catch (err) {
+        if (!cancelled) setError(err?.message || 'Error inesperado al consultar vw_monitoreo_web.')
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-      setLoading(false)
     }
 
     fetchRecords()
@@ -107,27 +113,35 @@ export default function MapDashboard() {
     async function init() {
       if (!containerRef.current || mapRef.current) return
 
-      const leaflet = await import('leaflet')
-      const L = leaflet.default
-      await import('leaflet/dist/leaflet.css')
-      leafletRef.current = L
+      try {
+        const leaflet = await import('leaflet')
+        const L = leaflet.default
+        await import('leaflet/dist/leaflet.css')
+        leafletRef.current = L
 
-      // Fix de iconos default rotos por el bundling de webpack.
-      delete L.Icon.Default.prototype._getIconUrl
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-        iconUrl: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png',
-        shadowUrl: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-shadow.png',
-      })
+        // Fix de iconos default rotos por el bundling de webpack.
+        delete L.Icon.Default.prototype._getIconUrl
+        L.Icon.Default.mergeOptions({
+          iconRetinaUrl: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+          iconUrl: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-icon.png',
+          shadowUrl: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/images/marker-shadow.png',
+        })
 
-      map = L.map(containerRef.current).setView([-6.5, -77.5], 8)
-      mapRef.current = map
+        map = L.map(containerRef.current).setView([-6.5, -77.5], 8)
+        mapRef.current = map
 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      }).addTo(map)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        }).addTo(map)
 
-      renderLayers(L, map, records)
+        renderLayers(L, map, records)
+      } catch (err) {
+        // INVARIANTE: un fallo aca (ej. leaflet no pudo cargar, DOM no listo) no
+        // debe tumbar el arbol de React entero — no hay ErrorBoundary en la app,
+        // asi que una excepcion sin capturar en render/efecto deja la pagina en
+        // blanco. Se degrada a un mensaje de error en vez de propagar.
+        setMapError(err?.message || 'No se pudo inicializar el mapa.')
+      }
     }
 
     init()
@@ -143,7 +157,11 @@ export default function MapDashboard() {
   // Re-renderiza las capas cada vez que cambian los registros (ej. tras el fetch inicial).
   useEffect(() => {
     if (!mapRef.current || !leafletRef.current) return
-    renderLayers(leafletRef.current, mapRef.current, records)
+    try {
+      renderLayers(leafletRef.current, mapRef.current, records)
+    } catch (err) {
+      setMapError(err?.message || 'No se pudieron renderizar las capas del mapa.')
+    }
   }, [records])
 
   function renderLayers(L, map, data) {
@@ -151,37 +169,38 @@ export default function MapDashboard() {
     layersRef.current = []
 
     const bounds = []
+    const safeData = Array.isArray(data) ? data : []
 
-    data.forEach((record) => {
-      if (!record.geom_geojson) return
+    safeData.forEach((record) => {
+      if (!record?.geom_geojson) return
 
-      let geometry
       try {
-        geometry =
+        const geometry =
           typeof record.geom_geojson === 'string'
             ? JSON.parse(record.geom_geojson)
             : record.geom_geojson
+        if (!geometry) return
+
+        const layer = L.geoJSON(
+          { type: 'Feature', geometry, properties: record },
+          {
+            style: () => categoryStyle(record),
+            pointToLayer: (_feature, latlng) =>
+              L.circleMarker(latlng, { radius: 7, ...categoryStyle(record) }),
+          }
+        )
+
+        layer.bindPopup(popupHtml(record, null))
+        layer.on('popupopen', () => loadPhoto(layer, record))
+        layer.addTo(map)
+        layersRef.current.push(layer)
+
+        const layerBounds = layer.getBounds?.()
+        if (layerBounds?.isValid?.()) bounds.push(layerBounds)
       } catch {
-        return // geometría no parseable — se omite este registro
+        // geometría no parseable o no soportada por Leaflet — se omite este
+        // registro puntual, nunca se deja que tumbe el render de toda la capa.
       }
-      if (!geometry) return
-
-      const layer = L.geoJSON(
-        { type: 'Feature', geometry, properties: record },
-        {
-          style: () => categoryStyle(record),
-          pointToLayer: (_feature, latlng) =>
-            L.circleMarker(latlng, { radius: 7, ...categoryStyle(record) }),
-        }
-      )
-
-      layer.bindPopup(popupHtml(record, null))
-      layer.on('popupopen', () => loadPhoto(layer, record))
-      layer.addTo(map)
-      layersRef.current.push(layer)
-
-      const layerBounds = layer.getBounds?.()
-      if (layerBounds?.isValid?.()) bounds.push(layerBounds)
     })
 
     if (bounds.length > 0) {
@@ -193,16 +212,21 @@ export default function MapDashboard() {
   // Firma la URL de la foto de evidencia solo cuando el usuario abre el popup
   // (el bucket evidencias_eudr es privado, no hay URL pública directa).
   async function loadPhoto(layer, record) {
-    if (!record.evidencia_foto) return
+    if (!record?.evidencia_foto) return
     const supabase = getSupabaseClient()
     if (!supabase) return
 
-    const { data, error: err } = await supabase.storage
-      .from(EVIDENCIA_BUCKET)
-      .createSignedUrl(record.evidencia_foto, SIGNED_URL_TTL_SECONDS)
+    try {
+      const { data, error: err } = await supabase.storage
+        .from(EVIDENCIA_BUCKET)
+        .createSignedUrl(record.evidencia_foto, SIGNED_URL_TTL_SECONDS)
 
-    if (!err && data?.signedUrl) {
-      layer.setPopupContent(popupHtml(record, data.signedUrl))
+      if (!err && data?.signedUrl) {
+        layer.setPopupContent(popupHtml(record, data.signedUrl))
+      }
+    } catch {
+      // No se pudo firmar la foto (red, permisos, etc.) — el popup se queda
+      // con el placeholder "Cargando foto…", sin romper el resto del mapa.
     }
   }
 
@@ -214,6 +238,11 @@ export default function MapDashboard() {
         className="w-full rounded-lg border border-gray-200"
       />
 
+      {mapError && (
+        <p className="text-sm text-red-600 bg-red-50 rounded p-2">
+          Error al cargar el mapa: {mapError}
+        </p>
+      )}
       {loading && <p className="text-sm text-gray-400">Cargando registros aprobados…</p>}
       {!loading && error && (
         <p className="text-sm text-red-600 bg-red-50 rounded p-2">Error de conexión: {error}</p>

@@ -29,17 +29,18 @@ function StatCard({ label, value, hint, accent = 'blue' }) {
 }
 
 function computeStats(records) {
-  const total = records.length
+  const safeRecords = Array.isArray(records) ? records : []
+  const total = safeRecords.length
 
-  const conCampoCumpleEudr = records.filter(
-    (r) => r.cumple_eudr === 'SI' || r.cumple_eudr === 'NO'
+  const conCampoCumpleEudr = safeRecords.filter(
+    (r) => r?.cumple_eudr === 'SI' || r?.cumple_eudr === 'NO'
   )
-  const cumplen = conCampoCumpleEudr.filter((r) => r.cumple_eudr === 'SI').length
+  const cumplen = conCampoCumpleEudr.filter((r) => r?.cumple_eudr === 'SI').length
   const porcentajeCumplimiento =
     conCampoCumpleEudr.length > 0 ? Math.round((cumplen / conCampoCumpleEudr.length) * 100) : null
 
-  const conObservaciones = records.filter(
-    (r) => typeof r.observaciones === 'string' && r.observaciones.trim() !== ''
+  const conObservaciones = safeRecords.filter(
+    (r) => typeof r?.observaciones === 'string' && r.observaciones.trim() !== ''
   ).length
 
   return {
@@ -67,15 +68,23 @@ export default function EudrStatsWidget() {
         return
       }
 
-      const { data, error: err } = await supabase.from('vw_monitoreo_web').select(SELECT_COLUMNS)
+      try {
+        const { data, error: err } = await supabase.from('vw_monitoreo_web').select(SELECT_COLUMNS)
 
-      if (cancelled) return
-      if (err) {
-        setError(err.message)
-      } else {
-        setStats(computeStats(data ?? []))
+        if (cancelled) return
+        if (err) {
+          setError(err.message)
+        } else {
+          // computeStats ya tolera data=null/undefined/no-array internamente.
+          setStats(computeStats(data))
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err?.message || 'Error inesperado al consultar vw_monitoreo_web.')
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-      setLoading(false)
     }
 
     fetchStats()

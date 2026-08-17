@@ -5,7 +5,10 @@ export const dynamic = 'force-dynamic'
 import nextDynamic from 'next/dynamic'
 import EudrStatsWidget from '@/components/gis/EudrStatsWidget'
 
-const MapDashboard = nextDynamic(() => import('@/components/gis/MapDashboard'), { ssr: false })
+const MapDashboard = nextDynamic(() => import('@/components/gis/MapDashboard'), {
+  ssr: false,
+  loading: () => <div className="p-8 text-center text-sm text-gray-400">Cargando mapa…</div>,
+})
 
 export default function MapaPage() {
   return (
