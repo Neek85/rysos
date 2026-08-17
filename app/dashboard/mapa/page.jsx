@@ -12,7 +12,7 @@ const MapDashboard = nextDynamic(() => import('@/components/gis/MapDashboard'), 
 
 export default function MapaPage() {
   return (
-    <main className="min-h-screen bg-slate-50">
+    <main className="bg-slate-50">
       <header className="bg-green-800 text-white px-6 py-4 shadow-md">
         <h1 className="text-xl font-bold tracking-wide">RYZOS — Mapa WebGIS</h1>
         <p className="text-green-200 text-sm mt-0.5">
