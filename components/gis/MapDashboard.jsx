@@ -14,70 +14,96 @@ const SIGNED_URL_TTL_SECONDS = 3600
 // JERARQUIA VISUAL DE 3 NIVELES:
 //   1. Perimetros (MONITOREO_PERIMETRAL, poligono o punto): borde marcado,
 //      relleno casi transparente — nunca debe tapar las subdivisiones.
-//   2. Subdivisiones de cultivo (Producción / Pan llevar, siempre poligono —
-//      EUDR_USO_SUELO nunca aporta geometrias puntuales): relleno solido por
-//      color tematico.
+//   2. Subdivisiones de uso de suelo (siempre poligono — EUDR_USO_SUELO
+//      nunca aporta geometrias puntuales): relleno solido por color tematico,
+//      una de 7 categorias reales de campo.
 //   3. Infraestructura (EUDR_INSTALACIONES, siempre punto — nunca aporta
 //      poligonos): circulos distintivos en un pane propio con z-index mayor,
 //      para que siempre queden encima de 1 y 2 sin importar el orden en que
-//      Supabase devuelva las filas.
-const CATEGORY_STYLES = {
-  MONITOREO_PERIMETRAL: {
-    label: 'Monitoreo Perimetral',
-    color: '#2563EB',
-    weight: 3,
-    fillColor: '#3B82F6',
-    fillOpacity: 0.05,
-  },
-  Producción: {
-    label: 'Producción',
-    color: '#15803D',
-    weight: 1.5,
-    fillColor: '#22C55E',
-    fillOpacity: 0.35,
-  },
-  'Pan llevar': {
-    label: 'Pan llevar',
-    color: '#B45309',
-    weight: 1.5,
-    fillColor: '#F59E0B',
-    fillOpacity: 0.35,
-  },
-}
-const DEFAULT_STYLE = {
-  label: 'Sin clasificar',
-  color: '#64748b',
-  weight: 1.5,
-  fillColor: '#94a3b8',
-  fillOpacity: 0.35,
+//      Supabase devuelva las filas. 4 categorias reales de campo.
+//
+// `clasificacion` llega tal cual de tipo_uso/tipo_infra (texto libre, sin
+// CHECK constraint que fije la ortografia) y en la practica varia en
+// acentos/mayusculas/separador ("Pan Llevar" vs "Pan llevar", "Inverna/Pasto"
+// vs "Inverna / Pasto", "Otras áreas" vs "Otras Areas"). normalizeKey()
+// colapsa esas variantes a una misma clave para que el lookup de estilo no
+// dependa de que el dato venga con la ortografia exacta.
+function normalizeKey(value) {
+  if (typeof value !== 'string') return ''
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\//g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
-// INVARIANTE: un punto MONITOREO (pin GPS de visita, sin recorrido de
-// perimetro) no es infraestructura — se dibuja pequeño y en el color del
-// nivel 1. Cualquier otro punto solo puede venir de EUDR_INSTALACIONES (el
-// unico origen de geometrias puntuales fuera de MONITOREO), asi que recibe
-// el estilo distintivo de infraestructura: circulo rojo con borde blanco.
-const INFRA_POINT_STYLE = {
-  radius: 8,
-  color: '#ffffff',
-  weight: 2,
-  fillColor: '#DC2626',
-  fillOpacity: 0.9,
+// Las 7 subdivisiones de uso de suelo (EUDR_USO_SUELO, siempre poligono).
+const LAND_USE_STYLES = [
+  { key: 'produccion', label: 'Producción', color: '#16a34a', fillColor: '#22c55e', fillOpacity: 0.35, icon: '🟢' },
+  { key: 'crecimiento', label: 'Crecimiento', color: '#65a30d', fillColor: '#84cc16', fillOpacity: 0.35, icon: '🌱' },
+  { key: 'pan llevar', label: 'Pan Llevar', color: '#d97706', fillColor: '#f59e0b', fillOpacity: 0.35, icon: '🟧' },
+  { key: 'inverna pasto', label: 'Inverna/Pasto', color: '#ca8a04', fillColor: '#eab308', fillOpacity: 0.35, icon: '🌾' },
+  { key: 'rastrojo purma', label: 'Rastrojo/Purma', color: '#92400e', fillColor: '#b45309', fillOpacity: 0.35, icon: '🍂' },
+  { key: 'bosque', label: 'Bosque', color: '#14532d', fillColor: '#15803d', fillOpacity: 0.45, icon: '🌲' },
+  { key: 'otras areas', label: 'Otras áreas', color: '#6b7280', fillColor: '#9ca3af', fillOpacity: 0.3, icon: '🔘' },
+]
+const DEFAULT_LAND_USE_STYLE = {
+  label: 'Sin clasificar',
+  color: '#64748b',
+  fillColor: '#94a3b8',
+  fillOpacity: 0.35,
+  icon: '⬜',
 }
+const LAND_USE_BY_KEY = Object.fromEntries(LAND_USE_STYLES.map((s) => [s.key, s]))
+
+function resolveLandUseStyle(clasificacion) {
+  return LAND_USE_BY_KEY[normalizeKey(clasificacion)] ?? DEFAULT_LAND_USE_STYLE
+}
+
+// Las 4 categorias de infraestructura (EUDR_INSTALACIONES, siempre punto).
+const INFRA_STYLES = [
+  { key: 'vivienda', label: 'Vivienda', color: '#ef4444', icon: '🏠' },
+  { key: 'fuente de agua', label: 'Fuente de agua', color: '#06b6d4', icon: '💧' },
+  { key: 'modulo de beneficio', label: 'Módulo de beneficio', color: '#8b5cf6', icon: '⚙️' },
+  { key: 'zona con erosion', label: 'Zona con erosión', color: '#f97316', icon: '⚠️' },
+]
+const DEFAULT_INFRA_STYLE = { label: 'Sin clasificar', color: '#64748b', icon: '📍' }
+const INFRA_BY_KEY = Object.fromEntries(INFRA_STYLES.map((s) => [s.key, s]))
+
+function resolveInfraStyle(clasificacion) {
+  return INFRA_BY_KEY[normalizeKey(clasificacion)] ?? DEFAULT_INFRA_STYLE
+}
+
+// Capa perimetral contenedora (EUDR_MONITOREO, poligono o punto): borde
+// marcado, relleno casi transparente para nunca tapar las subdivisiones.
+const PERIMETRAL_STYLE = {
+  label: 'Monitoreo Perimetral',
+  color: '#2563eb',
+  weight: 3,
+  fillColor: '#3b82f6',
+  fillOpacity: 0.05,
+  icon: '🔵',
+}
+
 // Pane propio con z-index entre markerPane (600) y tooltipPane (650) por
 // defecto de Leaflet, para que los puntos de infraestructura siempre se
 // dibujen sobre perimetros/subdivisiones sin tapar tooltips ni popups.
 const INFRA_PANE_NAME = 'infraestructuraPane'
 const INFRA_PANE_Z_INDEX = 645
 
-function resolveCategory(record) {
-  if (record.tabla_origen === 'EUDR_MONITOREO') return 'MONITOREO_PERIMETRAL'
-  return record.clasificacion || null
-}
-
 function polygonStyle(record) {
-  const cfg = CATEGORY_STYLES[resolveCategory(record)] ?? DEFAULT_STYLE
-  return { color: cfg.color, weight: cfg.weight, fillOpacity: cfg.fillOpacity, fillColor: cfg.fillColor }
+  if (record?.tabla_origen === 'EUDR_MONITOREO') {
+    return {
+      color: PERIMETRAL_STYLE.color,
+      weight: PERIMETRAL_STYLE.weight,
+      fillOpacity: PERIMETRAL_STYLE.fillOpacity,
+      fillColor: PERIMETRAL_STYLE.fillColor,
+    }
+  }
+  const cfg = resolveLandUseStyle(record?.clasificacion)
+  return { color: cfg.color, weight: 1.5, fillOpacity: cfg.fillOpacity, fillColor: cfg.fillColor }
 }
 
 function escapeHtml(value) {
@@ -122,19 +148,21 @@ function formatNombreParcela(record) {
   return record?.parcela_nombre ? ` — ${escapeHtml(record.parcela_nombre)}` : ''
 }
 
-// Contenido de tooltip por nivel jerarquico. A diferencia de `category`
-// (derivada de resolveCategory para fines de ESTILO, donde un punto
-// MONITOREO se agrupa junto al perimetro), el contenido textual del
+// Contenido de tooltip por nivel jerarquico. A diferencia del estilo (donde
+// un punto MONITOREO se agrupa junto al perimetro), el contenido textual del
 // tooltip se decide directamente por tabla_origen: es la unica columna que
 // distingue sin ambiguedad los 3 niveles (EUDR_MONITOREO / EUDR_USO_SUELO /
-// EUDR_INSTALACIONES), sin depender de inferir el tipo de geometria.
+// EUDR_INSTALACIONES), sin depender de inferir el tipo de geometria. El
+// icono del encabezado sale de resolveLandUseStyle/resolveInfraStyle, para
+// que tooltip y leyenda muestren siempre el mismo simbolo por categoria.
 //
 // - EUDR_MONITOREO (Perimetro): codigo+nombre de la parcela, Productor y
 //   "Área Total" (area_ha de PADRON_PARCELAS, la parcela completa).
-// - EUDR_USO_SUELO (Subdivision, siempre poligono): "🌾 Uso: [tipo_uso]",
-//   la finca contenedora (codigo+nombre), Productor (via el LEFT JOIN
-//   LATERAL de 20260817_refine_vw_monitoreo_web.sql) y "Área del Lote".
-// - EUDR_INSTALACIONES (Punto, siempre punto): "📍 Infraestructura:
+// - EUDR_USO_SUELO (Subdivision, siempre poligono): "[icono] Uso de Suelo:
+//   [tipo_uso]", la finca contenedora (codigo+nombre), Productor (via el
+//   LEFT JOIN LATERAL de 20260817_refine_vw_monitoreo_web.sql) y "Área del
+//   Lote".
+// - EUDR_INSTALACIONES (Punto, siempre punto): "[icono] Infraestructura:
 //   [tipo_infra]", la finca contenedora y Productor — el Área se OMITE a
 //   proposito: una instalacion puntual (tulpa, beneficio, etc.) no tiene
 //   una extension propia que mostrar, y repetir el area de la parcela ahi
@@ -146,8 +174,9 @@ function tooltipHtml(record) {
   const clasificacion = record?.clasificacion ? escapeHtml(record.clasificacion) : 'Sin clasificar'
 
   if (record?.tabla_origen === 'EUDR_USO_SUELO') {
+    const icon = resolveLandUseStyle(record?.clasificacion).icon
     return (
-      `<strong>🌾 Uso de Suelo: ${clasificacion}</strong><br/>` +
+      `<strong>${icon} Uso de Suelo: ${clasificacion}</strong><br/>` +
       `Finca: ${codigoParcela}${nombreParcela}<br/>` +
       `Productor: ${productor}<br/>` +
       `Área del Lote: ${formatArea(record)}`
@@ -155,8 +184,9 @@ function tooltipHtml(record) {
   }
 
   if (record?.tabla_origen === 'EUDR_INSTALACIONES') {
+    const icon = resolveInfraStyle(record?.clasificacion).icon
     return (
-      `<strong>📍 Infraestructura: ${clasificacion}</strong><br/>` +
+      `<strong>${icon} Infraestructura: ${clasificacion}</strong><br/>` +
       `Finca: ${codigoParcela}${nombreParcela}<br/>` +
       `Productor: ${productor}`
     )
@@ -201,13 +231,15 @@ function popupHtml(record, photoUrl) {
   let headerHtml
   let bodyHtml
   if (record.tabla_origen === 'EUDR_USO_SUELO') {
-    headerHtml = `<strong style="font-size:14px;">🌾 Uso de Suelo: ${clasificacion}</strong>`
+    const icon = resolveLandUseStyle(record?.clasificacion).icon
+    headerHtml = `<strong style="font-size:14px;">${icon} Uso de Suelo: ${clasificacion}</strong>`
     bodyHtml =
       `<div><strong>Finca:</strong> ${codigoParcela}${nombreParcela}</div>` +
       `<div><strong>Productor:</strong> ${productor}</div>` +
       `<div><strong>Área del Lote:</strong> ${formatArea(record)}</div>`
   } else if (record.tabla_origen === 'EUDR_INSTALACIONES') {
-    headerHtml = `<strong style="font-size:14px;">📍 Infraestructura: ${clasificacion}</strong>`
+    const icon = resolveInfraStyle(record?.clasificacion).icon
+    headerHtml = `<strong style="font-size:14px;">${icon} Infraestructura: ${clasificacion}</strong>`
     bodyHtml =
       `<div><strong>Finca:</strong> ${codigoParcela}${nombreParcela}</div>` +
       `<div><strong>Productor:</strong> ${productor}</div>`
@@ -431,7 +463,7 @@ export default function MapDashboard() {
             : record.geom_geojson
         if (!geometry) return
 
-        const category = resolveCategory(record)
+        const isPerimetral = record.tabla_origen === 'EUDR_MONITOREO'
         const isPoint = geometry.type === 'Point' || geometry.type === 'MultiPoint'
 
         const layer = L.geoJSON(
@@ -439,20 +471,27 @@ export default function MapDashboard() {
           {
             style: () => polygonStyle(record),
             pointToLayer: (_feature, latlng) => {
-              if (category === 'MONITOREO_PERIMETRAL') {
-                const cfg = CATEGORY_STYLES.MONITOREO_PERIMETRAL
+              if (isPerimetral) {
                 return L.circleMarker(latlng, {
                   radius: 6,
-                  color: cfg.color,
+                  color: PERIMETRAL_STYLE.color,
                   weight: 2,
-                  fillColor: cfg.fillColor,
+                  fillColor: PERIMETRAL_STYLE.fillColor,
                   fillOpacity: 0.6,
                 })
               }
               // INVARIANTE: unico origen posible de un punto que no es
-              // MONITOREO es EUDR_INSTALACIONES — recibe el estilo
-              // distintivo de infraestructura, en su propio pane elevado.
-              return L.circleMarker(latlng, { ...INFRA_POINT_STYLE, pane: INFRA_PANE_NAME })
+              // MONITOREO es EUDR_INSTALACIONES — recibe el color de su
+              // categoria de infraestructura, en su propio pane elevado.
+              const cfg = resolveInfraStyle(record.clasificacion)
+              return L.circleMarker(latlng, {
+                radius: 8,
+                color: '#ffffff',
+                weight: 2,
+                fillColor: cfg.color,
+                fillOpacity: 0.9,
+                pane: INFRA_PANE_NAME,
+              })
             },
             // Tooltip al pasar el cursor (hover), no permanente — con muchas
             // parcelas visibles a la vez, un tooltip permanente por feature
@@ -469,7 +508,7 @@ export default function MapDashboard() {
         layer.bindPopup(popupHtml(record, null))
         layer.on('popupopen', () => loadPhoto(layer, record))
 
-        if (category === 'MONITOREO_PERIMETRAL') {
+        if (isPerimetral) {
           groups.perimetral.addLayer(layer)
         } else if (isPoint) {
           groups.infraestructura.addLayer(layer)
@@ -534,30 +573,59 @@ export default function MapDashboard() {
         <p className="text-sm text-gray-400">Sin registros aprobados en esta organización.</p>
       )}
 
-      <div className="flex flex-wrap gap-4 text-xs text-gray-500">
-        {Object.entries(CATEGORY_STYLES).map(([key, cfg]) => (
-          <span key={key} className="flex items-center gap-1.5">
+      <div className="space-y-2 text-xs text-gray-500 border-t border-gray-100 pt-2">
+        <div>
+          <p className="font-semibold text-gray-600 mb-1">Uso de Suelo</p>
+          <div className="flex flex-wrap gap-3">
+            {LAND_USE_STYLES.map((cfg) => (
+              <span key={cfg.key} className="flex items-center gap-1.5">
+                <span
+                  className="w-3 h-3 rounded-sm inline-block"
+                  style={{ backgroundColor: cfg.fillColor, border: `1px solid ${cfg.color}` }}
+                />
+                <span>
+                  {cfg.icon} {cfg.label}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="font-semibold text-gray-600 mb-1">Infraestructura</p>
+          <div className="flex flex-wrap gap-3">
+            {INFRA_STYLES.map((cfg) => (
+              <span key={cfg.key} className="flex items-center gap-1.5">
+                <span
+                  className="w-3 h-3 rounded-full inline-block"
+                  style={{ backgroundColor: cfg.color }}
+                />
+                <span>
+                  {cfg.icon} {cfg.label}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3 items-center">
+          <span className="flex items-center gap-1.5">
+            <span
+              className="w-3 h-3 rounded-sm inline-block"
+              style={{ backgroundColor: PERIMETRAL_STYLE.fillColor, border: `2px solid ${PERIMETRAL_STYLE.color}` }}
+            />
+            <span>
+              {PERIMETRAL_STYLE.icon} {PERIMETRAL_STYLE.label}
+            </span>
+          </span>
+          <span className="flex items-center gap-1.5">
             <span
               className="w-3 h-3 rounded-full inline-block"
-              style={{ backgroundColor: cfg.fillColor }}
+              style={{ backgroundColor: DEFAULT_LAND_USE_STYLE.fillColor }}
             />
-            {cfg.label}
+            {DEFAULT_LAND_USE_STYLE.label}
           </span>
-        ))}
-        <span className="flex items-center gap-1.5">
-          <span
-            className="w-3 h-3 rounded-full inline-block"
-            style={{ backgroundColor: INFRA_POINT_STYLE.fillColor }}
-          />
-          Infraestructura
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span
-            className="w-3 h-3 rounded-full inline-block"
-            style={{ backgroundColor: DEFAULT_STYLE.fillColor }}
-          />
-          {DEFAULT_STYLE.label}
-        </span>
+        </div>
       </div>
     </div>
   )
