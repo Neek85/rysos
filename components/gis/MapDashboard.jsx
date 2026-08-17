@@ -35,15 +35,24 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
 }
 
+// INVARIANTE: vw_monitoreo_web solo expone "ID_Parcela_Fija" (ver
+// supabase/migrations/20260816_fase2_vistas_qc.sql); `id_parcela` no existe
+// en esa vista hoy, pero la cadena de fallback queda defensiva por si el
+// shape de la vista cambia a futuro, sin depender de que exista ninguna de
+// las dos columnas.
+function resolveParcelaCodigo(record, fallback = 'S/C') {
+  return record?.id_parcela || record?.['ID_Parcela_Fija'] || fallback
+}
+
+function tooltipHtml(record) {
+  const parcela = escapeHtml(resolveParcelaCodigo(record, 'Parcela'))
+  const detalle = record?.productor || record?.clasificacion || ''
+  return `<strong>${parcela}</strong>${detalle ? `<br/>${escapeHtml(detalle)}` : ''}`
+}
+
 function popupHtml(record, photoUrl) {
   const productor = record.productor ? escapeHtml(record.productor) : 'Sin registrar'
-  // INVARIANTE: vw_monitoreo_web solo expone "ID_Parcela_Fija" (ver
-  // supabase/migrations/20260816_fase2_vistas_qc.sql); `id_parcela` no existe
-  // en esa vista hoy, pero la cadena de fallback queda defensiva por si el
-  // shape de la vista cambia a futuro, sin depender de que exista ninguna de
-  // las dos columnas.
-  const codigoParcela = record.id_parcela || record['ID_Parcela_Fija'] || 'S/C'
-  const parcela = escapeHtml(codigoParcela)
+  const parcela = escapeHtml(resolveParcelaCodigo(record))
   const estado = record.estado_revision ? escapeHtml(record.estado_revision) : '—'
 
   let fotoHtml = '<span style="color:#94a3b8;">Sin foto</span>'
@@ -149,9 +158,34 @@ export default function MapDashboard() {
         const map = L.map(containerRef.current).setView([-6.5, -77.5], 8)
         mapRef.current = map
 
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        // INVARIANTE: Google Satelite Hibrido es la capa base por defecto (se
+        // agrega directamente al mapa); las demas quedan definidas pero sin
+        // addTo(map) — L.control.layers las agrega/quita segun cual elija el
+        // usuario (comportamiento tipo radio-button para capas base).
+        const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-        }).addTo(map)
+        })
+        const googleHybrid = L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+          attribution: '© Google',
+          maxZoom: 20,
+        })
+        const esriImagery = L.tileLayer(
+          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          {
+            attribution:
+              'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+            maxZoom: 19,
+          }
+        )
+
+        googleHybrid.addTo(map)
+
+        const baseMaps = {
+          'Google Satélite Híbrido': googleHybrid,
+          'Esri World Imagery': esriImagery,
+          OpenStreetMap: osm,
+        }
+        L.control.layers(baseMaps).addTo(map)
 
         renderLayers(L, map, records)
       } catch (err) {
@@ -209,6 +243,13 @@ export default function MapDashboard() {
             style: () => categoryStyle(record),
             pointToLayer: (_feature, latlng) =>
               L.circleMarker(latlng, { radius: 7, ...categoryStyle(record) }),
+            // Tooltip al pasar el cursor (hover), no permanente — con muchas
+            // parcelas visibles a la vez, un tooltip permanente por feature
+            // satura el mapa. `feature` aca es el GeoJSON Feature completo;
+            // los datos reales del registro viven en `feature.properties`.
+            onEachFeature: (feature, featureLayer) => {
+              featureLayer.bindTooltip(tooltipHtml(feature.properties), { sticky: true })
+            },
           }
         )
 
