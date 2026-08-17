@@ -149,6 +149,12 @@ GRANT SELECT ON public.vw_monitoreo_puntos TO authenticated;
 -- id_monitoreo/id_origen/geom_inspeccion (esas columnas son para compatibilidad
 -- QGIS en las vistas de auditoria, no para el consumo del Dashboard Web).
 -- ============================================================
+-- INVARIANTE GeoJSON: a diferencia de vw_monitoreo_poligonos/vw_monitoreo_puntos
+-- (que exponen `geometry` tipado para QGIS), esta vista es exclusiva del
+-- Dashboard Web — PostgREST serializa una columna `geometry` cruda como texto
+-- hexadecimal EWKB, no GeoJSON, por lo que un cliente JS no puede parsearla
+-- directamente. `geom_geojson` expone el mismo valor ya convertido via
+-- ST_AsGeoJSON(...)::json, listo para usarse directo como Feature.geometry.
 CREATE VIEW public.vw_monitoreo_web AS
 SELECT
     'poligono'      AS tipo_geometria,
@@ -162,7 +168,8 @@ SELECT
     estado_revision,
     fecha_monitoreo,
     observaciones,
-    geom
+    geom,
+    ST_AsGeoJSON(geom)::json AS geom_geojson
 FROM public.vw_monitoreo_poligonos
 WHERE estado_revision = 'APROBADO'
 
@@ -180,7 +187,8 @@ SELECT
     estado_revision,
     fecha_monitoreo,
     observaciones,
-    geom
+    geom,
+    ST_AsGeoJSON(geom)::json AS geom_geojson
 FROM public.vw_monitoreo_puntos
 WHERE estado_revision = 'APROBADO';
 

@@ -1,0 +1,29 @@
+'use client'
+
+export const dynamic = 'force-dynamic'
+
+import nextDynamic from 'next/dynamic'
+
+const MapDashboard = nextDynamic(() => import('@/components/gis/MapDashboard'), { ssr: false })
+
+export default function MapaPage() {
+  return (
+    <main className="min-h-screen bg-slate-50">
+      <header className="bg-green-800 text-white px-6 py-4 shadow-md">
+        <h1 className="text-xl font-bold tracking-wide">RYZOS — Mapa WebGIS</h1>
+        <p className="text-green-200 text-sm mt-0.5">
+          Parcelas y monitoreos aprobados · vw_monitoreo_web
+        </p>
+      </header>
+
+      <div className="max-w-7xl mx-auto p-6">
+        <section className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+          <h2 className="text-base font-semibold text-gray-700 mb-3">
+            Visor WebGIS — Registros Aprobados
+          </h2>
+          <MapDashboard />
+        </section>
+      </div>
+    </main>
+  )
+}
