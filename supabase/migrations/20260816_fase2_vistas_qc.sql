@@ -71,6 +71,7 @@ SELECT
     m.estado_revision,
     m.fecha_monitoreo,
     m.observaciones,
+    m.cumple_eudr,
     ST_Multi(ST_CollectionExtract(ST_Transform(m.geom_inspeccion, 4326), 3))
         ::geometry(MultiPolygon, 4326) AS geom,
     ST_Multi(ST_CollectionExtract(ST_Transform(m.geom_inspeccion, 4326), 3))
@@ -94,6 +95,7 @@ SELECT
     u.estado_revision,
     NULL::date                AS fecha_monitoreo,
     NULL::text                AS observaciones,
+    NULL::text                AS cumple_eudr,
     ST_Multi(ST_CollectionExtract(ST_Transform(u.geom, 4326), 3))
         ::geometry(MultiPolygon, 4326) AS geom,
     ST_Multi(ST_CollectionExtract(ST_Transform(u.geom, 4326), 3))
@@ -119,6 +121,7 @@ SELECT
     m.estado_revision,
     m.fecha_monitoreo,
     m.observaciones,
+    m.cumple_eudr,
     ST_Transform(m.geom_inspeccion, 4326)::geometry(Point, 4326) AS geom,
     ST_Transform(m.geom_inspeccion, 4326)::geometry(Point, 4326) AS geom_inspeccion
 FROM public."EUDR_MONITOREO" m
@@ -139,6 +142,7 @@ SELECT
     i.estado_revision,
     NULL::date                AS fecha_monitoreo,
     NULL::text                AS observaciones,
+    NULL::text                AS cumple_eudr,
     ST_Transform(i.geom, 4326)::geometry(Point, 4326) AS geom,
     ST_Transform(i.geom, 4326)::geometry(Point, 4326) AS geom_inspeccion
 FROM public."EUDR_INSTALACIONES" i
@@ -175,6 +179,7 @@ SELECT
     estado_revision,
     fecha_monitoreo,
     observaciones,
+    cumple_eudr,
     geom,
     ST_AsGeoJSON(geom)::json AS geom_geojson
 FROM public.vw_monitoreo_poligonos
@@ -194,6 +199,7 @@ SELECT
     estado_revision,
     fecha_monitoreo,
     observaciones,
+    cumple_eudr,
     geom,
     ST_AsGeoJSON(geom)::json AS geom_geojson
 FROM public.vw_monitoreo_puntos
