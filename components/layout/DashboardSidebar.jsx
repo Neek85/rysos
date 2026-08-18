@@ -4,11 +4,12 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 // INVARIANTE: la mayoría de los items son el andamiaje de navegación
-// modular pedido (Padrón, Acopio, "Contratos y Ventas" de
-// Comercialización) — enlazar a rutas inexistentes produciría 404s, así
-// que quedan sin `href` y se renderizan deshabilitados ("Próximamente")
-// hasta que existan las páginas correspondientes. "Lotes y Trazabilidad"
-// (Tarea 14) sí es una ruta real: app/dashboard/lotes/page.jsx.
+// modular pedido (Padrón → "Productores y Parcelas", Acopio, "Contratos
+// y Ventas" de Comercialización) — enlazar a rutas inexistentes
+// produciría 404s, así que quedan sin `href` y se renderizan
+// deshabilitados ("Próximamente") hasta que existan las páginas
+// correspondientes. "Lotes y Trazabilidad" (Tarea 14) e "Inspecciones"
+// (Fase 6) sí son rutas reales.
 const NAV_GROUPS = [
   {
     label: 'GIS & EUDR',
@@ -19,7 +20,10 @@ const NAV_GROUPS = [
   },
   {
     label: 'Padrón',
-    items: [{ label: 'Productores y Parcelas', href: null, icon: '👥' }],
+    items: [
+      { label: 'Inspecciones', href: '/dashboard/inspecciones', icon: '📋' },
+      { label: 'Productores y Parcelas', href: null, icon: '👥' },
+    ],
   },
   {
     label: 'Acopio',
@@ -78,7 +82,10 @@ export default function DashboardSidebar() {
             <ul className="space-y-0.5">
               {group.items.map((item) => (
                 <li key={item.label}>
-                  <NavItem item={item} isActive={item.href === pathname} />
+                  <NavItem
+                    item={item}
+                    isActive={Boolean(item.href) && (pathname === item.href || pathname.startsWith(`${item.href}/`))}
+                  />
                 </li>
               ))}
             </ul>
