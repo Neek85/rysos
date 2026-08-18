@@ -114,5 +114,5 @@ export function useInspeccionForm(id) {
     }
   }
 
-  return { form, isEdit, isLoading, loadError, saving, toast, onSubmit }
+  return { form, isEdit, isLoading, loadError, saving, toast, onSubmit, organizationId }
 }

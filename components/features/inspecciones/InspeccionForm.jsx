@@ -30,11 +30,12 @@ const TABS = [
 // estructura de rutas específica.
 export default function InspeccionForm({ id }) {
   const [activeTab, setActiveTab] = useState('general')
-  const { form, isEdit, isLoading, loadError, saving, toast, onSubmit } = useInspeccionForm(id)
+  const { form, isEdit, isLoading, loadError, saving, toast, onSubmit, organizationId } = useInspeccionForm(id)
   const {
     register,
     handleSubmit,
     control,
+    setValue,
     formState: { errors, isDirty },
   } = form
 
@@ -53,7 +54,7 @@ export default function InspeccionForm({ id }) {
     )
   }
 
-  const tabProps = { register, errors, saving, isDirty, isEdit, control }
+  const tabProps = { register, errors, saving, isDirty, isEdit, control, setValue, organizationId }
 
   return (
     <div className="max-w-6xl space-y-5 p-6">
