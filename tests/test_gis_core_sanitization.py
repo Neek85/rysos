@@ -115,39 +115,100 @@ class TestMigrationFileStatic(unittest.TestCase):
             self.assertIn("requiere_revision_area", block)
 
 
-class TestViewIntegrationGap(unittest.TestCase):
-    """Fija el hallazgo de ADR-001: vw_monitoreo_* aún no exponen las columnas
-    nuevas de sanitización. Si este test empieza a fallar porque las columnas
-    SÍ aparecen, es una señal buena — significa que alguien cerró el gap con
-    una migración de vistas nueva; en ese caso, actualizar ADR-001 y
-    docs/schema_live.md para reflejarlo, no solo borrar este test.
+class TestViewIntegrationFlags(unittest.TestCase):
+    """Cierra el hallazgo de ADR-001 (gap cerrado por
+    supabase/migrations/20260818_fix_views_eudr_flags.sql, ver addendum en el
+    ADR): vw_monitoreo_poligonos/puntos/web ahora exponen
+    area_calculada_ha/requiere_revision_area en cada rama del UNION ALL.
+
+    Las migraciones históricas (20260816_fase2_vistas_qc.sql,
+    20260817_refine_vw_monitoreo_web.sql) legítimamente NO tienen estas
+    columnas — son anteriores a la sanitización — y no se reescriben; la
+    versión vigente de las 3 vistas es la de 20260818_fix_views_eudr_flags.sql
+    (DROP + CREATE completo), que es lo que este test verifica.
     """
 
-    VIEWS_MIGRATIONS = (
+    FIX_MIGRATION = (
         Path(__file__).resolve().parent.parent
         / "supabase"
         / "migrations"
-        / "20260816_fase2_vistas_qc.sql",
-        Path(__file__).resolve().parent.parent
-        / "supabase"
-        / "migrations"
-        / "20260817_refine_vw_monitoreo_web.sql",
+        / "20260818_fix_views_eudr_flags.sql"
     )
 
-    def test_new_area_columns_not_yet_exposed_in_views(self):
-        for path in self.VIEWS_MIGRATIONS:
-            self.assertTrue(path.exists(), f"No existe {path}")
-            sql = path.read_text(encoding="utf-8")
-            self.assertNotIn(
-                "area_calculada_ha",
-                sql,
-                f"{path.name} ya expone area_calculada_ha — actualizar ADR-001",
+    VIEW_NAMES = (
+        "vw_monitoreo_poligonos",
+        "vw_monitoreo_puntos",
+        "vw_monitoreo_web",
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        if not cls.FIX_MIGRATION.exists():
+            raise AssertionError(f"No existe {cls.FIX_MIGRATION}")
+        cls.sql = cls.FIX_MIGRATION.read_text(encoding="utf-8")
+
+    def test_fix_migration_exists_and_is_idempotent(self):
+        self.assertRegex(self.sql, r"\bBEGIN;")
+        self.assertRegex(self.sql, r"\bCOMMIT;")
+        self.assertIn("DROP VIEW IF EXISTS public.vw_monitoreo_web CASCADE", self.sql)
+        self.assertIn("DROP VIEW IF EXISTS public.vw_monitoreo_poligonos", self.sql)
+        self.assertIn("DROP VIEW IF EXISTS public.vw_monitoreo_puntos", self.sql)
+
+    def test_all_three_views_recreated(self):
+        for view in self.VIEW_NAMES:
+            self.assertIn(f"CREATE VIEW public.{view}", self.sql)
+            self.assertIn(f"GRANT SELECT ON public.{view} TO authenticated", self.sql)
+
+    def test_area_flags_present_in_each_view_block(self):
+        """AC1/AC2 de specs/fix_views_eudr_flags.md: cada uno de los 3
+        CREATE VIEW contiene ambas columnas en las 2 ramas de su UNION ALL
+        (se cuenta >= 2 ocurrencias por vista, una por rama)."""
+        blocks = re.split(r"CREATE VIEW public\.", self.sql)[1:]
+        self.assertEqual(len(blocks), 3, "Se esperaban 3 bloques CREATE VIEW")
+        for block in blocks:
+            view_name = block.split()[0].strip()
+            self.assertGreaterEqual(
+                block.count("area_calculada_ha"),
+                2,
+                f"{view_name}: area_calculada_ha debe aparecer en ambas ramas del UNION ALL",
             )
-            self.assertNotIn(
-                "requiere_revision_area",
-                sql,
-                f"{path.name} ya expone requiere_revision_area — actualizar ADR-001",
+            self.assertGreaterEqual(
+                block.count("requiere_revision_area"),
+                2,
+                f"{view_name}: requiere_revision_area debe aparecer en ambas ramas del UNION ALL",
             )
+
+    def test_no_existing_columns_removed(self):
+        """AC3: ninguna columna preexistente de vw_monitoreo_web se pierde
+        respecto a 20260817_refine_vw_monitoreo_web.sql."""
+        previous_path = (
+            Path(__file__).resolve().parent.parent
+            / "supabase"
+            / "migrations"
+            / "20260817_refine_vw_monitoreo_web.sql"
+        )
+        previous_sql = previous_path.read_text(encoding="utf-8")
+        preexisting_columns = [
+            "tipo_geometria",
+            "tabla_origen",
+            "registro_id",
+            "ID_Organizacion",
+            "ID_Parcela_Fija",
+            "parcela_codigo",
+            "parcela_nombre",
+            "area_ha",
+            "productor",
+            "clasificacion",
+            "evidencia_foto",
+            "estado_revision",
+            "fecha_monitoreo",
+            "observaciones",
+            "cumple_eudr",
+            "geom_geojson",
+        ]
+        for column in preexisting_columns:
+            self.assertIn(column, previous_sql, f"Verificación inconsistente: {column} no está ni en la migración previa")
+            self.assertIn(column, self.sql, f"Columna preexistente {column} se perdió en la nueva migración de vistas")
 
 
 @NEEDS_SUPABASE

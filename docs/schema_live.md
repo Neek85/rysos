@@ -107,15 +107,13 @@ visita de monitoreo más reciente sobre la misma parcela). Expone
 `geom_geojson` (`ST_AsGeoJSON(geom)::json`) porque PostgREST serializa
 `geometry` cruda como WKB hex, no como GeoJSON.
 
-> **Gap de integración conocido (auditado 2026-08-18, ver ADR-001):**
-> `vw_monitoreo_poligonos`, `vw_monitoreo_puntos` y `vw_monitoreo_web`
-> seleccionan columnas explícitas y **ninguna expone `area_calculada_ha` ni
-> `requiere_revision_area`** (agregadas por `20260818_gis_core_sanitization.sql`).
-> El Dashboard Web y QGIS Desktop no pueden ver el flag de revisión de área
-> hoy — solo es consultable directo contra las tablas base. La geometría en
-> sí *sí* está bien integrada (el trigger sanitiza en escritura, la vista lee
-> el dato ya limpio). Exponer las dos columnas nuevas en las vistas requiere
-> una migración de vistas nueva, no incluida en esta tarea.
+> **Gap de integración cerrado (2026-08-18):** `vw_monitoreo_poligonos`,
+> `vw_monitoreo_puntos` y `vw_monitoreo_web` ahora exponen `area_calculada_ha`
+> y `requiere_revision_area` en cada rama de su `UNION ALL` — ver
+> `supabase/migrations/20260818_fix_views_eudr_flags.sql` y el addendum en
+> `docs/adr/ADR-001-gis-sanitization-and-eudr-triggers.md`. El gap original
+> (detectado el mismo día, columnas del trigger de sanitización invisibles
+> para las vistas) queda documentado ahí como referencia histórica.
 
 ### `public.view_eudr_dashboard_aprobados`
 Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
@@ -173,9 +171,14 @@ a `authenticated` + coincidencia de `(storage.foldername(name))[1]` con
 4. `20260816_fase3_seguridad_rls.sql` — RLS consolidado (`auth_org_id()`).
 5. `20260817_refine_vw_monitoreo_web.sql` — `parcela_codigo` + productor lateral join.
 6. `20260818_fix_inspecciones_rls.sql` — políticas `anon` para Inspecciones/CAP_*.
-7. `20260818_gis_core_sanitization.sql` — **este documento** — sanitización de
-   geometría, cálculo de área, índices GiST.
+7. `20260818_gis_core_sanitization.sql` — sanitización de geometría, cálculo
+   de área, índices GiST.
+8. `20260818_fix_views_eudr_flags.sql` — **este documento** — expone
+   `area_calculada_ha`/`requiere_revision_area` en `vw_monitoreo_poligonos/
+   puntos/web` (cierra el gap detectado tras la migración anterior).
 
 Ninguna de estas migraciones se ha confirmado aplicada contra la instancia
 `jhtocgxlozfuzullrtol` desde este entorno de desarrollo — requieren ejecución
-manual en Supabase Studio.
+manual en Supabase Studio. **Nota de orden de aplicación:** `20260818_gis_core_sanitization.sql`
+debe aplicarse antes que `20260818_fix_views_eudr_flags.sql` (esta última
+selecciona columnas que la primera crea).

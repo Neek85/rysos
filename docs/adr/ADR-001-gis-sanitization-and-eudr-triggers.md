@@ -90,6 +90,25 @@ sanitización:
   este entorno no tiene credenciales ni conexión Postgres directa. Requiere
   ejecución manual en el SQL Editor de Supabase Studio.
 
+## Addendum (2026-08-18) — Gap de integración cerrado
+
+El gap descrito arriba ("Validación de integración con `vw_monitoreo_web`")
+se cerró el mismo día con
+`supabase/migrations/20260818_fix_views_eudr_flags.sql` (spec
+`specs/fix_views_eudr_flags.md`): las 3 vistas (`vw_monitoreo_poligonos`,
+`vw_monitoreo_puntos`, `vw_monitoreo_web`) fueron recreadas (`DROP ...
+CASCADE` + `CREATE VIEW`, mismo patrón que las migraciones de vistas
+anteriores) agregando `area_calculada_ha` y `requiere_revision_area` a cada
+rama de sus `UNION ALL`, sin tocar ningún join, filtro, cast de geometría ni
+columna preexistente. `tests/test_gis_core_sanitization.py::TestViewIntegrationFlags`
+reemplaza al `TestViewIntegrationGap` original y certifica que las 3 vistas
+exponen ambas columnas en sus 2 ramas cada una, y que ninguna columna previa
+de `vw_monitoreo_web` se perdió.
+
+Esta sección se agrega como addendum, no reemplaza la decisión original de
+arriba — el ADR documenta la decisión de sanitización tal como se tomó; el
+seguimiento de su implementación vive aquí.
+
 ## Alternativas consideradas
 
 - **Rechazar geometrías < 4 ha con `RAISE EXCEPTION`:** descartada — ver
