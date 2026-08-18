@@ -17,6 +17,10 @@
 > Actualizado: 2026-08-18, tras auditoría del Portal Público de
 > Trazabilidad (`specs/trace_public_audit.md`) — sin cambios de schema, ver
 > nota en la sección de `vw_monitoreo_web` abajo.
+> Actualizado: 2026-08-18, tras auditoría del Exportador TRACES UE / Dossier
+> Comercial (`specs/traces_eudr_dossier_audit.md`) — sin cambios de schema,
+> ver nota al final de la sección de `vw_monitoreo_web` sobre el estado real
+> de `/dashboard/lotes` vs `/dashboard/mapa` y el Dossier PDF.
 
 ## Tablas base (pre-existentes, no creadas por migraciones de este repo)
 
@@ -133,6 +137,24 @@ se serializa en la respuesta HTML. Sin gaps encontrados en esta auditoría.
 > reutiliza el script Python contra este schema, debe alinear ambos primero
 > o los hashes Python/JS del mismo lote no coincidirán. Ver
 > `specs/trace_public_audit.md` para el detalle completo.
+
+> **Exportador TRACES UE — dónde vive realmente cada pieza (auditado
+> 2026-08-18, `specs/traces_eudr_dossier_audit.md`):** el botón real de
+> descarga DDS (`exportTracesDDS`, JSON + GeoJSON con coordenadas a 6
+> decimales y regla de polígono obligatorio ≥ 4 ha, `lib/eudrDdsExporter.js`)
+> vive en `/dashboard/mapa` (`components/gis/MapDashboard.jsx::handleExportDDS`),
+> **no** en `/dashboard/lotes` — esa ruta es solo una vista de simulación
+> del QR de trazabilidad pública (dice explícitamente "no persiste nada" en
+> su propio código). Ambos consumen `vw_monitoreo_web`, que ya filtra
+> `estado_revision = 'APROBADO'`. **Dossier Comercial PDF (`scripts/generate_dossier_pdf.py`)
+> no tiene ningún punto de entrada desde la aplicación web** — es una clase
+> Python pura, probada, sin `if __name__ == "__main__"`, y esta app Next.js
+> no tiene ningún Route Handler (`find app -iname "route.js"` → vacío) que
+> pudiera invocarla. Generar un Dossier PDF hoy solo es posible ejecutando
+> Python manualmente. Cerrar esto requiere una decisión de arquitectura
+> (portar a JS, exponer un Route Handler que llame a Python, o un servicio
+> HTTP aparte) — ver la spec para las opciones evaluadas, ninguna
+> implementada todavía.
 
 Filtra estrictamente
 `estado_revision = 'APROBADO'`. `LEFT JOIN` a `PADRON_PARCELAS` (
