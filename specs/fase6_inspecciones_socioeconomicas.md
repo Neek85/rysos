@@ -1,5 +1,42 @@
 # SPEC: Módulo de Inspección Socioeconómica Interna (Fase 6)
 
+## ✅ Confirmación E2E post-migración (verificado en vivo)
+Tras aplicar `supabase/migrations/20260818_fix_inspecciones_rls.sql` en
+la instancia viva, se repitió la prueba end-to-end completa:
+
+- **Autocompletado:** `Buscar Socio` (query "an") encontró y permitió
+  vincular a un socio real (`ID_Socio = JS-00002`), pre-llenando
+  `socio_nombre_completo`/`socio_dni` en la pestaña "Datos del Socio".
+  `Buscar Parcela` (query "man", ya scopeada a ese socio) encontró y
+  vinculó `ID_Parcela = COOP-JS-004` ("El Mango", 4 ha). Ambos contra
+  `PADRON_SOCIOS`/`PADRON_PARCELAS` reales — antes de la migración estas
+  tablas devolvían `content-range: */0` para `anon`; después, `4` y `8`
+  filas respectivamente.
+- **Creación E2E:** formulario real con `Inspector = "TEST_RYSOS_E2E"`
+  guardado desde `/dashboard/inspecciones/nueva`. Confirmado por REST
+  contra la tabla real (no solo por la UI): `INSPECCIONES` recibió la
+  fila (`ID_Inspeccion = 6f4d332f-229d-430b-b93b-71462202e855`,
+  `ID_Organizacion = "COOP-JS"`) y las 6 tablas `CAP_*` recibieron
+  exactamente 1 fila cada una — cero errores `42501`, la migración
+  resolvió el bloqueo confirmado en la sesión anterior.
+- **Listado:** la inspección aparece en `/dashboard/inspecciones` con su
+  ID, Inspector y estado correctos.
+- **⚠️ Discrepancia con lo pedido, no oculta:** el estado inicial
+  observado es `"En Proceso"`, no `"PENDIENTE"`. El enum real de `Estado`
+  en este módulo (portado fielmente de `backend-inspecciones`, ver
+  `components/features/inspecciones/tabs/TabGeneral.jsx`) es `En
+  Proceso`/`Cerrada`/`Aprobada`/`Rechazada` — `"PENDIENTE"` es el
+  vocabulario del flujo *distinto* EUDR_MONITOREO/Consola QC de este
+  mismo repo (`estado_revision`), no de `INSPECCIONES`. No se alteró el
+  enum para forzar que coincida con lo pedido; se documenta la
+  discrepancia en vez de ocultarla.
+- **No verificado en esta ronda:** `UPDATE` sobre una inspección
+  existente (se siguió evitando escribir sobre el registro real de
+  Victor Abel Linares Bustamante). El patrón de código es idéntico al de
+  creación (mismo `saveInspeccion`), y la política RLS `rls_anon_all_*`
+  es `FOR ALL` (cubre `UPDATE` igual que `INSERT`), pero no hay una
+  prueba en vivo específica de edición todavía.
+
 ## ⚠️ Hallazgo crítico verificado en vivo (post-implementación)
 **`INSERT` anónimo sobre `INSPECCIONES` está bloqueado por RLS** —
 confirmado en vivo: `{"code":"42501","message":"new row violates
@@ -117,16 +154,20 @@ desactualizado — mismo patrón de precaución ya aplicado en Fase 3/QC):
 - [x] `/dashboard/inspecciones/[id]/editar` carga las 7 tablas en
       paralelo y muestra las 8 pestañas — verificado en vivo con una
       inspección real existente.
-- [ ] `/dashboard/inspecciones/nueva` crea una fila en `INSPECCIONES` +
-      las 6 tablas `CAP_*` en un solo submit — **código completo, pero
-      bloqueado en vivo por falta de política RLS de `INSERT` para
-      `anon`** (ver hallazgo crítico arriba). No marcable como cumplido
-      hasta que exista esa política.
+- [x] `/dashboard/inspecciones/nueva` crea una fila en `INSPECCIONES` +
+      las 6 tablas `CAP_*` en un solo submit — **verificado en vivo tras
+      aplicar `20260818_fix_inspecciones_rls.sql`**: fila real creada
+      (`ID_Inspeccion = 6f4d332f-229d-430b-b93b-71462202e855`), confirmada
+      por REST, cero errores 42501. Ver "Confirmación E2E" arriba.
+- [x] Autocompletado de socio/parcela contra `PADRON_SOCIOS`/
+      `PADRON_PARCELAS` — verificado en vivo con datos reales
+      (`JS-00002` / `COOP-JS-004`), incluyendo el pre-llenado de
+      `socio_nombre_completo`/`socio_dni` al seleccionar un socio.
 - [ ] Guardar cambios sobre una inspección existente (UPDATE) —
-      **no verificado en vivo** (se evitó deliberadamente escribir sobre
-      un registro real de un socio real); el código replica el patrón ya
-      usado por `backend-inspecciones`, pero queda pendiente de una
-      prueba real una vez exista una política RLS de `UPDATE`.
+      **aún no verificado en vivo** (se sigue evitando escribir sobre el
+      registro real de un socio real); el código y la política RLS
+      (`FOR ALL`, cubre UPDATE) son los mismos que ya se probaron para
+      creación, pero falta una prueba específica de edición.
 - [x] Ningún `console.log`/`console.group` en todo el módulo expone
       `socio_dni`, `socio_nombre_completo`, `conyuge_dni`,
       `conyuge_nombre`, ni ningún campo de `FAMILIA` — verificado por
