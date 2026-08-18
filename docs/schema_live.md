@@ -117,9 +117,21 @@ visita de monitoreo más reciente sobre la misma parcela). Expone
 
 ### `public.view_eudr_dashboard_aprobados`
 Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
-`hectareas_totales`/`socio_nombre_completo`/`socio_dni` vía joins directos a
-`PADRON_PARCELAS`/`PADRON_SOCIOS`) — sigue viva y en uso por `app/page.jsx`,
-línea de trabajo distinta de `vw_monitoreo_web`. No confundir una con otra.
+`hectareas_totales` vía joins directos a `PADRON_PARCELAS`/`PADRON_SOCIOS`)
+— sigue viva y en uso por `app/page.jsx`, línea de trabajo distinta de
+`vw_monitoreo_web`. No confundir una con otra.
+
+> **Fix de seguridad (2026-08-18, `20260818_rls_multi_tenant_fortification.sql`):**
+> esta vista exponía `socio_nombre_completo`/`socio_dni` (PII) **sin ningún
+> filtro por `ID_Organizacion`** — cualquier sesión que pudiera consultarla
+> veía nombre y DNI de productores de todas las organizaciones cliente, no
+> solo la propia (la vista corre con privilegio de su dueño `postgres`,
+> igual que el resto de vistas del proyecto). Corregido: se removieron las
+> dos columnas PII (`app/page.jsx`, el único consumidor real, no las usaba)
+> y se agregó `WHERE ... AND "ID_Organizacion" = public.auth_org_id()`.
+> `localidad`/`certificaciones` se conservaron (no forman parte del set de
+> PII ya establecido por Tarea 14 — `socio_dni`, `socio_nombre_completo`,
+> `socio_nombre`, `conyuge_dni`).
 
 ## Funciones
 
@@ -156,6 +168,31 @@ Inspecciones (`INSPECCIONES` + `CAP_*`) sí escribe directo con la anon key, y
 por eso tiene políticas `anon`-abiertas explícitas (`fix_inspecciones_rls`,
 2026-08-18) — ver ese archivo para el razonamiento de seguridad completo.
 
+### Auditoría RLS Multi-Tenant (2026-08-18, `20260818_rls_multi_tenant_fortification.sql`)
+
+Se re-certificaron de forma idempotente (mismas políticas, sin cambio de
+comportamiento) las políticas Zero-Trust ya existentes de Tarea 9.1 sobre
+`ORGANIZACIONES`/`EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES`,
+usando `public.auth_org_id()` (no se creó ninguna función helper nueva). Se
+formaliza aquí, explícitamente, qué tablas quedan **fuera** del modelo
+Zero-Trust y por qué — **riesgo aceptado por diseño, no un descuido**:
+
+| Tabla | Motivo |
+|---|---|
+| `INSPECCIONES` | Frontend escribe con anon key sin sesión real; política exige solo `ID_Organizacion IS NOT NULL`, no coincidencia contra JWT (no hay JWT real que comparar). |
+| `CAP_DATOS_SOCIO`, `CAP_MIC`, `CAP_CONSERVACION`, `CAP_BIENESTAR`, `CAP_RIESGOS`, `CAP_GESTION` | No tienen columna `ID_Organizacion` propia (dependen de `ID_Inspeccion → INSPECCIONES`); política `USING (true)` para `anon`+`authenticated`. |
+| `PADRON_SOCIOS` / `PADRON_PARCELAS` (solo la política `anon` de lectura) | Habilitada para autocompletado del formulario de Inspecciones; la escritura sigue exclusiva de `authenticated` + `auth_org_id()` desde Tarea 9.1, sin cambios. |
+
+Cerrar este riesgo requiere implementar Supabase Auth real (sesión con JWT
+que lleve el claim `ID_Organizacion`) — no está en el alcance de ninguna
+tarea hasta ahora.
+
+**Hallazgo y fix no solicitado, encontrado durante esta auditoría:**
+`view_eudr_dashboard_aprobados` exponía PII (`socio_dni`,
+`socio_nombre_completo`) de **todas** las organizaciones, sin ningún filtro
+de tenant — ver la sección de esa vista arriba para el detalle completo del
+fix.
+
 ## Storage
 
 Bucket `evidencias_eudr` (privado). Ruta: `{ID_Organizacion}/{filename}`.
@@ -173,9 +210,12 @@ a `authenticated` + coincidencia de `(storage.foldername(name))[1]` con
 6. `20260818_fix_inspecciones_rls.sql` — políticas `anon` para Inspecciones/CAP_*.
 7. `20260818_gis_core_sanitization.sql` — sanitización de geometría, cálculo
    de área, índices GiST.
-8. `20260818_fix_views_eudr_flags.sql` — **este documento** — expone
-   `area_calculada_ha`/`requiere_revision_area` en `vw_monitoreo_poligonos/
-   puntos/web` (cierra el gap detectado tras la migración anterior).
+8. `20260818_fix_views_eudr_flags.sql` — expone `area_calculada_ha`/
+   `requiere_revision_area` en `vw_monitoreo_poligonos/puntos/web` (cierra
+   el gap detectado tras la migración anterior).
+9. `20260818_rls_multi_tenant_fortification.sql` — **este documento** —
+   re-certificación idempotente de RLS Zero-Trust en `ORGANIZACIONES`/
+   `EUDR_*` + fix de PII/tenant en `view_eudr_dashboard_aprobados`.
 
 Ninguna de estas migraciones se ha confirmado aplicada contra la instancia
 `jhtocgxlozfuzullrtol` desde este entorno de desarrollo — requieren ejecución
