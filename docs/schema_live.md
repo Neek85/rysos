@@ -85,6 +85,13 @@ adicionales no documentadas aquí.
   completo (el frontend usa `anon` key sin sesión real, no hay Supabase Auth
   implementado en el proyecto).
 
+> **Guardado atómico (2026-08-18, `20260818_inspecciones_atomic_save.sql`):**
+> `lib/inspeccionesActions.js::saveInspeccion()` ya no hace 7 INSERT/UPDATE
+> independientes vía REST — llama a `public.fn_guardar_inspeccion_completa`
+> (ver sección Funciones), que envuelve `INSPECCIONES` + las 6 `CAP_*` en
+> una sola transacción. Antes, una falla a mitad de camino podía dejar
+> registros huérfanos (fila en `INSPECCIONES` sin todas sus tablas hijas).
+
 ## Vistas
 
 ### `public.vw_monitoreo_poligonos` / `public.vw_monitoreo_puntos`
@@ -143,6 +150,7 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
 | `public.fn_sanitize_geometry(geometry)` | `geometry` | **Nuevo (2026-08-18).** SRID 4326 + `ST_MakeValid` + `ST_SnapToGrid` a 6 decimales. |
 | `public.fn_calcular_area_ha(geometry)` | `numeric` | **Nuevo (2026-08-18).** Área geodésica en hectáreas; `NULL` para geometrías no poligonales. |
 | `public.trg_sanitize_geom_monitoreo/uso_suelo/instalaciones()` | `trigger` | **Nuevo (2026-08-18).** Aplican las dos funciones de arriba a la columna de geometría de su tabla y setean `area_calculada_ha`/`requiere_revision_area`. |
+| `public.fn_guardar_inspeccion_completa(...)` | `jsonb` (`{id, created}`) | **Nuevo (2026-08-18).** Guardado atómico de `INSPECCIONES` + 6 `CAP_*` en una sola transacción — reemplaza 7 llamadas REST independientes que antes no eran atómicas. Sin `SECURITY DEFINER` (corre con el rol del llamador). Llamada desde `lib/inspeccionesActions.js::saveInspeccion()` vía `supabase.rpc(...)`. |
 
 ## Índices espaciales
 
@@ -213,12 +221,18 @@ a `authenticated` + coincidencia de `(storage.foldername(name))[1]` con
 8. `20260818_fix_views_eudr_flags.sql` — expone `area_calculada_ha`/
    `requiere_revision_area` en `vw_monitoreo_poligonos/puntos/web` (cierra
    el gap detectado tras la migración anterior).
-9. `20260818_rls_multi_tenant_fortification.sql` — **este documento** —
+9. `20260818_rls_multi_tenant_fortification.sql` —
    re-certificación idempotente de RLS Zero-Trust en `ORGANIZACIONES`/
    `EUDR_*` + fix de PII/tenant en `view_eudr_dashboard_aprobados`.
+10. `20260818_inspecciones_atomic_save.sql` — **este documento** —
+    `public.fn_guardar_inspeccion_completa`, guardado atómico de
+    `INSPECCIONES` + 6 `CAP_*` (reemplaza 7 llamadas REST no atómicas).
 
 Ninguna de estas migraciones se ha confirmado aplicada contra la instancia
 `jhtocgxlozfuzullrtol` desde este entorno de desarrollo — requieren ejecución
 manual en Supabase Studio. **Nota de orden de aplicación:** `20260818_gis_core_sanitization.sql`
 debe aplicarse antes que `20260818_fix_views_eudr_flags.sql` (esta última
-selecciona columnas que la primera crea).
+selecciona columnas que la primera crea). `20260818_inspecciones_atomic_save.sql`
+depende de que `20260818_fix_inspecciones_rls.sql` ya esté aplicada (las
+políticas RLS que permiten escritura `anon` en `INSPECCIONES`/`CAP_*` deben
+existir antes, ya que la función nueva no usa `SECURITY DEFINER`).
