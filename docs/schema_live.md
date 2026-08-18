@@ -14,6 +14,9 @@
 > Generado: 2026-08-18, tras `20260818_gis_core_sanitization.sql`.
 > Actualizado: 2026-08-18, tras auditoría de integración documentada en
 > `docs/adr/ADR-001-gis-sanitization-and-eudr-triggers.md`.
+> Actualizado: 2026-08-18, tras auditoría del Portal Público de
+> Trazabilidad (`specs/trace_public_audit.md`) — sin cambios de schema, ver
+> nota en la sección de `vw_monitoreo_web` abajo.
 
 ## Tablas base (pre-existentes, no creadas por migraciones de este repo)
 
@@ -105,7 +108,33 @@ duplicado por compatibilidad con proyectos QGIS antiguos) e `id_monitoreo`
 `EUDR_MONITOREO`).
 
 ### `public.vw_monitoreo_web`
-Consumida por `components/gis/MapDashboard.jsx`. Filtra estrictamente
+Consumida por `components/gis/MapDashboard.jsx` **y** por
+`app/trace/[lot_hash]/page.jsx` (Portal Público de Trazabilidad,
+auditado 2026-08-18 — ver `specs/trace_public_audit.md`). El portal público
+consulta esta vista **sin filtrar por `ID_Organizacion`** (trae registros de
+todas las organizaciones) porque la URL pública no lleva organización — el
+fetch ocurre enteramente en un Server Component (`findLotByHash()`, sin
+`'use client'`), así que el resultado multi-organización nunca llega al
+navegador: solo el payload ya sanitizado (vía
+`lib/traceabilityHash.js::buildPublicSanitizedPayload`, remueve `socio_dni`/
+`socio_nombre`/`socio_nombre_completo`/`conyuge_dni`/`productor`/
+`id_parcela`) de la única organización cuyo `lot_hash` recalculado coincide
+se serializa en la respuesta HTML. Sin gaps encontrados en esta auditoría.
+
+> **Riesgo latente documentado (no explotable hoy):** el hash público se
+> calcula con `lib/traceabilityHash.js::generateLotHash()`, que difiere de
+> `scripts/generate_lot_qr.py::generate_lot_hash()` (Python, Tarea 14) en el
+> campo usado por Feature (`id_parcela` en JS vs. solo `id_monitoreo` en
+> Python — esta vista nunca expone `id_monitoreo`) y en el set de campos PII
+> filtrados (`_PII_FIELDS` de Python no incluye `productor`/`id_parcela`).
+> El script Python nunca se ejecuta hoy contra payloads con la forma real de
+> `vw_monitoreo_web` (sus tests usan fixtures con `id_monitoreo` explícito),
+> así que no hay inconsistencia observable en producción — pero si alguien
+> reutiliza el script Python contra este schema, debe alinear ambos primero
+> o los hashes Python/JS del mismo lote no coincidirán. Ver
+> `specs/trace_public_audit.md` para el detalle completo.
+
+Filtra estrictamente
 `estado_revision = 'APROBADO'`. `LEFT JOIN` a `PADRON_PARCELAS` (
 `parcela_codigo`, `parcela_nombre`, `area_ha`) + `LEFT JOIN LATERAL` a
 `EUDR_MONITOREO` para resolver `productor` en filas de
