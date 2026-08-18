@@ -115,6 +115,41 @@ class TestMigrationFileStatic(unittest.TestCase):
             self.assertIn("requiere_revision_area", block)
 
 
+class TestViewIntegrationGap(unittest.TestCase):
+    """Fija el hallazgo de ADR-001: vw_monitoreo_* aún no exponen las columnas
+    nuevas de sanitización. Si este test empieza a fallar porque las columnas
+    SÍ aparecen, es una señal buena — significa que alguien cerró el gap con
+    una migración de vistas nueva; en ese caso, actualizar ADR-001 y
+    docs/schema_live.md para reflejarlo, no solo borrar este test.
+    """
+
+    VIEWS_MIGRATIONS = (
+        Path(__file__).resolve().parent.parent
+        / "supabase"
+        / "migrations"
+        / "20260816_fase2_vistas_qc.sql",
+        Path(__file__).resolve().parent.parent
+        / "supabase"
+        / "migrations"
+        / "20260817_refine_vw_monitoreo_web.sql",
+    )
+
+    def test_new_area_columns_not_yet_exposed_in_views(self):
+        for path in self.VIEWS_MIGRATIONS:
+            self.assertTrue(path.exists(), f"No existe {path}")
+            sql = path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                "area_calculada_ha",
+                sql,
+                f"{path.name} ya expone area_calculada_ha — actualizar ADR-001",
+            )
+            self.assertNotIn(
+                "requiere_revision_area",
+                sql,
+                f"{path.name} ya expone requiere_revision_area — actualizar ADR-001",
+            )
+
+
 @NEEDS_SUPABASE
 class TestGisSanitizationLive(unittest.TestCase):
     """AC1-AC5 de specs/gis_core_reengineering.md contra Supabase real."""

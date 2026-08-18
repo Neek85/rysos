@@ -12,6 +12,8 @@
 > ejecución manual en el SQL Editor de Supabase Studio (ver cada archivo).
 >
 > Generado: 2026-08-18, tras `20260818_gis_core_sanitization.sql`.
+> Actualizado: 2026-08-18, tras auditoría de integración documentada en
+> `docs/adr/ADR-001-gis-sanitization-and-eudr-triggers.md`.
 
 ## Tablas base (pre-existentes, no creadas por migraciones de este repo)
 
@@ -104,6 +106,16 @@ Consumida por `components/gis/MapDashboard.jsx`. Filtra estrictamente
 visita de monitoreo más reciente sobre la misma parcela). Expone
 `geom_geojson` (`ST_AsGeoJSON(geom)::json`) porque PostgREST serializa
 `geometry` cruda como WKB hex, no como GeoJSON.
+
+> **Gap de integración conocido (auditado 2026-08-18, ver ADR-001):**
+> `vw_monitoreo_poligonos`, `vw_monitoreo_puntos` y `vw_monitoreo_web`
+> seleccionan columnas explícitas y **ninguna expone `area_calculada_ha` ni
+> `requiere_revision_area`** (agregadas por `20260818_gis_core_sanitization.sql`).
+> El Dashboard Web y QGIS Desktop no pueden ver el flag de revisión de área
+> hoy — solo es consultable directo contra las tablas base. La geometría en
+> sí *sí* está bien integrada (el trigger sanitiza en escritura, la vista lee
+> el dato ya limpio). Exponer las dos columnas nuevas en las vistas requiere
+> una migración de vistas nueva, no incluida en esta tarea.
 
 ### `public.view_eudr_dashboard_aprobados`
 Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
