@@ -21,6 +21,18 @@
 > Comercial (`specs/traces_eudr_dossier_audit.md`) — sin cambios de schema,
 > ver nota al final de la sección de `vw_monitoreo_web` sobre el estado real
 > de `/dashboard/lotes` vs `/dashboard/mapa` y el Dossier PDF.
+> Actualizado: 2026-08-18, tras implementar el Dossier PDF nativo en JS
+> (`specs/pdf_dossier_native_js.md`) — agrega la ruta
+> `/api/trace/[lot_hash]/pdf` (sin cambios de schema) y confirma, por
+> primera vez con una consulta REST real, que **`vw_monitoreo_web` SÍ está
+> aplicada y devuelve datos reales aprobados en la instancia
+> `jhtocgxlozfuzullrtol`** (organización `ORG-COOP-NORTE`, 6 registros/3
+> parcelas al momento de la prueba) — al menos en su versión de
+> `20260817_refine_vw_monitoreo_web.sql` o anterior. **No confirmado:** si
+> alguna de las 5 migraciones nuevas del 2026-08-18 (sanitización GIS, RLS
+> fortification, flags de área en las vistas, guardado atómico de
+> Inspecciones, fix RLS Inspecciones) ya está aplicada encima — la consulta
+> de esta tarea no pidió esas columnas nuevas.
 
 ## Tablas base (pre-existentes, no creadas por migraciones de este repo)
 
@@ -155,6 +167,21 @@ se serializa en la respuesta HTML. Sin gaps encontrados en esta auditoría.
 > (portar a JS, exponer un Route Handler que llame a Python, o un servicio
 > HTTP aparte) — ver la spec para las opciones evaluadas, ninguna
 > implementada todavía.
+>
+> **Actualización 2026-08-18 — cerrado (Opción 1: nativo JS):** el Dossier
+> Comercial ya es generable desde la app real. Nueva ruta
+> `GET /api/trace/[lot_hash]/pdf` (`app/api/trace/[lot_hash]/pdf/route.js`,
+> `runtime = 'nodejs'`) — reusa `lib/lotLookup.js::findLotByHash` (extraído
+> de la página pública para no duplicar la lógica de resolución de hash) y
+> `lib/pdf/renderDossierPdf.js` (`@react-pdf/renderer`, nueva dependencia
+> de producción) para devolver `application/pdf`. Botón "Descargar Dossier
+> EUDR (PDF)" agregado en `/trace/[lot_hash]` y `/dashboard/lotes`. El PDF
+> incluye un mapa esquemático de las parcelas (`lib/pdf/geometryToSvg.js`,
+> proyección vectorial simple, sin basemap externo) pero **deliberadamente
+> no incluye nada del módulo de Inspecciones FED** (`INSPECCIONES`/`CAP_*`)
+> — decisión de seguridad confirmada con el usuario, ver
+> `specs/pdf_dossier_native_js.md`. Probado contra la instancia real con
+> datos aprobados en vivo, no solo con fixtures.
 
 Filtra estrictamente
 `estado_revision = 'APROBADO'`. `LEFT JOIN` a `PADRON_PARCELAS` (

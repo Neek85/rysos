@@ -126,6 +126,13 @@ export default function LotesPage() {
               Ver página pública
             </a>
           </div>
+
+          <a
+            href={`/api/trace/${lot.lot_hash}/pdf`}
+            className="block rounded-lg bg-emerald-800 px-3 py-2.5 text-center text-xs font-semibold text-white hover:bg-emerald-900"
+          >
+            📄 Descargar Dossier EUDR (PDF)
+          </a>
         </div>
       )}
     </div>
