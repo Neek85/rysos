@@ -27,10 +27,13 @@ const LAYER_FILTERS = [
   { value: 'EUDR_INSTALACIONES', label: LAYER_LABELS.EUDR_INSTALACIONES },
 ]
 
-// Las vistas de auditoría en vivo ya traen parcela_codigo/parcela_nombre
-// resueltos (a diferencia de lo documentado en la migración, que asumía
-// solo "ID_Parcela_Fija" crudo) — "S/C" es el placeholder real que usa la
-// vista cuando la parcela no tiene código cargado, no un UUID a filtrar.
+// vw_monitoreo_poligonos/puntos NO traen parcela_codigo/parcela_nombre
+// (reverificado en vivo 2026-08-19 — a diferencia de lo que decía este
+// comentario antes) — fetchPendingRecords (lib/eudrQcActions.js) las
+// resuelve del lado del cliente vía enrichWithParcelaInfo, un JOIN manual
+// contra PADRON_PARCELAS por ID_Parcela_Fija, mismo dato que
+// vw_monitoreo_web trae con un LEFT JOIN real en SQL (no usable acá
+// porque esa vista excluye PENDIENTE estructuralmente).
 function displayParcela(record) {
   const codigo = record?.parcela_codigo && record.parcela_codigo !== 'S/C' ? record.parcela_codigo : null
   if (codigo && record?.parcela_nombre) return `${codigo} — ${record.parcela_nombre}`
