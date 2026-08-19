@@ -182,6 +182,21 @@ expondría DNI/nombre real a cualquiera con la anon key pública. En su lugar:
   práctica).
 - **Nuevo (2026-08-18):** mismo patrón de columnas/trigger/índices que arriba.
 
+> **Nuevo path de escritura desde el frontend (2026-08-19, Ingestor de
+> Capas Espaciales, `specs/gis_ingestor_web.md`):** hasta ahora estas 3
+> tablas solo se escribían desde `scripts/etl_drive_to_supabase.py` (ETL
+> de campo) y ediciones manuales en QGIS Desktop. `lib/actions/gisActions.js::uploadGeoSpatialFeature`
+> agrega un tercer origen: el modal `CargaEspacialModal.jsx` en
+> `/dashboard/mapa`, que sube capas GeoJSON/KML/Shapefile-ZIP subidas a
+> mano. Escribe con la Service Role Key (bypasea RLS, igual que
+> `sociosActions.js`), nunca calcula `area_calculada_ha` ni sanitiza la
+> geometría por su cuenta — confía por completo en el trigger
+> `trg_gis_sanitize_eudr_*` ya existente en cada tabla. `estado_revision`
+> siempre se fija en `'PENDIENTE'`, así que un registro cargado por este
+> path entra al mismo flujo de revisión QGIS QC que los datos de campo, y
+> no aparece en `/dashboard/mapa` (que consume `vw_monitoreo_web`,
+> filtrado a `APROBADO`) hasta ser aprobado ahí.
+
 ### `public."INSPECCIONES"` + `public."CAP_DATOS_SOCIO"` / `"CAP_MIC"` /
 `"CAP_CONSERVACION"` / `"CAP_BIENESTAR"` / `"CAP_RIESGOS"` / `"CAP_GESTION"`
 (Fase 6 — módulo de inspecciones socioeconómicas)

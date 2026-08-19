@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import { exportTracesDDS, resolveOrganizationId, EUDRValidationError } from '@/lib/eudrDdsExporter'
+import CargaEspacialModal from '@/app/dashboard/mapa/components/CargaEspacialModal'
 
 const EVIDENCIA_BUCKET = 'evidencias_eudr'
 const SIGNED_URL_TTL_SECONDS = 3600
@@ -327,6 +328,8 @@ export default function MapDashboard() {
   const [mapError, setMapError] = useState(null)
   const [exporting, setExporting] = useState(false)
   const [exportToast, setExportToast] = useState(null)
+  const [showUpload, setShowUpload] = useState(false)
+  const [uploadToast, setUploadToast] = useState(null)
 
   // El toast de exportación se autolimpia — no requiere interacción del
   // usuario para desaparecer, igual que el resto de los estados efímeros
@@ -336,6 +339,21 @@ export default function MapDashboard() {
     const timer = setTimeout(() => setExportToast(null), 6000)
     return () => clearTimeout(timer)
   }, [exportToast])
+
+  useEffect(() => {
+    if (!uploadToast) return
+    const timer = setTimeout(() => setUploadToast(null), 8000)
+    return () => clearTimeout(timer)
+  }, [uploadToast])
+
+  function handleSpatialUploaded({ created, targetTable }) {
+    setShowUpload(false)
+    const pendienteNote =
+      targetTable === 'PADRON_PARCELAS'
+        ? ''
+        : ' Quedan PENDIENTE de revisión en QGIS QC — no aparecerán en este mapa hasta ser aprobados.'
+    setUploadToast({ type: 'success', message: `Carga completa: ${created} registro(s) creado(s).${pendienteNote}` })
+  }
 
   // Genera y descarga la DDS TRACES UE (JSON + GeoJSON) a partir de los
   // registros aprobados ya cargados. La validación multi-tenant y la regla
@@ -662,21 +680,30 @@ export default function MapDashboard() {
         <span className="text-xs text-gray-400">
           {records.length} registro(s) aprobado(s) cargado(s)
         </span>
-        <button
-          type="button"
-          onClick={handleExportDDS}
-          disabled={exporting || records.length === 0}
-          className="inline-flex items-center gap-2 rounded-lg bg-green-800 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {exporting ? (
-            <>
-              <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
-              Generando DDS…
-            </>
-          ) : (
-            <>📄 Exportar DDS (TRACES UE)</>
-          )}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowUpload(true)}
+            className="inline-flex items-center gap-2 rounded-lg border border-green-800 px-3 py-1.5 text-xs font-semibold text-green-800 shadow-sm hover:bg-green-50"
+          >
+            📤 Cargar Capa Espacial
+          </button>
+          <button
+            type="button"
+            onClick={handleExportDDS}
+            disabled={exporting || records.length === 0}
+            className="inline-flex items-center gap-2 rounded-lg bg-green-800 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {exporting ? (
+              <>
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                Generando DDS…
+              </>
+            ) : (
+              <>📄 Exportar DDS (TRACES UE)</>
+            )}
+          </button>
+        </div>
       </div>
 
       {exportToast && (
@@ -690,6 +717,25 @@ export default function MapDashboard() {
           {exportToast.type === 'success' ? '✓ ' : '⚠ '}
           {exportToast.message}
         </p>
+      )}
+
+      {uploadToast && (
+        <p
+          className={`text-sm rounded p-2 ${
+            uploadToast.type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
+          }`}
+        >
+          {uploadToast.type === 'success' ? '✓ ' : '⚠ '}
+          {uploadToast.message}
+        </p>
+      )}
+
+      {showUpload && (
+        <CargaEspacialModal
+          organizationId={resolveOrganizationId(records)}
+          onClose={() => setShowUpload(false)}
+          onUploaded={handleSpatialUploaded}
+        />
       )}
 
       <div
