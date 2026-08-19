@@ -27,6 +27,11 @@ test('socioSchema acepta un socio mínimo válido (solo ID + nombre requeridos)'
   assert.equal(result.success, true, JSON.stringify(result.success ? null : result.error.issues))
 })
 
+test('socioSchema no depende de PADRON_PARCELAS de ninguna forma — un socio con 0 parcelas es válido', () => {
+  const fields = Object.keys(socioSchema.shape)
+  assert.ok(!fields.some((f) => f.toLowerCase().includes('parcela')))
+})
+
 test('socioSchema rechaza ID_Socio vacío', () => {
   const result = socioSchema.safeParse(validSocio({ ID_Socio: '' }))
   assert.equal(result.success, false)

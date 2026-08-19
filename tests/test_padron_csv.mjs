@@ -82,6 +82,29 @@ test('buildParcelaTemplateCsv excluye totalh (campo calculado, no editable)', ()
   assert.ok(!header.includes('Total Hectáreas'))
 })
 
+test('buildParcelaTemplateCsv sin ID_Socio reales cae al ID de respaldo (1 fila)', () => {
+  const csv = buildParcelaTemplateCsv([])
+  const lines = csv.split('\r\n')
+  assert.equal(lines.length, 2) // encabezado + 1 fila
+  assert.ok(lines[1].includes('JS-00001'))
+})
+
+test('buildParcelaTemplateCsv con ID_Socio reales genera una fila de ejemplo por cada uno (hasta 2)', () => {
+  const csv = buildParcelaTemplateCsv(['COOP-01', 'COOP-02', 'COOP-03'])
+  const lines = csv.split('\r\n')
+  assert.equal(lines.length, 3) // encabezado + 2 filas (recorta a 2, ignora el 3ro)
+  assert.ok(lines[1].includes('COOP-01'))
+  assert.ok(lines[2].includes('COOP-02'))
+  assert.ok(!csv.includes('COOP-03'))
+})
+
+test('buildParcelaTemplateCsv con 2 socios reales no genera códigos de parcela duplicados entre sí', () => {
+  const csv = buildParcelaTemplateCsv(['COOP-01', 'COOP-02'])
+  // La propia plantilla, reimportada tal cual, no debe autochocar como duplicado.
+  const results = validateParcelaRows(parseCsv(csv))
+  assert.ok(results.every((r) => !r.errors.some((e) => e.includes('duplicado'))))
+})
+
 // ---------------------------------------------------------------
 // parseCsv
 // ---------------------------------------------------------------

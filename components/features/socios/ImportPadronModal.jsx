@@ -10,6 +10,7 @@ import {
 } from '@/lib/padronCsv'
 import { createSocio, createParcela } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
+import { getSupabaseClient } from '@/lib/supabaseClient'
 
 // Modal de carga masiva CSV para /dashboard/socios — con vista previa
 // obligatoria antes de confirmar (decisión confirmada con el usuario, ver
@@ -126,7 +127,9 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
           </p>
           <button
             type="button"
-            onClick={() => (tab === 'socios' ? downloadSocioTemplate() : downloadParcelaTemplate())}
+            onClick={() =>
+              tab === 'socios' ? downloadSocioTemplate() : downloadParcelaTemplate(getSupabaseClient(), organizationId)
+            }
             className="whitespace-nowrap rounded-lg border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50"
           >
             ⬇ Descargar Plantilla de {tab === 'socios' ? 'Socios' : 'Parcelas'} (.csv)
