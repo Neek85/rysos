@@ -33,6 +33,10 @@
 > fortification, flags de área en las vistas, guardado atómico de
 > Inspecciones, fix RLS Inspecciones) ya está aplicada encima — la consulta
 > de esta tarea no pidió esas columnas nuevas.
+> Actualizado: 2026-08-18, tras construir el Padrón Web de Socios y Fincas
+> (`specs/padron_web_socios.md`, `/dashboard/socios`) — confirma el schema
+> real completo de `PADRON_SOCIOS`/`PADRON_PARCELAS` (antes solo
+> parcialmente documentado) y agrega la primera Server Action del proyecto.
 
 ## Tablas base (pre-existentes, no creadas por migraciones de este repo)
 
@@ -47,16 +51,71 @@ adicionales no documentadas aquí.
 - RLS: solo `SELECT` (asimetría deliberada — Tarea 9.1).
 
 ### `public."PADRON_SOCIOS"`
-- `"ID_Organizacion"`, `"ID_Socio"`, `socio_nombre_completo`, `socio_dni`,
-  `localidad`, `certificaciones`.
+Schema real completo confirmado en vivo el 2026-08-18 (`specs/padron_web_socios.md`,
+consulta REST directa, no solo lo referenciado por migraciones):
+`ID_Socio` (PK, código manual ej. `JS-00001`, no autogenerado), `ID_Organizacion`,
+`codigo_finca`, `socio_nombre_completo`, `socio_dni` (8 dígitos), `socio_genero`,
+`socio_fecha_nacimiento`, `celular_socio`, `conyuge_nombre`, `conyuge_dni`,
+`socio_departamento`, `socio_provincia`, `socio_distrito`, `localidad`,
+`certificaciones` (texto libre), `cert_org_estatus` (texto, ej. "Organico"/
+"Sin Estatus"), 8 columnas de certificación booleana en texto `"Sí"`/`"No"`
+(`cert_nop_usda`, `ue_2018_848`, `cor_canada`, `cert_ds_0442006_ag`,
+`cert_lpo_mx`, `cert_rainforest`, `cert_comercio_justo`, `cert_fair_trade_usa`),
+`socio_fecha_ingreso`, `creado_en`, `actualizado_en`, `creado_por`.
+**No existe ninguna columna `sector`** (verificado — algo a tener presente si
+una tarea futura la asume).
 - RLS: lectura/escritura para `authenticated` scopeado a `ID_Organizacion`
   (Tarea 9.1) + lectura adicional para `anon` (fix Inspecciones, 2026-08-18).
+  **Sin política de escritura para `anon`, por diseño deliberado** — ver
+  módulo Padrón Web abajo.
 
 ### `public."PADRON_PARCELAS"`
-- `"ID_Organizacion"`, `"ID_Parcela_Fija"`, `parcela_codigo`, `parcela_nombre`,
-  `totalh` (hectáreas totales de la parcela, expuesto como `area_ha` en las
-  vistas), `geom`.
-- RLS: igual patrón que `PADRON_SOCIOS`.
+Schema real completo confirmado en vivo el 2026-08-18: `ID_Parcela_Fija` (PK,
+código manual ej. `COOP-JS-001`), `ID_Organizacion`, `ID_Socio`, `socio_dni`/
+`socio_nombre_completo` (copias desnormalizadas del socio — más superficie de
+PII a cuidar en cualquier vista/export que use esta tabla), `parcela_codigo`,
+`parcela_nombre`, `hcp`/`hcc`/`ho`/`hip`/`hrp`/`hbp`/`otros_cultivo` (hectáreas
+por categoría de uso, nomenclatura heredada de AppSheet), `totalh` (suma de
+las categorías), `geom` (**`NULL` en la mayoría de registros reales
+confirmados** — no asumir que siempre hay geometría), `creado_en`,
+`actualizado_en`, `creado_por`, `hr`.
+- RLS: igual patrón que `PADRON_SOCIOS` — sin escritura `anon`.
+
+### Módulo Padrón Web de Socios y Fincas (2026-08-18, `/dashboard/socios`)
+
+Primer módulo de escritura del proyecto que **no** usa una política RLS
+`anon` nueva. `PADRON_SOCIOS`/`PADRON_PARCELAS` son el padrón maestro,
+compartido en vivo con otro repositorio
+(`docs/audits/auditoria_backend_inspecciones.md`) — abrir escritura `anon`
+expondría DNI/nombre real a cualquiera con la anon key pública. En su lugar:
+
+- **Lectura:** `lib/sociosSearch.js`, vía la anon key existente (mismo
+  patrón que `fetchInspecciones` — sin filtro explícito por
+  `ID_Organizacion`, la tabla mezcla datos de todas las organizaciones
+  visibles a `anon`, mismo comportamiento pre-existente que el resto del
+  proyecto).
+- **Escritura:** `lib/actions/sociosActions.js` — Server Actions (`'use server'`)
+  que usan `lib/supabaseServerClient.js` (cliente con `SUPABASE_SERVICE_ROLE_KEY`,
+  bypasea RLS, **nunca** importado desde un archivo `'use client'` —
+  verificado por grep). El aislamiento multi-tenant es responsabilidad
+  explícita del código (mismo patrón que `saveInspeccion`/
+  `fn_guardar_inspeccion_completa`): la organización activa viene del
+  cliente, y en edición se valida contra la organización real del registro
+  existente antes de escribir.
+- **⚠️ `SUPABASE_SERVICE_ROLE_KEY` no está configurada en `.env.local`** —
+  confirmado, sin imprimir el valor. La lectura funciona igual; **la
+  escritura (alta/edición de socio o parcela) falla con un mensaje claro
+  hasta que se agregue esa variable**, aquí y en el entorno de despliegue
+  real. Verificado en vivo (dev server + navegador): el flujo completo
+  corre correctamente hasta ese punto — Server Action invocada, Zod
+  validado, error exacto mostrado en el modal, cero filas escritas
+  (confirmado por consulta REST directa tras el intento).
+- **Geometría de parcela:** carga de archivo `.geojson`/`.json`/`.kml`/`.csv`
+  (`lib/geometryImport.js`, incluye `@tmcw/togeojson`+`@xmldom/xmldom` como
+  dependencias nuevas para KML), sanitizada server-side vía RPC
+  `fn_sanitize_geometry` (`lib/actions/sociosActions.js::sanitizeGeometryForStorage`)
+  antes de guardar — mismo mecanismo ya confirmado funcionando en
+  `docs/audits/verification_checklist_20260818.md`.
 
 ### `public."EUDR_MONITOREO"`
 - `id_monitoreo` (uuid, PK — **no** tiene columna `fid`, a diferencia de

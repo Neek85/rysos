@@ -4,12 +4,12 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 // INVARIANTE: la mayoría de los items son el andamiaje de navegación
-// modular pedido (Padrón → "Productores y Parcelas", Acopio, "Contratos
-// y Ventas" de Comercialización) — enlazar a rutas inexistentes
-// produciría 404s, así que quedan sin `href` y se renderizan
-// deshabilitados ("Próximamente") hasta que existan las páginas
-// correspondientes. "Lotes y Trazabilidad" (Tarea 14) e "Inspecciones"
-// (Fase 6) sí son rutas reales.
+// modular pedido (Acopio, "Contratos y Ventas" de Comercialización) —
+// enlazar a rutas inexistentes produciría 404s, así que quedan sin
+// `href` y se renderizan deshabilitados ("Próximamente") hasta que
+// existan las páginas correspondientes. "Lotes y Trazabilidad" (Tarea 14),
+// "Inspecciones" (Fase 6) y "Productores y Parcelas" (padrón web,
+// specs/padron_web_socios.md) sí son rutas reales.
 const NAV_GROUPS = [
   {
     label: 'GIS & EUDR',
@@ -22,7 +22,7 @@ const NAV_GROUPS = [
     label: 'Padrón',
     items: [
       { label: 'Inspecciones', href: '/dashboard/inspecciones', icon: '📋' },
-      { label: 'Productores y Parcelas', href: null, icon: '👥' },
+      { label: 'Productores y Parcelas', href: '/dashboard/socios', icon: '👥' },
     ],
   },
   {

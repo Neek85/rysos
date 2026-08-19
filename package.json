@@ -12,6 +12,8 @@
     "@hookform/resolvers": "^3.10.0",
     "@react-pdf/renderer": "^4.6.1",
     "@supabase/supabase-js": "^2.0.0",
+    "@tmcw/togeojson": "^7.1.2",
+    "@xmldom/xmldom": "^0.9.11",
     "leaflet": "^1.9.4",
     "next": "^14.2.0",
     "qrcode": "^1.5.4",
