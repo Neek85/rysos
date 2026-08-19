@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import centroid from '@turf/centroid'
 
 // Estilo por tabla_origen — deliberadamente distinto de los 11 colores de
 // MapDashboard.jsx (uso de suelo/infraestructura): esta es una vista de
@@ -50,7 +51,7 @@ function parseGeometry(record) {
  * lista lateral (prop `selectedKey`). Selección también puede iniciarse
  * clickeando directamente una geometría (`onSelect`).
  */
-export default function QcConsoleMap({ records, selectedKey, onSelect }) {
+export default function QcConsoleMap({ records, selectedKey, onSelect, editingKey, onGeometryChange }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const leafletRef = useRef(null)
@@ -70,6 +71,13 @@ export default function QcConsoleMap({ records, selectedKey, onSelect }) {
         const leaflet = await import('leaflet')
         const L = leaflet.default
         await import('leaflet/dist/leaflet.css')
+        // Geoman ANTES de crear el mapa (mismo motivo que MapDashboard.jsx):
+        // su hook vía L.Map.addInitHook solo aplica a mapas creados después
+        // de que el hook exista. Acá se usa únicamente en modo edición
+        // (layer.pm.enable()) sobre la capa seleccionada, nunca para dibujar
+        // capas nuevas — ver el efecto de editingKey más abajo.
+        await import('@geoman-io/leaflet-geoman-free')
+        await import('@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css')
         if (cancelled) return
         leafletRef.current = L
 
@@ -158,10 +166,14 @@ export default function QcConsoleMap({ records, selectedKey, onSelect }) {
 
   // flyTo + resaltado del registro seleccionado desde la lista lateral (o
   // desde un click directo en el mapa, que ya actualiza selectedKey vía
-  // onSelect y dispara este mismo efecto).
+  // onSelect y dispara este mismo efecto). Objetivo del flyTo: centroide
+  // geométrico real (@turf/centroid) sobre la geometry del registro, no
+  // getBounds().getCenter() (centro del rectángulo envolvente — puede caer
+  // fuera de un polígono cóncavo/en L, ver specs/gis_qc_console_v2.md).
   useEffect(() => {
+    const L = leafletRef.current
     const map = mapRef.current
-    if (!map) return
+    if (!L || !map) return
 
     layersByKeyRef.current.forEach((layer, key) => {
       const record = (records || []).find((r) => r.key === key)
@@ -169,15 +181,60 @@ export default function QcConsoleMap({ records, selectedKey, onSelect }) {
     })
 
     if (!selectedKey) return
+    const selectedRecord = (records || []).find((r) => r.key === selectedKey)
     const selectedLayer = layersByKeyRef.current.get(selectedKey)
     if (!selectedLayer) return
 
-    const target = selectedLayer.getBounds ? selectedLayer.getBounds().getCenter() : null
+    const geometry = parseGeometry(selectedRecord)
+    let target = null
+    if (geometry) {
+      try {
+        const [lon, lat] = centroid({ type: 'Feature', properties: {}, geometry }).geometry.coordinates
+        target = L.latLng(lat, lon)
+      } catch {
+        target = null
+      }
+    }
+    if (!target && selectedLayer.getBounds) {
+      target = selectedLayer.getBounds().getCenter()
+    }
     if (target) {
       map.flyTo(target, Math.max(map.getZoom(), 16))
     }
     selectedLayer.openPopup?.()
   }, [selectedKey, records])
+
+  // Modo edición de vértices — habilita layer.pm SOLO en la capa cuyo key
+  // coincide con `editingKey` (nunca todas a la vez), y lo deshabilita en
+  // cualquier otra que hubiera quedado en edición (cambio de selección
+  // mientras se editaba, por ejemplo). `layer` (L.geoJSON de una sola
+  // Feature) es un FeatureGroup — su `.pm.enable()` delega correctamente al
+  // sublayer real (confirmado en node_modules/.../L.PM.Edit.LayerGroup.js),
+  // pero los eventos pm:edit/pm:markerdragend los dispara ese SUBLAYER, no
+  // el FeatureGroup — hay que escucharlos en `layer.getLayers()[0]`, no en
+  // `layer`. Nada se escribe a la base desde acá — el botón "Guardar
+  // Geometría" en QcDetailEditor decide cuándo persistir el borrador.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    layersByKeyRef.current.forEach((layer, key) => {
+      const childLayer = layer.getLayers?.()[0]
+      const shouldEdit = key === editingKey
+      const isEditing = layer.pm?.enabled?.()
+      if (shouldEdit && !isEditing) {
+        layer.pm?.enable({ allowSelfIntersection: false })
+        if (childLayer) {
+          const report = () => onGeometryChange?.(key, childLayer.toGeoJSON().geometry)
+          childLayer.on('pm:edit', report)
+          childLayer.on('pm:markerdragend', report)
+        }
+      } else if (!shouldEdit && isEditing) {
+        layer.pm?.disable()
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingKey, records])
 
   return (
     <div

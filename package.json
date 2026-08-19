@@ -15,6 +15,7 @@
     "@supabase/supabase-js": "^2.0.0",
     "@tmcw/togeojson": "^7.1.2",
     "@turf/area": "^7.4.0",
+    "@turf/centroid": "^7.4.0",
     "@turf/kinks": "^7.4.0",
     "@xmldom/xmldom": "^0.9.11",
     "leaflet": "^1.9.4",

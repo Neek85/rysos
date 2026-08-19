@@ -9,11 +9,14 @@ import {
   fetchPendingRecords,
   approveRecord,
   rejectRecord,
+  updateRecordAttributes,
+  updateRecordGeometry,
   resolveOrganizationId,
   LAYER_LABELS,
   EUDRQcError,
 } from '@/lib/eudrQcActions'
 import { EUDRValidationError } from '@/lib/eudrDdsExporter'
+import QcDetailEditor from './components/QcDetailEditor'
 
 const QcConsoleMap = nextDynamic(() => import('@/components/gis/QcConsoleMap'), {
   ssr: false,
@@ -50,6 +53,8 @@ export default function QcConsolePage() {
   const [motivo, setMotivo] = useState('')
   const [actionBusyKey, setActionBusyKey] = useState(null)
   const [toast, setToast] = useState(null)
+  const [editingGeometryKey, setEditingGeometryKey] = useState(null)
+  const [geometryDraft, setGeometryDraft] = useState(null)
 
   async function loadPending() {
     const supabase = getSupabaseClient()
@@ -79,6 +84,14 @@ export default function QcConsolePage() {
     const timer = setTimeout(() => setToast(null), 6000)
     return () => clearTimeout(timer)
   }, [toast])
+
+  // Cambiar de registro seleccionado descarta cualquier edición de
+  // geometría en curso sobre el registro anterior — nunca debe sobrevivir
+  // un borrador de vértices "colgado" apuntando a otra capa.
+  useEffect(() => {
+    setEditingGeometryKey(null)
+    setGeometryDraft(null)
+  }, [selectedKey])
 
   const filteredRecords = useMemo(() => {
     if (layerFilter === 'TODOS') return records
@@ -125,6 +138,43 @@ export default function QcConsolePage() {
     } finally {
       setActionBusyKey(null)
     }
+  }
+
+  function handleToggleGeometryEdit() {
+    if (!selectedRecord) return
+    if (editingGeometryKey === selectedRecord.key) {
+      setEditingGeometryKey(null)
+      setGeometryDraft(null)
+    } else {
+      setEditingGeometryKey(selectedRecord.key)
+      setGeometryDraft(null)
+    }
+  }
+
+  function handleGeometryChange(key, geometry) {
+    if (key === editingGeometryKey) setGeometryDraft(geometry)
+  }
+
+  async function handleSaveAttributes(attributes) {
+    if (!selectedRecord) return
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+    const organizationId = resolveOrganizationId(records)
+    await updateRecordAttributes(supabase, selectedRecord, attributes, organizationId)
+    setRecords((prev) => prev.map((r) => (r.key === selectedRecord.key ? { ...r, ...attributes } : r)))
+    setToast({ type: 'success', message: `Atributos actualizados: ${displayParcela(selectedRecord)}.` })
+  }
+
+  async function handleSaveGeometry(geometry) {
+    if (!selectedRecord || !geometry) return
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+    const organizationId = resolveOrganizationId(records)
+    await updateRecordGeometry(supabase, selectedRecord, geometry, organizationId)
+    setRecords((prev) => prev.map((r) => (r.key === selectedRecord.key ? { ...r, geom: geometry } : r)))
+    setEditingGeometryKey(null)
+    setGeometryDraft(null)
+    setToast({ type: 'success', message: `Geometría actualizada: ${displayParcela(selectedRecord)}.` })
   }
 
   return (
@@ -197,47 +247,29 @@ export default function QcConsolePage() {
         </section>
 
         <section className="space-y-3 lg:col-span-3">
-          <QcConsoleMap records={filteredRecords} selectedKey={selectedKey} onSelect={setSelectedKey} />
+          <QcConsoleMap
+            records={filteredRecords}
+            selectedKey={selectedKey}
+            onSelect={setSelectedKey}
+            editingKey={editingGeometryKey}
+            onGeometryChange={handleGeometryChange}
+          />
 
           {selectedRecord && (
-            <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4">
-              <div>
-                <p className="text-sm font-semibold text-gray-700">
-                  {LAYER_LABELS[selectedRecord.tabla_origen] || selectedRecord.tabla_origen} —{' '}
-                  {displayParcela(selectedRecord)}
-                </p>
-                {selectedRecord.productor && (
-                  <p className="text-xs text-gray-400">Productor: {selectedRecord.productor}</p>
-                )}
-              </div>
-
-              <textarea
-                value={motivo}
-                onChange={(e) => setMotivo(e.target.value)}
-                placeholder="Observaciones / motivo (obligatorio para rechazar)"
-                className="w-full rounded border border-gray-200 p-2 text-sm"
-                rows={2}
-              />
-
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleDecision('approve')}
-                  disabled={Boolean(actionBusyKey)}
-                  className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {actionBusyKey === selectedRecord.key ? 'Procesando…' : '✓ Aprobar'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDecision('reject')}
-                  disabled={Boolean(actionBusyKey) || !motivo.trim()}
-                  className="flex-1 rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {actionBusyKey === selectedRecord.key ? 'Procesando…' : '✕ Rechazar'}
-                </button>
-              </div>
-            </div>
+            <QcDetailEditor
+              key={selectedRecord.key}
+              record={selectedRecord}
+              geometryDraft={geometryDraft}
+              isEditingGeometry={editingGeometryKey === selectedRecord.key}
+              onToggleGeometryEdit={handleToggleGeometryEdit}
+              onSaveAttributes={handleSaveAttributes}
+              onSaveGeometry={handleSaveGeometry}
+              motivo={motivo}
+              setMotivo={setMotivo}
+              onApprove={() => handleDecision('approve')}
+              onReject={() => handleDecision('reject')}
+              busy={actionBusyKey === selectedRecord.key}
+            />
           )}
         </section>
       </div>
