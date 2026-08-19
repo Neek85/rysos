@@ -114,8 +114,9 @@ export default function SociosPage() {
     if (!socioToDeactivate) return
     setDeactivating(true)
     try {
-      await deactivateSocio(socioToDeactivate.ID_Socio, socioToDeactivate.ID_Organizacion)
-      setToast({ type: 'success', message: `Socio ${socioToDeactivate.ID_Socio} dado de baja.` })
+      const result = await deactivateSocio(socioToDeactivate.ID_Socio, socioToDeactivate.ID_Organizacion)
+      const parcelasMsg = result.parcelasDeactivated > 0 ? ` (${result.parcelasDeactivated} parcela(s) dada(s) de baja en cascada)` : ''
+      setToast({ type: 'success', message: `Socio ${socioToDeactivate.ID_Socio} dado de baja.${parcelasMsg}` })
       setSocioToDeactivate(null)
       load()
     } catch (err) {
