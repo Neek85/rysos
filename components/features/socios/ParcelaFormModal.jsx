@@ -5,23 +5,13 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { FormField, inputClass } from '@/components/ui/FormField'
 import { getSupabaseClient } from '@/lib/supabaseClient'
-import { parcelaSchema, PARCELA_DEFAULT_VALUES, HECTARE_FIELD_KEYS } from '@/lib/validations/socios'
+import { parcelaSchema, PARCELA_DEFAULT_VALUES, HECTARE_FIELD_KEYS, HECTARE_FIELDS } from '@/lib/validations/socios'
 import { fetchParcelasBySocio } from '@/lib/sociosSearch'
 import { createParcela, updateParcela, deactivateParcela } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
 import { computeNextParcelaCode, computeSuggestedParcelaId } from '@/lib/parcelaDefaults'
 import GeometryUploadField from './GeometryUploadField'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
-
-const HECTARE_FIELDS = [
-  { field: 'hcp', label: 'Ha. Café Podado' },
-  { field: 'hcc', label: 'Ha. Café en Crecimiento' },
-  { field: 'ho', label: 'Ha. Otros' },
-  { field: 'hip', label: 'Ha. Infraestructura Productiva' },
-  { field: 'hrp', label: 'Ha. Reserva/Protección' },
-  { field: 'hbp', label: 'Ha. Bosque Protector' },
-  { field: 'otros_cultivo', label: 'Ha. Otros Cultivos' },
-]
 
 function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, onSaved, onCancel }) {
   const isEdit = Boolean(parcela)

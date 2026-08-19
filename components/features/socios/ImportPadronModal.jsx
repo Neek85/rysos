@@ -1,7 +1,13 @@
 'use client'
 
 import { useState } from 'react'
-import { parseCsv, validateSocioRows, validateParcelaRows } from '@/lib/padronCsv'
+import {
+  parseCsv,
+  validateSocioRows,
+  validateParcelaRows,
+  downloadSocioTemplate,
+  downloadParcelaTemplate,
+} from '@/lib/padronCsv'
 import { createSocio, createParcela } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
 
@@ -12,9 +18,12 @@ import { SocioActionError } from '@/lib/actions/socioActionError'
 // repositorio, así que nada se escribe hasta que el usuario revise la
 // tabla de válidas/inválidas y confirme explícitamente.
 //
-// Plantilla: mismo encabezado que exporta lib/padronCsv.js
-// (buildSociosCsv/buildParcelasCsv) — la forma más simple de generar un
-// CSV de carga válido es exportar el padrón actual y editarlo.
+// Plantilla: botón "Descargar Plantilla" (downloadSocioTemplate/
+// downloadParcelaTemplate en lib/padronCsv.js) — CSV en blanco con
+// encabezados legibles y 1 fila de ejemplo. El parser de importación
+// acepta tanto esos encabezados legibles como los nombres técnicos de
+// columna (ver normalizeRowKeys en lib/padronCsv.js), así que un CSV
+// exportado con "Exportar Padrón" también sirve para reimportar.
 
 export default function ImportPadronModal({ organizationId, onClose, onImported }) {
   const [tab, setTab] = useState('socios')
@@ -86,11 +95,6 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
     }
   }
 
-  const templateColumns =
-    tab === 'socios'
-      ? 'ID_Socio,ID_Organizacion,codigo_finca,socio_nombre_completo,socio_dni,...'
-      : 'ID_Parcela_Fija,ID_Organizacion,ID_Socio,parcela_codigo,parcela_nombre,hcp,hcc,ho,hip,hrp,hbp,otros_cultivo,totalh'
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
@@ -116,11 +120,18 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
           ))}
         </div>
 
-        <p className="mb-3 text-xs text-gray-500">
-          Encabezado esperado: <code className="rounded bg-gray-100 px-1 font-mono">{templateColumns}</code>. La
-          forma más simple de generar un CSV válido es exportar el padrón actual ("Exportar Padrón (CSV)") y
-          editarlo.
-        </p>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-gray-500">
+            Acepta encabezados legibles ("Código de Socio", "DNI", …) o técnicos ("ID_Socio", "socio_dni", …).
+          </p>
+          <button
+            type="button"
+            onClick={() => (tab === 'socios' ? downloadSocioTemplate() : downloadParcelaTemplate())}
+            className="whitespace-nowrap rounded-lg border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+          >
+            ⬇ Descargar Plantilla de {tab === 'socios' ? 'Socios' : 'Parcelas'} (.csv)
+          </button>
+        </div>
 
         <input
           type="file"
@@ -155,7 +166,7 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
                     <tr key={r.index} className={r.valid ? '' : 'bg-red-50/50'}>
                       <td className="px-2 py-1.5 text-gray-500">{r.index + 2}</td>
                       <td className="px-2 py-1.5 font-mono text-gray-700">
-                        {r.raw.ID_Socio || r.raw.ID_Parcela_Fija || '—'}
+                        {r.normalized.ID_Socio || r.normalized.ID_Parcela_Fija || '—'}
                       </td>
                       <td className="px-2 py-1.5">
                         {r.valid ? (

@@ -8,7 +8,7 @@ import { fetchSocios, resolveActiveOrganizationId } from '@/lib/sociosSearch'
 import { CERT_FLAG_FIELDS } from '@/lib/validations/socios'
 import { deactivateSocio } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
-import { exportPadronCsv } from '@/lib/padronCsv'
+import { exportSociosCsv, exportParcelasCsv } from '@/lib/padronCsv'
 import SocioFormModal from '@/components/features/socios/SocioFormModal'
 import ParcelaFormModal from '@/components/features/socios/ParcelaFormModal'
 import ImportPadronModal from '@/components/features/socios/ImportPadronModal'
@@ -96,17 +96,31 @@ export default function SociosPage() {
     load()
   }
 
-  async function handleExportCsv() {
+  async function handleExportSocios() {
     const supabase = getSupabaseClient()
     if (!supabase) {
       setToast({ type: 'error', message: 'Cliente Supabase no configurado.' })
       return
     }
     try {
-      const { socios, parcelas } = await exportPadronCsv(supabase)
-      setToast({ type: 'success', message: `Exportado: ${socios} socio(s), ${parcelas} parcela(s).` })
+      const { socios } = await exportSociosCsv(supabase)
+      setToast({ type: 'success', message: `Exportado: ${socios} socio(s).` })
     } catch (err) {
-      setToast({ type: 'error', message: err?.message || 'Error al exportar el padrón.' })
+      setToast({ type: 'error', message: err?.message || 'Error al exportar el padrón de socios.' })
+    }
+  }
+
+  async function handleExportParcelas() {
+    const supabase = getSupabaseClient()
+    if (!supabase) {
+      setToast({ type: 'error', message: 'Cliente Supabase no configurado.' })
+      return
+    }
+    try {
+      const { parcelas } = await exportParcelasCsv(supabase)
+      setToast({ type: 'success', message: `Exportado: ${parcelas} parcela(s).` })
+    } catch (err) {
+      setToast({ type: 'error', message: err?.message || 'Error al exportar el padrón de parcelas.' })
     }
   }
 
@@ -143,11 +157,19 @@ export default function SociosPage() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={handleExportCsv}
+            onClick={handleExportSocios}
             className="rounded-lg border border-gray-200 px-4 py-2 text-center text-sm font-semibold text-gray-600 hover:bg-gray-50"
-            title="Exporta todo el padrón activo (socios + parcelas), no solo esta página"
+            title="Exporta todo el padrón de socios activos, no solo esta página"
           >
-            ⬇ Exportar Padrón (CSV)
+            ⬇ Exportar Padrón de Socios (CSV)
+          </button>
+          <button
+            type="button"
+            onClick={handleExportParcelas}
+            className="rounded-lg border border-gray-200 px-4 py-2 text-center text-sm font-semibold text-gray-600 hover:bg-gray-50"
+            title="Exporta todas las parcelas activas, no solo esta página"
+          >
+            ⬇ Exportar Padrón de Parcelas (CSV)
           </button>
           <button
             type="button"
