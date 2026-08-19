@@ -277,6 +277,28 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
 > PII ya establecido por Tarea 14 — `socio_dni`, `socio_nombre_completo`,
 > `socio_nombre`, `conyuge_dni`).
 
+> **Fix de columnas rotas + geom_geojson (2026-08-18,
+> `20260818_fix_dashboard_view_columns.sql`):** `app/page.jsx` pedía
+> `hectareas`/`riesgo_satelital`/`lot_hash` — ninguna existía en esta
+> vista, confirmado por error real en vivo
+> (`column view_eudr_dashboard_aprobados.hectareas does not exist`).
+> Corregido: `app/page.jsx` ahora usa `hectareas_totales` (columna real);
+> `riesgo_satelital` se removió del todo (nunca se calculó ni persistió en
+> ningún lado de este schema, no solo faltaba en el SELECT); `lot_hash` se
+> removió de la tabla por fila (es un concepto agregado por organización,
+> no por parcela, y por diseño nunca se persiste) — el enlace a
+> trazabilidad pública se movió a un único link de sección hacia
+> `/dashboard/lotes`, que ya cubre esa función correctamente.
+> `components/RiskBadge.jsx` se eliminó (quedó sin ningún consumidor).
+> También se agregó `geom_geojson` a la vista (mismo patrón que
+> `vw_monitoreo_web`) porque `components/EUDRMap.jsx` hacía
+> `JSON.parse(record.geom)` directo sobre geometry cruda (WKB hex, no
+> GeoJSON) — fallaba silenciosamente para cada fila, el mapa nunca
+> mostraba ningún polígono. **Esta migración (`20260818_fix_dashboard_view_columns.sql`)
+> no estaba aplicada al momento de escribir esta nota** — confirmado en
+> vivo: `hectareas_totales` ya funciona, `geom_geojson` todavía no existe
+> hasta que se aplique.
+
 ## Funciones
 
 | Función | Retorno | Uso |
@@ -361,13 +383,21 @@ a `authenticated` + coincidencia de `(storage.foldername(name))[1]` con
 9. `20260818_rls_multi_tenant_fortification.sql` —
    re-certificación idempotente de RLS Zero-Trust en `ORGANIZACIONES`/
    `EUDR_*` + fix de PII/tenant en `view_eudr_dashboard_aprobados`.
-10. `20260818_inspecciones_atomic_save.sql` — **este documento** —
+10. `20260818_inspecciones_atomic_save.sql` —
     `public.fn_guardar_inspeccion_completa`, guardado atómico de
     `INSPECCIONES` + 6 `CAP_*` (reemplaza 7 llamadas REST no atómicas).
+11. `20260818_fix_dashboard_view_columns.sql` — **este documento** — agrega
+    `geom_geojson` a `view_eudr_dashboard_aprobados` (fix del error real
+    `column view_eudr_dashboard_aprobados.hectareas does not exist` en
+    `app/page.jsx`, ver sección de esa vista arriba). **No confirmada
+    aplicada** — es la única de las 11 sin verificar en vivo todavía
+    (escrita después de la verificación de `docs/audits/verification_checklist_20260818.md`).
 
-Ninguna de estas migraciones se ha confirmado aplicada contra la instancia
-`jhtocgxlozfuzullrtol` desde este entorno de desarrollo — requieren ejecución
-manual en Supabase Studio. **Nota de orden de aplicación:** `20260818_gis_core_sanitization.sql`
+**Las migraciones 1–10 SÍ se confirmaron aplicadas y funcionando en vivo**
+contra `jhtocgxlozfuzullrtol` (ver
+`docs/audits/verification_checklist_20260818.md` para la evidencia
+completa de cada una — consultas REST reales, sin necesitar Service Role
+Key). **Nota de orden de aplicación:** `20260818_gis_core_sanitization.sql`
 debe aplicarse antes que `20260818_fix_views_eudr_flags.sql` (esta última
 selecciona columnas que la primera crea). `20260818_inspecciones_atomic_save.sql`
 depende de que `20260818_fix_inspecciones_rls.sql` ya esté aplicada (las

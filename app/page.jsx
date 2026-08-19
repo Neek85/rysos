@@ -5,18 +5,31 @@ export const dynamic = 'force-dynamic'
 import { useEffect, useState } from 'react'
 import nextDynamic from 'next/dynamic'
 import { getSupabaseClient } from '@/lib/supabaseClient'
-import RiskBadge from '@/components/RiskBadge'
 
 const EUDRMap = nextDynamic(() => import('@/components/EUDRMap'), { ssr: false })
 
+// INVARIANTE (fix 2026-08-18): esta lista pedía `hectareas`,
+// `riesgo_satelital` y `lot_hash` — ninguna existe en
+// view_eudr_dashboard_aprobados (confirmado en vivo: error real
+// "column view_eudr_dashboard_aprobados.hectareas does not exist").
+// `hectareas_totales` es la columna real (PADRON_PARCELAS.totalh).
+// `riesgo_satelital` nunca se calculó ni persistió en ningún lado de
+// este schema — no hay fuente de datos, se removió del todo (no solo
+// del SELECT) en vez de dejar una columna de UI permanentemente vacía.
+// `lot_hash` es un concepto agregado POR ORGANIZACIÓN, no por
+// parcela/fila, y por diseño nunca se persiste (siempre se recalcula,
+// ver specs/trace_public_audit.md) — no tiene sentido como columna de
+// esta tabla; el enlace a trazabilidad pública vive en /dashboard/lotes.
+// `geom_geojson` (nueva, supabase/migrations/20260818_fix_dashboard_view_columns.sql)
+// reemplaza `geom` crudo: PostgREST serializa `geometry` como WKB hex,
+// no GeoJSON — components/EUDRMap.jsx hacía JSON.parse(record.geom)
+// directo, que fallaba silenciosamente para cada fila.
 const VIEW_COLUMNS = [
   'id_monitoreo',
   'parcela_codigo',
-  'hectareas',
+  'hectareas_totales',
   'estado_revision',
-  'riesgo_satelital',
-  'geom',
-  'lot_hash',
+  'geom_geojson',
   'ID_Organizacion',
 ].join(',')
 
@@ -52,12 +65,14 @@ export default function DashboardPage() {
     if (!supabase) return
 
     // Realtime: Supabase no soporta suscripción directa a vistas;
-    // observamos la tabla subyacente y refrescamos la vista.
+    // observamos la tabla subyacente (EUDR_MONITOREO, de donde sale esta
+    // vista) y refrescamos. Antes apuntaba a `monitoreo_lotes`, una tabla
+    // que no existe en este schema — la suscripción nunca disparaba.
     const channel = supabase
       .channel('monitoreo_changes')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'monitoreo_lotes' },
+        { event: '*', schema: 'public', table: 'EUDR_MONITOREO' },
         fetchRecords
       )
       .subscribe()
@@ -81,20 +96,6 @@ export default function DashboardPage() {
             Visor WebGIS — Parcelas Aprobadas
           </h2>
           <EUDRMap records={records} />
-          <div className="mt-3 flex gap-4 text-xs text-gray-500">
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-red-400 inline-block" /> CRÍTICO
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-orange-400 inline-block" /> ALTO
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-green-400 inline-block" /> BAJO
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-slate-300 inline-block" /> Sin evaluación
-            </span>
-          </div>
         </section>
 
         {/* Tabla de lotes aprobados */}
@@ -108,6 +109,12 @@ export default function DashboardPage() {
                 </span>
               )}
             </h2>
+            <a
+              href="/dashboard/lotes"
+              className="text-xs text-green-700 hover:text-green-900 underline underline-offset-2"
+            >
+              Ver trazabilidad pública →
+            </a>
           </div>
 
           {loading && (
@@ -142,15 +149,6 @@ export default function DashboardPage() {
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Estado
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Riesgo EUDR
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Hash Lote
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Trazabilidad
-                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50 bg-white">
@@ -163,28 +161,12 @@ export default function DashboardPage() {
                         {r.parcela_codigo}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-600">
-                        {r.hectareas} ha
+                        {r.hectareas_totales} ha
                       </td>
                       <td className="px-4 py-3">
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800">
                           {r.estado_revision}
                         </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <RiskBadge risk={r.riesgo_satelital} />
-                      </td>
-                      <td className="px-4 py-3 text-xs font-mono text-gray-400 truncate max-w-[140px]">
-                        {r.lot_hash ?? '—'}
-                      </td>
-                      <td className="px-4 py-3">
-                        {r.lot_hash && (
-                          <a
-                            href={`/trace/${r.lot_hash}`}
-                            className="text-xs text-green-700 hover:text-green-900 underline underline-offset-2"
-                          >
-                            Ver →
-                          </a>
-                        )}
                       </td>
                     </tr>
                   ))}

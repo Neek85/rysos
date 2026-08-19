@@ -68,21 +68,23 @@ export default function EUDRMap({ records }) {
 
   function renderLayers(L, map, data) {
     data.forEach((record) => {
-      if (!record.geom) return
+      // geom_geojson (no `geom` crudo, fix 2026-08-18): PostgREST
+      // serializa `geometry` como WKB hex, no como GeoJSON —
+      // JSON.parse(record.geom) fallaba silenciosamente para cada fila.
+      // geom_geojson ya es un objeto JS (columna `json` de Postgres, no
+      // texto), no hace falta JSON.parse.
+      if (!record.geom_geojson) return
       try {
-        const geom = typeof record.geom === 'string' ? JSON.parse(record.geom) : record.geom
         const layer = L.geoJSON(
-          { type: 'Feature', geometry: geom, properties: record },
+          { type: 'Feature', geometry: record.geom_geojson, properties: record },
           { style: () => featureStyle(record.riesgo_satelital) }
         ).bindPopup(
           `<strong>${record.parcela_codigo}</strong><br/>` +
-          `${record.hectareas} ha<br/>` +
-          `Riesgo: ${record.riesgo_satelital ?? 'Pendiente'}<br/>` +
-          `<a href="/trace/${record.lot_hash}" target="_blank" rel="noreferrer">Ver trazabilidad →</a>`
+          `${record.hectareas_totales ?? '—'} ha`
         ).addTo(map)
         layersRef.current.push(layer)
       } catch {
-        // geom inválida — se omite
+        // geom_geojson inválida — se omite
       }
     })
   }
