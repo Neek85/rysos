@@ -9,6 +9,7 @@ import { parcelaSchema, PARCELA_DEFAULT_VALUES } from '@/lib/validations/socios'
 import { fetchParcelasBySocio } from '@/lib/sociosSearch'
 import { createParcela, updateParcela } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
+import { computeNextParcelaCode, computeSuggestedParcelaId } from '@/lib/parcelaDefaults'
 import GeometryUploadField from './GeometryUploadField'
 
 const HECTARE_FIELDS = [
@@ -21,9 +22,16 @@ const HECTARE_FIELDS = [
   { field: 'otros_cultivo', label: 'Ha. Otros Cultivos' },
 ]
 
-function ParcelaForm({ socioId, organizationId, parcela, onSaved, onCancel }) {
+function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, onSaved, onCancel }) {
   const isEdit = Boolean(parcela)
   const [geometry, setGeometry] = useState(null)
+
+  // Correlativo automático + ID de Parcela sugerido (solo al crear una
+  // parcela nueva — en edición se usan los valores reales existentes).
+  // Son solo un punto de partida editable, no un valor forzado.
+  const suggestedCode = isEdit ? '' : computeNextParcelaCode(existingParcelas)
+  const suggestedId = isEdit ? '' : computeSuggestedParcelaId(socioId, suggestedCode)
+
   const {
     register,
     handleSubmit,
@@ -34,7 +42,7 @@ function ParcelaForm({ socioId, organizationId, parcela, onSaved, onCancel }) {
     resolver: zodResolver(parcelaSchema),
     defaultValues: parcela
       ? { ...PARCELA_DEFAULT_VALUES, ...parcela }
-      : { ...PARCELA_DEFAULT_VALUES, ID_Socio: socioId },
+      : { ...PARCELA_DEFAULT_VALUES, ID_Socio: socioId, ID_Parcela_Fija: suggestedId, parcela_codigo: suggestedCode },
   })
 
   const watched = watch(['hcp', 'hcc', 'ho', 'hip', 'hrp', 'hbp', 'otros_cultivo'])
@@ -76,8 +84,14 @@ function ParcelaForm({ socioId, organizationId, parcela, onSaved, onCancel }) {
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {HECTARE_FIELDS.map(({ field, label }) => (
-          <FormField key={field} label={label}>
-            <input type="number" step="any" className={inputClass(false)} {...register(field)} />
+          <FormField key={field} label={label} error={errors[field]?.message}>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              className={inputClass(errors[field])}
+              {...register(field)}
+            />
           </FormField>
         ))}
       </div>
@@ -212,6 +226,7 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
               <ParcelaForm
                 socioId={socio.ID_Socio}
                 organizationId={organizationId}
+                existingParcelas={parcelas}
                 onSaved={handleSaved}
                 onCancel={() => setShowNewForm(false)}
               />

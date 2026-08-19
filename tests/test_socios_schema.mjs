@@ -126,3 +126,19 @@ test('parcelaSchema acepta campos de hectáreas nulos', () => {
   const result = parcelaSchema.safeParse(validParcela({ hcp: null }))
   assert.equal(result.success, true)
 })
+
+test('parcelaSchema acepta 0 hectáreas (límite válido, no negativo)', () => {
+  assert.equal(parcelaSchema.safeParse(validParcela({ hcp: 0 })).success, true)
+})
+
+test('parcelaSchema rechaza hectáreas negativas en cualquiera de las 7 categorías', () => {
+  for (const field of ['hcp', 'hcc', 'ho', 'hip', 'hrp', 'hbp', 'otros_cultivo']) {
+    const result = parcelaSchema.safeParse(validParcela({ [field]: -1 }))
+    assert.equal(result.success, false, `${field} debería rechazar un valor negativo`)
+  }
+})
+
+test('parcelaSchema rechaza un string de hectáreas negativo (coerción antes de validar)', () => {
+  const result = parcelaSchema.safeParse(validParcela({ hcp: '-2.5' }))
+  assert.equal(result.success, false)
+})
