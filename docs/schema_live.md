@@ -102,20 +102,49 @@ expondría DNI/nombre real a cualquiera con la anon key pública. En su lugar:
   `fn_guardar_inspeccion_completa`): la organización activa viene del
   cliente, y en edición se valida contra la organización real del registro
   existente antes de escribir.
-- **⚠️ `SUPABASE_SERVICE_ROLE_KEY` no está configurada en `.env.local`** —
-  confirmado, sin imprimir el valor. La lectura funciona igual; **la
-  escritura (alta/edición de socio o parcela) falla con un mensaje claro
-  hasta que se agregue esa variable**, aquí y en el entorno de despliegue
-  real. Verificado en vivo (dev server + navegador): el flujo completo
-  corre correctamente hasta ese punto — Server Action invocada, Zod
-  validado, error exacto mostrado en el modal, cero filas escritas
-  (confirmado por consulta REST directa tras el intento).
+- **`SUPABASE_SERVICE_ROLE_KEY`:** el usuario la agregó a `.env.local` el
+  mismo día (después de que se confirmara faltante) — la escritura real ya
+  se probó en vivo (crear/editar socios, ver historial de la sesión). El
+  flujo hasta ahí (Server Action → Zod → escritura) fue verificado
+  funcionando correctamente antes de que se agregara la clave (fallaba con
+  el mensaje claro esperado, cero filas escritas) y después (escritura
+  real confirmada por el usuario probando la UI).
 - **Geometría de parcela:** carga de archivo `.geojson`/`.json`/`.kml`/`.csv`
   (`lib/geometryImport.js`, incluye `@tmcw/togeojson`+`@xmldom/xmldom` como
   dependencias nuevas para KML), sanitizada server-side vía RPC
   `fn_sanitize_geometry` (`lib/actions/sociosActions.js::sanitizeGeometryForStorage`)
   antes de guardar — mismo mecanismo ya confirmado funcionando en
   `docs/audits/verification_checklist_20260818.md`.
+- **Baja lógica (2026-08-18, `20260818_padron_baja_logica.sql`):** columna
+  `activo boolean default true` agregada a ambas tablas — decisión
+  confirmada con el usuario (no DELETE físico, ya que el padrón es
+  compartido con otro repositorio y sus IDs pueden estar referenciados
+  desde `INSPECCIONES`/`EUDR_MONITOREO`). `lib/sociosSearch.js` filtra
+  `activo = true` por defecto — **requiere esta migración aplicada, sin
+  ella las consultas de lectura del módulo fallan** con "column ... activo
+  does not exist". `deactivateSocio`/`deactivateParcela`
+  (`lib/actions/sociosActions.js`) ponen `activo = false`, con la misma
+  validación multi-tenant que el resto de las Server Actions del módulo.
+- **Ubigeo Perú (`lib/data/ubigeo_peru.json`):** dataset de 25
+  departamentos / 196 provincias / ~1869 distritos generado por el modelo
+  a partir de su conocimiento de entrenamiento — **no descargado ni
+  verificado contra una fuente oficial INEI en vivo** (sin acceso a
+  internet en este entorno), decisión confirmada explícitamente con el
+  usuario pese a la advertencia. Ver el campo `_meta` del propio JSON para
+  el detalle de confianza por nivel. `components/features/socios/UbigeoSelect.jsx`
+  siempre ofrece "Otro / no está en la lista" en los 3 niveles, así que un
+  distrito real ausente del dataset nunca bloquea el alta de un socio —
+  cae automáticamente a texto libre, incluso al editar un socio existente
+  cuyo departamento/provincia/distrito no esté en el JSON.
+- **Exportación/Importación CSV (`lib/padronCsv.js`):** exporta todo el
+  padrón activo (no solo la página visible) en dos archivos
+  (`Padron_Socios_*.csv`, `Padron_Parcelas_*.csv`). La importación
+  (`components/features/socios/ImportPadronModal.jsx`) exige una vista
+  previa (válidas vs. con error, vía los mismos schemas Zod que el
+  formulario) antes de escribir nada — decisión confirmada con el usuario,
+  dado que la escritura usa la Service Role Key. Cada fila válida se
+  guarda reutilizando `createSocio`/`createParcela` (no una RPC bulk
+  nueva), así que hereda automáticamente toda su validación multi-tenant.
 
 ### `public."EUDR_MONITOREO"`
 - `id_monitoreo` (uuid, PK — **no** tiene columna `fid`, a diferencia de
@@ -386,12 +415,16 @@ a `authenticated` + coincidencia de `(storage.foldername(name))[1]` con
 10. `20260818_inspecciones_atomic_save.sql` —
     `public.fn_guardar_inspeccion_completa`, guardado atómico de
     `INSPECCIONES` + 6 `CAP_*` (reemplaza 7 llamadas REST no atómicas).
-11. `20260818_fix_dashboard_view_columns.sql` — **este documento** — agrega
+11. `20260818_fix_dashboard_view_columns.sql` — agrega
     `geom_geojson` a `view_eudr_dashboard_aprobados` (fix del error real
     `column view_eudr_dashboard_aprobados.hectareas does not exist` en
-    `app/page.jsx`, ver sección de esa vista arriba). **No confirmada
-    aplicada** — es la única de las 11 sin verificar en vivo todavía
-    (escrita después de la verificación de `docs/audits/verification_checklist_20260818.md`).
+    `app/page.jsx`, ver sección de esa vista arriba).
+12. `20260818_padron_baja_logica.sql` — **este documento** — agrega
+    `activo boolean default true` a `PADRON_SOCIOS`/`PADRON_PARCELAS` (baja
+    lógica desde `/dashboard/socios`, nunca DELETE físico).
+
+**No confirmadas aplicadas todavía** (escritas después de la verificación
+de `docs/audits/verification_checklist_20260818.md`): la 11 y la 12.
 
 **Las migraciones 1–10 SÍ se confirmaron aplicadas y funcionando en vivo**
 contra `jhtocgxlozfuzullrtol` (ver

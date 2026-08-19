@@ -93,11 +93,15 @@ test('CERT_FLAG_FIELDS tiene exactamente las 8 columnas reales confirmadas contr
 // parcelaSchema
 // ---------------------------------------------------------------
 
+// hcp: 2 por defecto — desde que se agregó la regla de área total > 0 ha
+// (2026-08-18), una parcela "mínima válida" ya no puede tener las 7
+// hectáreas en null/0: necesita al menos una categoría positiva.
 function validParcela(overrides = {}) {
   return {
     ...PARCELA_DEFAULT_VALUES,
     ID_Parcela_Fija: 'COOP-JS-003',
     ID_Socio: 'JS-00003',
+    hcp: 2,
     ...overrides,
   }
 }
@@ -122,13 +126,21 @@ test('parcelaSchema coerciona campos de hectáreas de string a número', () => {
   assert.equal(result.data.hcc, 0)
 })
 
-test('parcelaSchema acepta campos de hectáreas nulos', () => {
-  const result = parcelaSchema.safeParse(validParcela({ hcp: null }))
+test('parcelaSchema acepta campos de hectáreas nulos (mientras otra categoría cubra el área total)', () => {
+  const result = parcelaSchema.safeParse(validParcela({ hcp: null, hcc: 3 }))
   assert.equal(result.success, true)
 })
 
-test('parcelaSchema acepta 0 hectáreas (límite válido, no negativo)', () => {
-  assert.equal(parcelaSchema.safeParse(validParcela({ hcp: 0 })).success, true)
+test('parcelaSchema acepta 0 hectáreas en un campo (límite válido, no negativo) mientras otra categoría cubra el área total', () => {
+  assert.equal(parcelaSchema.safeParse(validParcela({ hcp: 0, hcc: 3 })).success, true)
+})
+
+test('parcelaSchema rechaza una parcela con las 7 categorías en 0/null (área total debe ser > 0.00 ha)', () => {
+  const result = parcelaSchema.safeParse(
+    validParcela({ hcp: 0, hcc: null, ho: null, hip: null, hrp: null, hbp: null, otros_cultivo: null })
+  )
+  assert.equal(result.success, false)
+  assert.ok(result.error.issues.some((i) => i.message.includes('mayor a 0.00 ha')))
 })
 
 test('parcelaSchema rechaza hectáreas negativas en cualquiera de las 7 categorías', () => {

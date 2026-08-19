@@ -7,6 +7,7 @@ import { FormField, inputClass } from '@/components/ui/FormField'
 import { socioSchema, SOCIO_DEFAULT_VALUES, CERT_FLAG_FIELDS } from '@/lib/validations/socios'
 import { createSocio, updateSocio } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
+import UbigeoSelect from './UbigeoSelect'
 
 function SiNoSelect({ register, name, label }) {
   return (
@@ -25,6 +26,8 @@ export default function SocioFormModal({ socio, organizationId, onClose, onSaved
   const {
     register,
     handleSubmit,
+    watch,
+    setValue,
     formState: { errors, isSubmitting },
     setError,
   } = useForm({
@@ -82,7 +85,14 @@ export default function SocioFormModal({ socio, organizationId, onClose, onSaved
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormField label="DNI" error={errors.socio_dni?.message}>
-              <input type="text" className={inputClass(errors.socio_dni)} placeholder="8 dígitos" {...register('socio_dni')} />
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={8}
+                className={inputClass(errors.socio_dni)}
+                placeholder="8 dígitos"
+                {...register('socio_dni')}
+              />
             </FormField>
             <FormField label="Género">
               <select className={inputClass(false)} {...register('socio_genero')}>
@@ -97,8 +107,15 @@ export default function SocioFormModal({ socio, organizationId, onClose, onSaved
             <FormField label="Fecha de Nacimiento">
               <input type="date" className={inputClass(false)} {...register('socio_fecha_nacimiento')} />
             </FormField>
-            <FormField label="Celular">
-              <input type="text" className={inputClass(false)} {...register('celular_socio')} />
+            <FormField label="Celular" error={errors.celular_socio?.message}>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={9}
+                placeholder="9 dígitos"
+                className={inputClass(errors.celular_socio)}
+                {...register('celular_socio')}
+              />
             </FormField>
           </div>
 
@@ -107,21 +124,17 @@ export default function SocioFormModal({ socio, organizationId, onClose, onSaved
               <input type="text" className={inputClass(false)} {...register('conyuge_nombre')} />
             </FormField>
             <FormField label="DNI del Cónyuge" error={errors.conyuge_dni?.message}>
-              <input type="text" className={inputClass(errors.conyuge_dni)} {...register('conyuge_dni')} />
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={8}
+                className={inputClass(errors.conyuge_dni)}
+                {...register('conyuge_dni')}
+              />
             </FormField>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <FormField label="Departamento">
-              <input type="text" className={inputClass(false)} {...register('socio_departamento')} />
-            </FormField>
-            <FormField label="Provincia">
-              <input type="text" className={inputClass(false)} {...register('socio_provincia')} />
-            </FormField>
-            <FormField label="Distrito">
-              <input type="text" className={inputClass(false)} {...register('socio_distrito')} />
-            </FormField>
-          </div>
+          <UbigeoSelect register={register} watch={watch} setValue={setValue} errors={errors} />
 
           <FormField label="Localidad">
             <input type="text" className={inputClass(false)} {...register('localidad')} />

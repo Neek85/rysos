@@ -6,8 +6,13 @@ import { useEffect, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import { fetchSocios, resolveActiveOrganizationId } from '@/lib/sociosSearch'
 import { CERT_FLAG_FIELDS } from '@/lib/validations/socios'
+import { deactivateSocio } from '@/lib/actions/sociosActions'
+import { SocioActionError } from '@/lib/actions/socioActionError'
+import { exportPadronCsv } from '@/lib/padronCsv'
 import SocioFormModal from '@/components/features/socios/SocioFormModal'
 import ParcelaFormModal from '@/components/features/socios/ParcelaFormModal'
+import ImportPadronModal from '@/components/features/socios/ImportPadronModal'
+import ConfirmDialog from '@/components/ui/ConfirmDialog'
 
 export default function SociosPage() {
   const [rows, setRows] = useState([])
@@ -26,6 +31,9 @@ export default function SociosPage() {
   const [showNewSocio, setShowNewSocio] = useState(false)
   const [parcelasSocio, setParcelasSocio] = useState(null)
   const [toast, setToast] = useState(null)
+  const [socioToDeactivate, setSocioToDeactivate] = useState(null)
+  const [deactivating, setDeactivating] = useState(false)
+  const [showImport, setShowImport] = useState(false)
 
   // FIX (2026-08-18, "Violación multi-tenant" falso positivo al editar
   // parcelas): esta tabla no filtra por ID_Organizacion (fetchSocios no
@@ -88,6 +96,38 @@ export default function SociosPage() {
     load()
   }
 
+  async function handleExportCsv() {
+    const supabase = getSupabaseClient()
+    if (!supabase) {
+      setToast({ type: 'error', message: 'Cliente Supabase no configurado.' })
+      return
+    }
+    try {
+      const { socios, parcelas } = await exportPadronCsv(supabase)
+      setToast({ type: 'success', message: `Exportado: ${socios} socio(s), ${parcelas} parcela(s).` })
+    } catch (err) {
+      setToast({ type: 'error', message: err?.message || 'Error al exportar el padrón.' })
+    }
+  }
+
+  async function handleConfirmDeactivate() {
+    if (!socioToDeactivate) return
+    setDeactivating(true)
+    try {
+      await deactivateSocio(socioToDeactivate.ID_Socio, socioToDeactivate.ID_Organizacion)
+      setToast({ type: 'success', message: `Socio ${socioToDeactivate.ID_Socio} dado de baja.` })
+      setSocioToDeactivate(null)
+      load()
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: err instanceof SocioActionError ? err.message : err?.message || 'Error al dar de baja el socio.',
+      })
+    } finally {
+      setDeactivating(false)
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return (
@@ -99,13 +139,30 @@ export default function SociosPage() {
             {total > 0 ? `${total} socio(s) encontrado(s)` : 'Sin registros'}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowNewSocio(true)}
-          className="rounded-lg bg-green-800 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-green-900"
-        >
-          + Nuevo Socio
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            className="rounded-lg border border-gray-200 px-4 py-2 text-center text-sm font-semibold text-gray-600 hover:bg-gray-50"
+            title="Exporta todo el padrón activo (socios + parcelas), no solo esta página"
+          >
+            ⬇ Exportar Padrón (CSV)
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowImport(true)}
+            className="rounded-lg border border-gray-200 px-4 py-2 text-center text-sm font-semibold text-gray-600 hover:bg-gray-50"
+          >
+            ⬆ Cargar Padrón Masivo (CSV)
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowNewSocio(true)}
+            className="rounded-lg bg-green-800 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-green-900"
+          >
+            + Nuevo Socio
+          </button>
+        </div>
       </div>
 
       {toast && (
@@ -238,6 +295,13 @@ export default function SociosPage() {
                         >
                           Editar
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setSocioToDeactivate(row)}
+                          className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                        >
+                          Dar de baja
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -294,6 +358,27 @@ export default function SociosPage() {
           socio={parcelasSocio}
           organizationId={parcelasSocio.ID_Organizacion}
           onClose={() => setParcelasSocio(null)}
+        />
+      )}
+      {socioToDeactivate && (
+        <ConfirmDialog
+          title="Dar de baja al socio"
+          message={`¿Confirmás dar de baja a ${socioToDeactivate.socio_nombre_completo || socioToDeactivate.ID_Socio}? Deja de aparecer en el padrón activo, pero el registro y su historial se conservan (no se elimina físicamente).`}
+          confirmLabel="Dar de baja"
+          loading={deactivating}
+          onConfirm={handleConfirmDeactivate}
+          onCancel={() => setSocioToDeactivate(null)}
+        />
+      )}
+      {showImport && (
+        <ImportPadronModal
+          organizationId={organizationId}
+          onClose={() => setShowImport(false)}
+          onImported={(summary) => {
+            setShowImport(false)
+            setToast({ type: 'success', message: `Importación completa: ${summary.created} socio(s) creado(s).` })
+            load()
+          }}
         />
       )}
     </div>

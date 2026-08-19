@@ -5,12 +5,13 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { FormField, inputClass } from '@/components/ui/FormField'
 import { getSupabaseClient } from '@/lib/supabaseClient'
-import { parcelaSchema, PARCELA_DEFAULT_VALUES } from '@/lib/validations/socios'
+import { parcelaSchema, PARCELA_DEFAULT_VALUES, HECTARE_FIELD_KEYS } from '@/lib/validations/socios'
 import { fetchParcelasBySocio } from '@/lib/sociosSearch'
-import { createParcela, updateParcela } from '@/lib/actions/sociosActions'
+import { createParcela, updateParcela, deactivateParcela } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
 import { computeNextParcelaCode, computeSuggestedParcelaId } from '@/lib/parcelaDefaults'
 import GeometryUploadField from './GeometryUploadField'
+import ConfirmDialog from '@/components/ui/ConfirmDialog'
 
 const HECTARE_FIELDS = [
   { field: 'hcp', label: 'Ha. Café Podado' },
@@ -45,7 +46,7 @@ function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, onSav
       : { ...PARCELA_DEFAULT_VALUES, ID_Socio: socioId, ID_Parcela_Fija: suggestedId, parcela_codigo: suggestedCode },
   })
 
-  const watched = watch(['hcp', 'hcc', 'ho', 'hip', 'hrp', 'hbp', 'otros_cultivo'])
+  const watched = watch(HECTARE_FIELD_KEYS)
   const totalPreview = watched.reduce((acc, v) => acc + (Number(v) || 0), 0)
 
   async function onSubmit(values) {
@@ -65,11 +66,14 @@ function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, onSav
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 rounded-xl border border-gray-200 bg-gray-50/50 p-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <FormField label="ID de Parcela" required error={errors.ID_Parcela_Fija?.message}>
+          {/* Siempre de solo lectura: se autogenera como
+              [CODIGO_SOCIO]-[CORRELATIVO] (lib/parcelaDefaults.js) al crear,
+              y nunca es editable en edición tampoco — es la PK del registro. */}
           <input
             type="text"
-            disabled={isEdit}
+            readOnly
+            disabled
             className={`${inputClass(errors.ID_Parcela_Fija)} disabled:bg-gray-100 disabled:text-gray-400`}
-            placeholder="ej: COOP-JS-003"
             {...register('ID_Parcela_Fija')}
           />
         </FormField>
@@ -95,8 +99,12 @@ function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, onSav
           </FormField>
         ))}
       </div>
-      <p className="text-xs text-gray-500">
-        Total calculado: <span className="font-semibold text-gray-700">{totalPreview.toFixed(2)} ha</span>
+      <p className={`text-xs ${totalPreview <= 0 ? 'text-red-500' : 'text-gray-500'}`}>
+        Total calculado:{' '}
+        <span className={`font-semibold ${totalPreview <= 0 ? 'text-red-600' : 'text-gray-700'}`}>
+          {totalPreview.toFixed(2)} ha
+        </span>
+        {totalPreview <= 0 && ' — debe ser mayor a 0.00 ha para guardar.'}
       </p>
 
       <GeometryUploadField
@@ -132,6 +140,9 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
   const [error, setError] = useState(null)
   const [editingParcela, setEditingParcela] = useState(null)
   const [showNewForm, setShowNewForm] = useState(false)
+  const [parcelaToDeactivate, setParcelaToDeactivate] = useState(null)
+  const [deactivating, setDeactivating] = useState(false)
+  const [actionError, setActionError] = useState(null)
 
   async function reload() {
     const supabase = getSupabaseClient()
@@ -166,6 +177,21 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
     reload()
   }
 
+  async function handleConfirmDeactivate() {
+    if (!parcelaToDeactivate) return
+    setDeactivating(true)
+    setActionError(null)
+    try {
+      await deactivateParcela(parcelaToDeactivate.ID_Parcela_Fija, socio.ID_Socio, organizationId)
+      setParcelaToDeactivate(null)
+      reload()
+    } catch (err) {
+      setActionError(err instanceof SocioActionError ? err.message : err?.message || 'Error al dar de baja la parcela.')
+    } finally {
+      setDeactivating(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
@@ -181,6 +207,7 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
 
         {loading && <p className="text-sm text-gray-400">Cargando parcelas…</p>}
         {!loading && error && <p className="rounded bg-red-50 p-2 text-sm text-red-600">{error}</p>}
+        {actionError && <p className="mb-3 rounded bg-red-50 p-2 text-sm text-red-600">{actionError}</p>}
 
         {!loading && !error && (
           <div className="space-y-3">
@@ -211,13 +238,22 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
                       {p.totalh ?? 0} ha · {p.geom ? 'Con geometría' : 'Sin geometría'}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setEditingParcela(p)}
-                    className="rounded-lg border border-green-200 bg-green-50 px-3 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
-                  >
-                    Editar
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingParcela(p)}
+                      className="rounded-lg border border-green-200 bg-green-50 px-3 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setParcelaToDeactivate(p)}
+                      className="rounded-lg border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
+                    >
+                      Dar de baja
+                    </button>
+                  </div>
                 </div>
               )
             )}
@@ -242,6 +278,17 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
           </div>
         )}
       </div>
+
+      {parcelaToDeactivate && (
+        <ConfirmDialog
+          title="Dar de baja la parcela"
+          message={`¿Confirmás dar de baja la parcela ${parcelaToDeactivate.parcela_codigo || parcelaToDeactivate.ID_Parcela_Fija}? Deja de aparecer en el padrón activo, pero el registro se conserva (no se elimina físicamente).`}
+          confirmLabel="Dar de baja"
+          loading={deactivating}
+          onConfirm={handleConfirmDeactivate}
+          onCancel={() => setParcelaToDeactivate(null)}
+        />
+      )}
     </div>
   )
 }
