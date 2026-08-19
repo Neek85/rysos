@@ -9,7 +9,8 @@ import {
   parseShapefileZipLayer,
   autoMatchProperties,
 } from '@/lib/gisParser'
-import { uploadGeoSpatialBatch, GIS_TARGET_TABLES } from '@/lib/actions/gisActions'
+import { uploadGeoSpatialBatch } from '@/lib/actions/gisActions'
+import { TARGET_TABLE_LABELS, TARGET_TABLE_FIELDS, GIS_TARGET_TABLES } from '@/lib/gisTargetTables'
 
 // Modal de carga de capas espaciales para /dashboard/mapa — ver
 // specs/gis_ingestor_web.md. Vista previa obligatoria antes de escribir
@@ -20,38 +21,6 @@ import { uploadGeoSpatialBatch, GIS_TARGET_TABLES } from '@/lib/actions/gisActio
 // PENDIENTE de revisión QGIS QC — no aparecen de inmediato en el mapa
 // (que solo muestra APROBADO), aviso explícito en el resumen de carga
 // para que no se lea como un bug.
-
-const TARGET_TABLE_LABELS = {
-  PADRON_PARCELAS: 'Parcelas (Padrón)',
-  EUDR_MONITOREO: 'Monitoreo EUDR (perímetro)',
-  EUDR_USO_SUELO: 'Uso de Suelo',
-  EUDR_INSTALACIONES: 'Instalaciones',
-}
-
-// Campos editables por fila en la vista previa, por tabla destino —
-// `required` solo controla si la fila puede confirmarse desde este modal
-// (chequeo básico de "no vacío"); la validación real y completa vive del
-// lado del servidor (createParcela para PADRON_PARCELAS, o el propio
-// insert para las tablas EUDR_*, ver lib/actions/gisActions.js) y se
-// reporta fila por fila en el resumen si falla ahí.
-const TARGET_TABLE_FIELDS = {
-  PADRON_PARCELAS: [
-    { key: 'ID_Socio', label: 'Código de Socio', required: true },
-    { key: 'parcela_codigo', label: 'Código Interno de Parcela', required: false },
-  ],
-  EUDR_MONITOREO: [
-    { key: 'ID_Socio', label: 'Código de Socio', required: false },
-    { key: 'ID_Parcela_Fija', label: 'Código de Parcela', required: false },
-  ],
-  EUDR_USO_SUELO: [
-    { key: 'id_parcela', label: 'Código de Parcela', required: true },
-    { key: 'tipo_uso', label: 'Tipo de Uso', required: false },
-  ],
-  EUDR_INSTALACIONES: [
-    { key: 'id_parcela', label: 'Código de Parcela', required: true },
-    { key: 'tipo_infra', label: 'Tipo de Infraestructura', required: false },
-  ],
-}
 
 function rowIsValid(overrides, fields) {
   return fields.every((f) => !f.required || (overrides[f.key] ?? '').toString().trim() !== '')
