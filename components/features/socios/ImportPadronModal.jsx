@@ -30,6 +30,7 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
   const [tab, setTab] = useState('socios')
   const [fileName, setFileName] = useState(null)
   const [validated, setValidated] = useState(null)
+  const [validating, setValidating] = useState(false)
   const [parseError, setParseError] = useState(null)
   const [committing, setCommitting] = useState(false)
   const [commitSummary, setCommitSummary] = useState(null)
@@ -51,13 +52,24 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
     if (!file) return
     resetFile()
     setFileName(file.name)
+    setValidating(true)
     try {
       const text = await file.text()
       const rows = parseCsv(text)
-      const result = tab === 'socios' ? validateSocioRows(rows) : validateParcelaRows(rows)
+      const supabase = getSupabaseClient()
+      // Vista previa contra la BD en tiempo real (2026-08-19, pedido
+      // explícito): marca ID_Socio/DNI/códigos ya existentes en la
+      // organización activa como inválidos ANTES de "Confirmar
+      // Importación", no solo al fallar fila por fila después.
+      const result =
+        tab === 'socios'
+          ? await validateSocioRows(rows, supabase, organizationId)
+          : await validateParcelaRows(rows, supabase, organizationId)
       setValidated(result)
     } catch (err) {
       setParseError(err?.message || 'No se pudo leer el archivo CSV.')
+    } finally {
+      setValidating(false)
     }
   }
 
@@ -127,9 +139,12 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
           </p>
           <button
             type="button"
-            onClick={() =>
-              tab === 'socios' ? downloadSocioTemplate() : downloadParcelaTemplate(getSupabaseClient(), organizationId)
-            }
+            onClick={() => {
+              const supabase = getSupabaseClient()
+              return tab === 'socios'
+                ? downloadSocioTemplate(supabase, organizationId)
+                : downloadParcelaTemplate(supabase, organizationId)
+            }}
             className="whitespace-nowrap rounded-lg border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50"
           >
             ⬇ Descargar Plantilla de {tab === 'socios' ? 'Socios' : 'Parcelas'} (.csv)
@@ -140,8 +155,11 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
           type="file"
           accept=".csv"
           onChange={handleFileChange}
-          className="mb-4 block w-full text-xs text-gray-500 file:mr-3 file:rounded-lg file:border-0 file:bg-green-50 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-green-700 hover:file:bg-green-100"
+          disabled={validating}
+          className="mb-4 block w-full text-xs text-gray-500 file:mr-3 file:rounded-lg file:border-0 file:bg-green-50 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-green-700 hover:file:bg-green-100 disabled:opacity-50"
         />
+
+        {validating && <p className="mb-3 text-xs text-gray-500">Validando contra la base de datos…</p>}
 
         {parseError && <p className="mb-3 rounded bg-red-50 p-2 text-sm text-red-600">{parseError}</p>}
 
