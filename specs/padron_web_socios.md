@@ -129,3 +129,95 @@ de sanitización automática que sí tienen `EUDR_MONITOREO`/`EUDR_USO_SUELO`/
 - AC4: `lib/supabaseServerClient.js` nunca se importa desde un archivo
   `'use client'` (verificado por grep, no solo por convención).
 - AC5: `npm run build` compila sin errores.
+
+## Actualización Enterprise (2026-08-18/19) — corrección de premisas del prompt
+
+Un prompt posterior ("[PROMPT PARA CLAUDE]") pidió documentar estas
+actualizaciones asumiendo tres premisas que no coincidían con el repo real
+— verificadas antes de escribir esta sección, mismo criterio que el resto
+de este documento:
+
+- **No existe `ryzos_state_of_the_nation_v3.md`** en ningún lugar del
+  repositorio (`find` exhaustivo, cero resultados). La bitácora de este
+  módulo se agregó a `CLAUDE.md` en su lugar.
+- **No existe script `npm test`** (`package.json` no tiene entrada `test`,
+  y no hay Jest/Vitest/Playwright entre las dependencias — coincide con lo
+  que ya documentaba este mismo `CLAUDE.md`). La suite real de este módulo
+  corre con el test runner nativo de Node: `node --test tests/*.mjs`.
+- **"177/177 tests pasando" es un número real pero mal atribuido.** 177 es
+  el conteo exacto de `node --test tests/*.mjs` (11 archivos, incluye
+  `tests/test_padron_csv.mjs` y `tests/test_socios_schema.mjs` de este
+  módulo) — no de `npm test` (que no existe). Ese número **tampoco incluye
+  la suite Python** (`python -m pytest tests/ -v`, 319 passed + 5 skipped),
+  que es la única que corre en CI
+  (`.github/workflows/test_and_deploy.yml` invoca únicamente
+  `python -m pytest tests/ -v --tb=short`). **Hallazgo no solicitado:** los
+  11 archivos `tests/*.mjs` (incluidos los dos de este módulo) no están
+  conectados a ningún paso de CI — hoy solo se ejecutan si alguien corre
+  `node --test tests/*.mjs` manualmente. Ver `docs/adr/ADR-002-padron-enterprise-y-baja-cascada.md`
+  para el detalle de esta brecha y las funcionalidades documentadas.
+
+### Funcionalidades cubiertas por esta actualización
+
+Confirmadas contra `git log` y lectura directa del código (no contra el
+prompt) — cinco commits sobre este módulo, del más antiguo al más reciente:
+`659548e` (cascada de baja), `8016059` (encabezados humanizados),
+`fa183a8` (plantilla dinámica de parcela + `assertSocioExists`), `8923303`
+(pre-validación síncrona contra la BD), `b770d38` (no toca este módulo,
+fix de columnas en vistas QGIS — mencionado por completitud del rango).
+
+1. **Exportación dividida Socios/Parcelas con encabezados humanizados**
+   (`lib/padronCsv.js:47-73`, `exportSociosCsv`/`exportParcelasCsv`). Cada
+   export es un fetch independiente (`activo = true` únicamente) sobre su
+   propia tabla — no hay un CSV combinado. Los encabezados de columna usan
+   `SOCIO_FIELD_LABELS`/`PARCELA_FIELD_LABELS` (ej. `ID_Socio` → "Código de
+   Socio"), la misma fuente de texto que ya usan los modales de
+   alta/edición (`CERT_FLAG_FIELDS`/`HECTARE_FIELDS` en
+   `lib/validations/socios.js`) — evita que el CSV y el formulario diverjan
+   con el tiempo.
+2. **Plantillas CSV dinámicas pre-calculadas** (`buildSocioTemplateCsv`/
+   `buildParcelaTemplateCsv`, `lib/padronCsv.js:150-192`). El `ID_Socio` de
+   ejemplo en la plantilla de Socios ya no es el `"JS-00001"` fijo (que
+   choca con datos reales de prueba de este proyecto) — se calcula como el
+   siguiente correlativo libre a partir del más alto ya usado en la
+   organización activa (`computeNextCodes`, `lib/parcelaDefaults.js`), con
+   fallback al valor fijo si no hay conexión u organización nueva. La
+   plantilla de Parcelas hace lo mismo para `ID_Socio` (usa hasta 2 socios
+   reales y activos existentes en vez de un ID inventado) y para
+   `ID_Parcela_Fija`/`parcela_codigo` (códigos libres, no `"P-01"` fijo que
+   podría chocar con una parcela real).
+3. **Pre-validación síncrona en la vista previa de carga masiva**
+   (`applySocioDbChecks`/`applyParcelaDbChecks`, `lib/padronCsv.js:358-465`,
+   invocadas desde `validateSocioRows`/`validateParcelaRows` cuando se les
+   pasa `supabase`/`organizationId`). Antes de este cambio, un DNI/Código de
+   Socio/Código de Finca/Parcela Código duplicado contra la base (no solo
+   contra el propio archivo) solo se detectaba al confirmar la importación,
+   fila por fila. Ahora la vista previa consulta la BD en tiempo real
+   (`IN (...)` sobre los valores presentes en el archivo, una sola consulta
+   por campo, no N+1) y marca cada fila inválida con el motivo exacto antes
+   de que el usuario presione "Confirmar Importación". El chequeo al
+   confirmar (`assertDniNotDuplicated`, etc., en
+   `lib/actions/sociosActions.js`) se mantiene sin cambios — es la garantía
+   real ante una carrera entre la vista previa y la confirmación; la
+   pre-validación es una mejora de UX, no un reemplazo.
+4. **Baja lógica con sincronización en cascada** (`deactivateSocio`,
+   `lib/actions/sociosActions.js:410-439`). Dar de baja un socio
+   (`activo = false`) ahora también marca `activo = false` en todas sus
+   filas de `PADRON_PARCELAS` en la misma llamada — antes dejaba las
+   parcelas del socio dado de baja en `activo = true`, huérfanas en el
+   padrón activo. Alcance deliberadamente limitado a `PADRON_PARCELAS`: no
+   toca `EUDR_MONITOREO` ni las vistas WebGIS/EUDR (ver ADR-002, sección
+   "Consecuencias"). Migración de sincronización retroactiva:
+   `supabase/migrations/20260818_sync_parcelas_baja_por_socio_inactivo.sql`
+   (aplica el mismo criterio a bajas ya hechas con el flujo viejo, antes de
+   la cascada).
+5. **Protección multi-tenant e integridad referencial —
+   `assertSocioExists`** (`lib/actions/sociosActions.js:195-208`). Antes de
+   esta función, `createParcela` podía crear una parcela "huérfana" si el
+   `ID_Socio` referenciado no existía en la organización activa (por
+   ejemplo, un CSV importado con un ID mal tipeado) — no había ningún
+   chequeo explícito de existencia del socio padre, a diferencia de
+   `assertMatchesExistingOrg` (que valida el registro que se está
+   editando, no una referencia a otra entidad). `assertSocioExists` se
+   invoca en `createParcela` y su lógica se adelanta también a la vista
+   previa de importación (`applyParcelaDbChecks`, punto 3 arriba).

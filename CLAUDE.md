@@ -28,8 +28,14 @@ npm run start
 npm run lint
 ```
 
-No frontend test runner is installed (no Jest/Vitest/Playwright) — verify UI
-changes with `npm run build` + `npm run dev`.
+No Jest/Vitest/Playwright is installed, and there is no `npm test` script —
+verify UI changes with `npm run build` + `npm run dev`. A handful of pure
+`lib/*.js` modules (currently the Padrón CSV/validation helpers) do have
+unit tests under `tests/*.mjs`, run with Node's built-in test runner:
+`node --test tests/*.mjs` (11 files, 177 tests as of 2026-08-19). **These
+are not wired into CI** — `.github/workflows/test_and_deploy.yml` only runs
+`python -m pytest tests/ -v --tb=short`, so a regression in one of those
+`lib/` files would not fail the pipeline today.
 
 ### Database (Supabase PostGIS)
 
@@ -92,6 +98,28 @@ migrations covers every table.
   used by `app/page.jsx`. It is a separate, legacy line of work from
   `vw_monitoreo_web` — do not conflate the two when a column appears to be
   "missing" from one or the other.
+
+### Padrón module (`/dashboard/socios`) — write path and logical delete
+
+`PADRON_SOCIOS`/`PADRON_PARCELAS` only grant `anon` `SELECT` (deliberate,
+see the RLS gotcha above) — writes go through Next.js Server Actions
+(`lib/actions/sociosActions.js`, `'use server'`) using
+`lib/supabaseServerClient.js` (Service Role Key, never imported from a
+`'use client'` file). Because the Service Role Key bypasses RLS,
+multi-tenant isolation is enforced explicitly in that file
+(`assertMatchesExistingOrg`, `assertParcelaMatchesOrg`,
+`assertSocioExists`) rather than by a policy. Deactivating a record
+(`activo = false`, never a physical `DELETE` — the padrón is shared live
+with another repo and IDs may be referenced from `INSPECCIONES`/
+`EUDR_MONITOREO` without a real FK) cascades from socio to that socio's
+parcelas (`deactivateSocio`) but deliberately stops there — it does not
+touch `EUDR_MONITOREO` or any EUDR/WebGIS view, so monitoring history
+survives a producer leaving the padrón. CSV bulk import
+(`lib/padronCsv.js`) pre-validates rows against the live DB in the preview
+step (`applySocioDbChecks`/`applyParcelaDbChecks`) before the same checks
+run again at write time. See `specs/padron_web_socios.md` and
+`docs/adr/ADR-002-padron-enterprise-y-baja-cascada.md` for the full
+rationale.
 
 These views select explicit column lists (never `SELECT *`), so any new
 column added to a base table (e.g. `area_calculada_ha`,
