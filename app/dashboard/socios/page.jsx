@@ -27,6 +27,17 @@ export default function SociosPage() {
   const [parcelasSocio, setParcelasSocio] = useState(null)
   const [toast, setToast] = useState(null)
 
+  // FIX (2026-08-18, "Violación multi-tenant" falso positivo al editar
+  // parcelas): esta tabla no filtra por ID_Organizacion (fetchSocios no
+  // lo hace, ver lib/sociosSearch.js) — la página puede mostrar socios de
+  // más de una organización a la vez. `organizationId` acá es solo una
+  // heurística de "mejor esfuerzo" para el caso de ALTA de un socio nuevo
+  // (no hay ningún registro existente del que tomar el valor real). Para
+  // EDITAR un socio o gestionar las parcelas de uno ya existente, SIEMPRE
+  // se debe usar `<registro>.ID_Organizacion` real (ver más abajo,
+  // `editingSocio.ID_Organizacion` / `parcelasSocio.ID_Organizacion`) —
+  // nunca esta heurística de página, que puede apuntar a una organización
+  // distinta a la del registro que realmente se está editando.
   const organizationId = resolveActiveOrganizationId(rows)
 
   async function load() {
@@ -273,13 +284,17 @@ export default function SociosPage() {
       {editingSocio && (
         <SocioFormModal
           socio={editingSocio}
-          organizationId={organizationId}
+          organizationId={editingSocio.ID_Organizacion}
           onClose={() => setEditingSocio(null)}
           onSaved={handleSocioSaved}
         />
       )}
       {parcelasSocio && (
-        <ParcelaFormModal socio={parcelasSocio} organizationId={organizationId} onClose={() => setParcelasSocio(null)} />
+        <ParcelaFormModal
+          socio={parcelasSocio}
+          organizationId={parcelasSocio.ID_Organizacion}
+          onClose={() => setParcelasSocio(null)}
+        />
       )}
     </div>
   )
