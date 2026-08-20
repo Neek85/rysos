@@ -282,6 +282,16 @@ export default function QcConsoleMap({
   // por prototipo de `L.PM.Edit`. Nada se escribe a la base desde acá — el
   // botón "Guardar Cambios de Geometría" en QcDetailEditor decide cuándo
   // persistir el borrador.
+  //
+  // También se escucha `pm:dragend` (además de `pm:edit`/`pm:markerdragend`):
+  // para el CircleMarker de un registro Point SÍ dispara el mismo callback
+  // que `pm:edit` (mismo mixin de arrastre, ver `specs/qc_geoman_layer_binding_fix.md`),
+  // así que es redundante ahí (llama `onGeometryChange` dos veces con la
+  // misma geometría final, inofensivo — es solo un draft en memoria). Para
+  // un `L.Polygon` casi nunca dispara (ese evento es de arrastrar la FORMA
+  // completa, no de mover un vértice — la edición de vértices ya la cubre
+  // `pm:edit`), pero se deja el listener por si alguna vez se habilita el
+  // modo de arrastre de la forma completa.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -296,6 +306,7 @@ export default function QcConsoleMap({
         const report = () => onGeometryChange?.(key, childLayer.toGeoJSON().geometry)
         childLayer.on('pm:edit', report)
         childLayer.on('pm:markerdragend', report)
+        childLayer.on('pm:dragend', report)
       } else if (!shouldEdit && isEditing) {
         childLayer.pm.disable()
       }
