@@ -11,7 +11,11 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { validateTopologyRequest, TOPOLOGY_VALIDATABLE_TABLES } from '../lib/qcTopologyValidation.js'
+import {
+  validateTopologyRequest,
+  TOPOLOGY_VALIDATABLE_TABLES,
+  describeDeforestationBadge,
+} from '../lib/qcTopologyValidation.js'
 
 test('TOPOLOGY_VALIDATABLE_TABLES incluye EUDR_MONITOREO y EUDR_USO_SUELO, nunca EUDR_INSTALACIONES', () => {
   assert.deepEqual(TOPOLOGY_VALIDATABLE_TABLES.sort(), ['EUDR_MONITOREO', 'EUDR_USO_SUELO'])
@@ -51,4 +55,46 @@ test('validateTopologyRequest rechaza un registro_id vacío', () => {
 test('validateTopologyRequest no lanza con body null/undefined', () => {
   assert.equal(validateTopologyRequest(null).valid, false)
   assert.equal(validateTopologyRequest(undefined).valid, false)
+})
+
+// ---------------------------------------------------------------
+// describeDeforestationBadge — las 3 combinaciones reales que puede
+// devolver fn_validar_topologia_eudr.deforestacion (ver
+// specs/eudr_forest_cover_2020_schema.md). El caso {disponible:false} es
+// el único posible hoy (EUDR_COBERTURA_BOSCOSA_2020 sigue vacía) — los
+// otros 2 quedan probados para cuando se cargue un dataset real.
+// ---------------------------------------------------------------
+
+test('describeDeforestationBadge: sin tabla de cobertura boscosa cargada -> badge neutro (ok:null)', () => {
+  const badge = describeDeforestationBadge({ disponible: false, motivo: 'Sin datos...' })
+  assert.equal(badge.ok, null)
+  assert.match(badge.label, /sin datos/i)
+})
+
+test('describeDeforestationBadge: disponible pero sin intersección -> ok:true, "Apto EUDR"', () => {
+  const badge = describeDeforestationBadge({
+    disponible: true,
+    interseca_post_2020: false,
+    area_afectada_max_pct: 0,
+    eventos: [],
+  })
+  assert.equal(badge.ok, true)
+  assert.match(badge.label, /Apto EUDR/)
+})
+
+test('describeDeforestationBadge: intersección post-2020 detectada -> ok:false, incluye el % en el label', () => {
+  const badge = describeDeforestationBadge({
+    disponible: true,
+    interseca_post_2020: true,
+    area_afectada_max_pct: 12.5,
+    eventos: [{ id: 1, anio_perdida: 2022, fuente: 'HANSEN_GFW', area_afectada_pct: 12.5 }],
+  })
+  assert.equal(badge.ok, false)
+  assert.match(badge.label, /Alerta Deforestación Post-2020/)
+  assert.match(badge.label, /12\.5%/)
+})
+
+test('describeDeforestationBadge no lanza con deforestacion null/undefined (mismo criterio que "sin datos")', () => {
+  assert.equal(describeDeforestationBadge(null).ok, null)
+  assert.equal(describeDeforestationBadge(undefined).ok, null)
 })

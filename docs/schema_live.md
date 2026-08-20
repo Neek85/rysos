@@ -401,7 +401,7 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
 | `public.fn_calcular_area_ha(geometry)` | `numeric` | **Nuevo (2026-08-18).** Área geodésica en hectáreas; `NULL` para geometrías no poligonales. |
 | `public.trg_sanitize_geom_monitoreo/uso_suelo/instalaciones()` | `trigger` | **Nuevo (2026-08-18).** Aplican las dos funciones de arriba a la columna de geometría de su tabla y setean `area_calculada_ha`/`requiere_revision_area`. |
 | `public.fn_guardar_inspeccion_completa(...)` | `jsonb` (`{id, created}`) | **Nuevo (2026-08-18).** Guardado atómico de `INSPECCIONES` + 6 `CAP_*` en una sola transacción — reemplaza 7 llamadas REST independientes que antes no eran atómicas. Sin `SECURITY DEFINER` (corre con el rol del llamador). Llamada desde `lib/inspeccionesActions.js::saveInspeccion()` vía `supabase.rpc(...)`. |
-| `public.fn_validar_topologia_eudr(p_tabla_origen text, p_registro_id text)` | `jsonb` | **Nuevo (2026-08-20).** Validación topológica bajo demanda (`ST_IsValid`/`ST_IsSimple`/solapamiento contra otros `APROBADO` de la misma org/`fn_calcular_area_ha`) para un registro `EUDR_MONITOREO`/`EUDR_USO_SUELO` — rechaza `EUDR_INSTALACIONES` (siempre puntual). Sin `SECURITY DEFINER`; se llama solo desde `app/api/qc/validate-spatial/route.js` con el Service Role Key. El campo `deforestacion` de la respuesta siempre es `{disponible:false,...}` — no hay fuente de cobertura boscosa integrada, ver `specs/qc_topological_eudr_validation.md`. |
+| `public.fn_validar_topologia_eudr(p_tabla_origen text, p_registro_id text)` | `jsonb` | **Nuevo (2026-08-20), actualizada el mismo día.** Validación topológica bajo demanda (`ST_IsValid`/`ST_IsSimple`/solapamiento contra otros `APROBADO` de la misma org/`fn_calcular_area_ha`) para un registro `EUDR_MONITOREO`/`EUDR_USO_SUELO` — rechaza `EUDR_INSTALACIONES` (siempre puntual). Sin `SECURITY DEFINER`; se llama solo desde `app/api/qc/validate-spatial/route.js` con el Service Role Key. El campo `deforestacion` cruza contra `EUDR_COBERTURA_BOSCOSA_2020` SI esa tabla tiene filas (`anio_perdida > 2020` + `ST_Intersects`) — mientras siga vacía (estado por defecto), sigue devolviendo `{disponible:false,...}` igual que su primera versión. |
 
 ## Tablas nuevas fuera del núcleo EUDR/Padrón
 
@@ -409,6 +409,18 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
   `fn_validar_topologia_eudr` — `tabla_origen`, `registro_id`,
   `"ID_Organizacion"` (código, no PII), `resultado jsonb`, `created_at`.
   RLS habilitada sin políticas (solo Service Role Key la toca).
+- **`public."EUDR_COBERTURA_BOSCOSA_2020"`** (2026-08-20,
+  `specs/eudr_forest_cover_2020_schema.md`): dataset de referencia
+  COMPARTIDO (deliberadamente **sin** `ID_Organizacion` — es una verdad
+  geográfica, no un dato propiedad de una organización, mismo criterio
+  que `lib/data/ubigeo_peru.json`) de eventos de pérdida de cobertura
+  forestal — `id`, `geom geometry(MultiPolygon,4326)`, `anio_perdida
+  integer` (convención "loss year" de Hansen GFW), `fuente text`,
+  `dataset_version text`, `created_at`. Índice GiST sobre `geom` + btree
+  sobre `anio_perdida`. RLS: `SELECT` para `authenticated` (higiene, no
+  la defensa real). **Sigue vacía** — cargar un dataset real (MINAM
+  Geobosques/Hansen GFW/SERNANP) es una tarea de ingesta de datos aparte,
+  no incluida en esta migración.
 
 ## Índices espaciales
 

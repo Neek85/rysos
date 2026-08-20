@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import { LAYER_LABELS, EDITABLE_FIELDS } from '@/lib/eudrQcActions'
+import { describeDeforestationBadge } from '@/lib/qcTopologyValidation'
 
 // Mismo bucket/TTL que components/gis/MapDashboard.jsx::loadPhoto — el
 // bucket evidencias_eudr es privado, no hay URL pública directa. No existía
@@ -248,12 +249,26 @@ export default function QcDetailEditor({
                 okLabel="Sin Solapamiento"
                 badLabel={`Solapado (${validationResult.solapamiento_max_pct}%)`}
               />
-              {/* Deforestación: siempre "sin datos" hoy — no hay fuente de
-                  cobertura boscosa integrada (ver specs/qc_topological_eudr_validation.md).
-                  Nunca se muestra un badge verde/rojo inventado acá. */}
-              <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-500">
-                🛰️ Deforestación: sin datos (no integrado)
-              </span>
+              {/* Estado real de EUDR_COBERTURA_BOSCOSA_2020 (ver
+                  specs/eudr_forest_cover_2020_schema.md) — mientras esa
+                  tabla siga vacía, describeDeforestationBadge devuelve
+                  ok:null (badge neutro), nunca inventa un veredicto. */}
+              {(() => {
+                const badge = describeDeforestationBadge(validationResult.deforestacion)
+                return (
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                      badge.ok === null
+                        ? 'border border-gray-300 bg-white text-gray-500'
+                        : badge.ok
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-red-50 text-red-700'
+                    }`}
+                  >
+                    {badge.label}
+                  </span>
+                )
+              })()}
               {typeof validationResult.area_ha === 'number' && (
                 <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
                   {validationResult.area_ha.toFixed(2)} ha
@@ -262,12 +277,15 @@ export default function QcDetailEditor({
             </div>
           )}
 
-          {validationResult && (!validationResult.es_valido || validationResult.solapa) && (
-            <p className="rounded bg-amber-50 p-2 text-[11px] text-amber-800">
-              ⚠ Este registro tiene fallas topológicas o solapamiento con otra geometría
-              APROBADA — revisá antes de aprobar (no bloquea la decisión).
-            </p>
-          )}
+          {validationResult &&
+            (!validationResult.es_valido ||
+              validationResult.solapa ||
+              validationResult.deforestacion?.interseca_post_2020) && (
+              <p className="rounded bg-amber-50 p-2 text-[11px] text-amber-800">
+                ⚠ Este registro tiene fallas topológicas, solapamiento con otra geometría APROBADA,
+                o deforestación post-2020 detectada — revisá antes de aprobar (no bloquea la decisión).
+              </p>
+            )}
         </div>
       )}
 
