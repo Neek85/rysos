@@ -401,6 +401,14 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
 | `public.fn_calcular_area_ha(geometry)` | `numeric` | **Nuevo (2026-08-18).** Área geodésica en hectáreas; `NULL` para geometrías no poligonales. |
 | `public.trg_sanitize_geom_monitoreo/uso_suelo/instalaciones()` | `trigger` | **Nuevo (2026-08-18).** Aplican las dos funciones de arriba a la columna de geometría de su tabla y setean `area_calculada_ha`/`requiere_revision_area`. |
 | `public.fn_guardar_inspeccion_completa(...)` | `jsonb` (`{id, created}`) | **Nuevo (2026-08-18).** Guardado atómico de `INSPECCIONES` + 6 `CAP_*` en una sola transacción — reemplaza 7 llamadas REST independientes que antes no eran atómicas. Sin `SECURITY DEFINER` (corre con el rol del llamador). Llamada desde `lib/inspeccionesActions.js::saveInspeccion()` vía `supabase.rpc(...)`. |
+| `public.fn_validar_topologia_eudr(p_tabla_origen text, p_registro_id text)` | `jsonb` | **Nuevo (2026-08-20).** Validación topológica bajo demanda (`ST_IsValid`/`ST_IsSimple`/solapamiento contra otros `APROBADO` de la misma org/`fn_calcular_area_ha`) para un registro `EUDR_MONITOREO`/`EUDR_USO_SUELO` — rechaza `EUDR_INSTALACIONES` (siempre puntual). Sin `SECURITY DEFINER`; se llama solo desde `app/api/qc/validate-spatial/route.js` con el Service Role Key. El campo `deforestacion` de la respuesta siempre es `{disponible:false,...}` — no hay fuente de cobertura boscosa integrada, ver `specs/qc_topological_eudr_validation.md`. |
+
+## Tablas nuevas fuera del núcleo EUDR/Padrón
+
+- **`public.qc_validation_audit_log`** (2026-08-20): auditoría de
+  `fn_validar_topologia_eudr` — `tabla_origen`, `registro_id`,
+  `"ID_Organizacion"` (código, no PII), `resultado jsonb`, `created_at`.
+  RLS habilitada sin políticas (solo Service Role Key la toca).
 
 ## Índices espaciales
 

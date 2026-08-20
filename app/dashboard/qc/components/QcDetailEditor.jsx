@@ -27,6 +27,19 @@ const SIGNED_URL_TTL_SECONDS = 3600
 // `key={record.key}` para que el estado se reinicie solo al cambiar de
 // registro seleccionado, sin necesidad de sincronizarlo manualmente.
 
+function Badge({ ok, okLabel, badLabel, title }) {
+  return (
+    <span
+      title={title}
+      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+        ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+      }`}
+    >
+      {ok ? `✓ ${okLabel}` : `⚠ ${badLabel}`}
+    </span>
+  )
+}
+
 function buildInitialAttributes(record, fields) {
   const values = {}
   for (const { key } of fields) {
@@ -54,6 +67,10 @@ export default function QcDetailEditor({
   const [savingGeometry, setSavingGeometry] = useState(false)
   const [localError, setLocalError] = useState(null)
   const [photoUrl, setPhotoUrl] = useState(null)
+  const [validating, setValidating] = useState(false)
+  const [validationResult, setValidationResult] = useState(null)
+  const [validationError, setValidationError] = useState(null)
+  const canValidateTopology = record.tabla_origen !== 'EUDR_INSTALACIONES'
 
   // Firma la URL de la foto de evidencia solo cuando hay una para este
   // registro — `key={record.key}` en el padre (page.jsx) ya remonta este
@@ -94,6 +111,30 @@ export default function QcDetailEditor({
       setLocalError(err?.message || 'No se pudo guardar la geometría.')
     } finally {
       setSavingGeometry(false)
+    }
+  }
+
+  // Validación topológica bajo demanda (app/api/qc/validate-spatial) — ver
+  // specs/qc_topological_eudr_validation.md. El badge de deforestación
+  // siempre viene de la respuesta real de la API ({disponible:false, ...}
+  // hoy, no hay fuente de datos satelital integrada) — nunca se inventa un
+  // resultado en el cliente si la llamada falla.
+  async function handleValidateTopology() {
+    setValidationError(null)
+    setValidating(true)
+    try {
+      const res = await fetch('/api/qc/validate-spatial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabla_origen: record.tabla_origen, registro_id: record.id_origen }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'No se pudo validar la topología.')
+      setValidationResult(data.result)
+    } catch (err) {
+      setValidationError(err?.message || 'No se pudo validar la topología.')
+    } finally {
+      setValidating(false)
     }
   }
 
@@ -177,6 +218,58 @@ export default function QcDetailEditor({
           </p>
         )}
       </div>
+
+      {canValidateTopology && (
+        <div className="space-y-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-gray-500">Validación topológica &amp; EUDR</p>
+            <button
+              type="button"
+              onClick={handleValidateTopology}
+              disabled={validating}
+              className="rounded border border-gray-300 px-3 py-1 text-xs font-semibold text-gray-700 hover:bg-white disabled:opacity-50"
+            >
+              {validating ? 'Validando…' : 'Validar Topología & EUDR'}
+            </button>
+          </div>
+
+          {validationError && <p className="text-[11px] text-red-600">{validationError}</p>}
+
+          {validationResult && (
+            <div className="flex flex-wrap gap-1.5">
+              <Badge
+                ok={validationResult.es_valido}
+                okLabel="Topología Válida"
+                badLabel="Topología Con Errores"
+                title={validationResult.motivo_invalidez || undefined}
+              />
+              <Badge
+                ok={!validationResult.solapa}
+                okLabel="Sin Solapamiento"
+                badLabel={`Solapado (${validationResult.solapamiento_max_pct}%)`}
+              />
+              {/* Deforestación: siempre "sin datos" hoy — no hay fuente de
+                  cobertura boscosa integrada (ver specs/qc_topological_eudr_validation.md).
+                  Nunca se muestra un badge verde/rojo inventado acá. */}
+              <span className="rounded-full border border-gray-300 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-500">
+                🛰️ Deforestación: sin datos (no integrado)
+              </span>
+              {typeof validationResult.area_ha === 'number' && (
+                <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                  {validationResult.area_ha.toFixed(2)} ha
+                </span>
+              )}
+            </div>
+          )}
+
+          {validationResult && (!validationResult.es_valido || validationResult.solapa) && (
+            <p className="rounded bg-amber-50 p-2 text-[11px] text-amber-800">
+              ⚠ Este registro tiene fallas topológicas o solapamiento con otra geometría
+              APROBADA — revisá antes de aprobar (no bloquea la decisión).
+            </p>
+          )}
+        </div>
+      )}
 
       {localError && <p className="rounded bg-red-50 p-2 text-xs text-red-600">{localError}</p>}
 
