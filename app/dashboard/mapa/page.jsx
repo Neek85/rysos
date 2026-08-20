@@ -16,7 +16,7 @@ export default function MapaPage() {
       <header className="bg-green-800 text-white px-6 py-4 shadow-md">
         <h1 className="text-xl font-bold tracking-wide">RYZOS — Mapa WebGIS</h1>
         <p className="text-green-200 text-sm mt-0.5">
-          Parcelas y monitoreos aprobados · vw_monitoreo_web
+          Visor de solo lectura · Parcelas y monitoreos aprobados · vw_monitoreo_web
         </p>
       </header>
 

@@ -12,15 +12,18 @@ import {
 import { uploadGeoSpatialBatch } from '@/lib/actions/gisActions'
 import { TARGET_TABLE_LABELS, TARGET_TABLE_FIELDS, GIS_TARGET_TABLES } from '@/lib/gisTargetTables'
 
-// Modal de carga de capas espaciales para /dashboard/mapa — ver
-// specs/gis_ingestor_web.md. Vista previa obligatoria antes de escribir
-// (mismo criterio que ImportPadronModal.jsx en /dashboard/socios): el
-// archivo se parsea client-side, se muestra fila-por-Feature con los
-// campos auto-detectados editables, y nada se sube hasta "Confirmar
-// Carga". EUDR_MONITOREO/EUDR_USO_SUELO/EUDR_INSTALACIONES quedan
-// PENDIENTE de revisión QGIS QC — no aparecen de inmediato en el mapa
-// (que solo muestra APROBADO), aviso explícito en el resumen de carga
-// para que no se lea como un bug.
+// Modal de carga de capas espaciales — ver specs/gis_ingestor_web.md.
+// Reubicado de /dashboard/mapa a /dashboard/qc (specs/gis_qc_rearchitecture.md):
+// Mapa pasa a ser un visor de solo lectura, toda la ingesta manual vive acá,
+// junto a la revisión PENDIENTE que ella misma alimenta. Vista previa
+// obligatoria antes de escribir (mismo criterio que ImportPadronModal.jsx en
+// /dashboard/socios): el archivo se parsea client-side, se muestra
+// fila-por-Feature con los campos auto-detectados editables, y nada se sube
+// hasta "Confirmar Carga". EUDR_MONITOREO/EUDR_USO_SUELO/EUDR_INSTALACIONES
+// quedan PENDIENTE de revisión — aparecen de inmediato en la lista de esta
+// misma Consola QC (a diferencia de antes, cuando el aviso decía "no
+// aparecerán en el mapa hasta ser aprobados" — ahora si aparecen, en la
+// lista PENDIENTE, no en el mapa de solo-aprobados).
 
 function rowIsValid(overrides, fields) {
   return fields.every((f) => !f.required || (overrides[f.key] ?? '').toString().trim() !== '')
@@ -94,7 +97,7 @@ export default function CargaEspacialModal({ organizationId, onClose, onUploaded
   async function handleConfirmUpload() {
     if (!organizationId) {
       setParseError(
-        'No se pudo determinar la organización activa (no hay registros aprobados cargados en el mapa todavía).'
+        'No se pudo determinar la organización activa (no hay registros pendientes ni aprobados cargados todavía).'
       )
       return
     }
@@ -115,7 +118,8 @@ export default function CargaEspacialModal({ organizationId, onClose, onUploaded
     // aísla su propio stacking context), ese z-index:1000 compite en el
     // mismo contexto que este overlay. z-50 (raw z-index: 50) quedaba por
     // debajo — los controles de Leaflet podían dibujarse encima del modal.
-    // Ver specs/gis_mapa_dashboard_polish_v2.md.
+    // Ver specs/gis_mapa_dashboard_polish_v2.md (el fix viaja con el
+    // componente, sigue aplicando igual ahora que vive en /dashboard/qc).
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
       <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-6 shadow-2xl">
         <div className="mb-4 flex items-center justify-between">
@@ -145,8 +149,8 @@ export default function CargaEspacialModal({ organizationId, onClose, onUploaded
           {targetTable !== 'PADRON_PARCELAS' && (
             <>
               {' '}
-              Los registros quedan <span className="font-semibold">PENDIENTE</span> de revisión QGIS QC — no
-              aparecerán en el mapa hasta ser aprobados.
+              Los registros quedan <span className="font-semibold">PENDIENTE</span> — aparecen en la lista de esta
+              consola para su revisión.
             </>
           )}
         </p>

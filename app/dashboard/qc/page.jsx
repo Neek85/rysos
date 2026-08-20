@@ -18,6 +18,7 @@ import {
 import { EUDRValidationError } from '@/lib/eudrDdsExporter'
 import QcDetailEditor from './components/QcDetailEditor'
 import DriveSyncButton from '@/components/gis/DriveSyncButton'
+import CargaEspacialModal from './components/CargaEspacialModal'
 
 const QcConsoleMap = nextDynamic(() => import('@/components/gis/QcConsoleMap'), {
   ssr: false,
@@ -56,6 +57,7 @@ export default function QcConsolePage() {
   const [toast, setToast] = useState(null)
   const [editingGeometryKey, setEditingGeometryKey] = useState(null)
   const [geometryDraft, setGeometryDraft] = useState(null)
+  const [showUpload, setShowUpload] = useState(false)
 
   async function loadPending() {
     const supabase = getSupabaseClient()
@@ -141,6 +143,13 @@ export default function QcConsolePage() {
     }
   }
 
+  function handleSpatialUploaded({ created, targetTable }) {
+    setShowUpload(false)
+    const pendienteNote = targetTable === 'PADRON_PARCELAS' ? '' : ' Ya aparecen en la lista de pendientes.'
+    setToast({ type: 'success', message: `Carga completa: ${created} registro(s) creado(s).${pendienteNote}` })
+    loadPending()
+  }
+
   function handleToggleGeometryEdit() {
     if (!selectedRecord) return
     if (editingGeometryKey === selectedRecord.key) {
@@ -187,8 +196,25 @@ export default function QcConsolePage() {
             Registros pendientes de revisión — vw_monitoreo_poligonos / vw_monitoreo_puntos
           </p>
         </div>
-        <DriveSyncButton onSynced={loadPending} />
+        <div className="flex gap-2">
+          <DriveSyncButton onSynced={loadPending} />
+          <button
+            type="button"
+            onClick={() => setShowUpload(true)}
+            className="inline-flex items-center gap-2 rounded-lg border border-green-800 px-3 py-1.5 text-xs font-semibold text-green-800 shadow-sm hover:bg-green-50"
+          >
+            📤 Cargar Capa Espacial
+          </button>
+        </div>
       </header>
+
+      {showUpload && (
+        <CargaEspacialModal
+          organizationId={resolveOrganizationId(records)}
+          onClose={() => setShowUpload(false)}
+          onUploaded={handleSpatialUploaded}
+        />
+      )}
 
       <div className="flex flex-wrap gap-2">
         {LAYER_FILTERS.map((f) => (

@@ -3,9 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import { exportTracesDDS, resolveOrganizationId, EUDRValidationError, EXPORT_FORMATS } from '@/lib/eudrDdsExporter'
-import CargaEspacialModal from '@/app/dashboard/mapa/components/CargaEspacialModal'
 import VectorEditorPanel, { useVectorEditor } from '@/app/dashboard/mapa/components/VectorEditorTools'
-import DriveSyncButton from '@/components/gis/DriveSyncButton'
 
 const EVIDENCIA_BUCKET = 'evidencias_eudr'
 const SIGNED_URL_TTL_SECONDS = 3600
@@ -339,8 +337,6 @@ export default function MapDashboard() {
   const [exporting, setExporting] = useState(false)
   const [exportFormat, setExportFormat] = useState(EXPORT_FORMATS[0].value)
   const [exportToast, setExportToast] = useState(null)
-  const [showUpload, setShowUpload] = useState(false)
-  const [uploadToast, setUploadToast] = useState(null)
   const [mapReady, setMapReady] = useState(false)
 
   // El toast de exportación se autolimpia — no requiere interacción del
@@ -352,27 +348,12 @@ export default function MapDashboard() {
     return () => clearTimeout(timer)
   }, [exportToast])
 
-  useEffect(() => {
-    if (!uploadToast) return
-    const timer = setTimeout(() => setUploadToast(null), 8000)
-    return () => clearTimeout(timer)
-  }, [uploadToast])
-
   const vectorEditor = useVectorEditor({
     mapRef,
     leafletRef,
     mapReady,
     organizationId: resolveOrganizationId(records),
   })
-
-  function handleSpatialUploaded({ created, targetTable }) {
-    setShowUpload(false)
-    const pendienteNote =
-      targetTable === 'PADRON_PARCELAS'
-        ? ''
-        : ' Quedan PENDIENTE de revisión en QGIS QC — no aparecerán en este mapa hasta ser aprobados.'
-    setUploadToast({ type: 'success', message: `Carga completa: ${created} registro(s) creado(s).${pendienteNote}` })
-  }
 
   // Genera y descarga UNA de las 2 modalidades reales de exportación DDS
   // (elegida por el usuario en `exportFormat`, ver EXPORT_FORMATS en
@@ -428,10 +409,12 @@ export default function MapDashboard() {
   // geometrías/fotos — a diferencia de resolveOrganizationId (que deriva la
   // organización de datos ya cargados de todas las orgs), acá ninguna fila
   // de otra organización llega nunca a este componente.
-  // Extraída del efecto (que solo la llama una vez, al montar) para poder
-  // volver a invocarla como refresh manual tras una sincronización de
-  // Google Drive exitosa (ver DriveSyncButton más abajo) — mismo criterio
-  // que loadPending en app/dashboard/qc/page.jsx.
+  // Función de módulo (no inline en el useEffect de montaje) por si en el
+  // futuro hace falta un refresh manual — mismo criterio que loadPending en
+  // app/dashboard/qc/page.jsx. Hoy solo se llama una vez, al montar (ver
+  // useEffect debajo): el botón de sincronización Google Drive que la
+  // reinvocaba se movió a la Consola QC (specs/gis_qc_rearchitecture.md) —
+  // /dashboard/mapa es ahora un visor de solo lectura.
   async function fetchRecords() {
     const supabase = getSupabaseClient()
     if (!supabase) {
@@ -751,14 +734,6 @@ export default function MapDashboard() {
           {records.length} registro(s) aprobado(s) cargado(s)
         </span>
         <div className="flex gap-2">
-          <DriveSyncButton onSynced={fetchRecords} />
-          <button
-            type="button"
-            onClick={() => setShowUpload(true)}
-            className="inline-flex items-center gap-2 rounded-lg border border-green-800 px-3 py-1.5 text-xs font-semibold text-green-800 shadow-sm hover:bg-green-50"
-          >
-            📤 Cargar Capa Espacial
-          </button>
           <div className="inline-flex items-center gap-1.5 rounded-lg border border-green-800 bg-white px-1.5 py-1 shadow-sm">
             <select
               value={exportFormat}
@@ -803,25 +778,6 @@ export default function MapDashboard() {
           {exportToast.type === 'success' ? '✓ ' : '⚠ '}
           {exportToast.message}
         </p>
-      )}
-
-      {uploadToast && (
-        <p
-          className={`text-sm rounded p-2 ${
-            uploadToast.type === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
-          }`}
-        >
-          {uploadToast.type === 'success' ? '✓ ' : '⚠ '}
-          {uploadToast.message}
-        </p>
-      )}
-
-      {showUpload && (
-        <CargaEspacialModal
-          organizationId={resolveOrganizationId(records)}
-          onClose={() => setShowUpload(false)}
-          onUploaded={handleSpatialUploaded}
-        />
       )}
 
       <div className="flex flex-col gap-3 lg:flex-row">
