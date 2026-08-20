@@ -303,6 +303,8 @@ export default function QcConsolePage() {
             onSelect={setSelectedKey}
             editingKey={editingGeometryKey}
             onGeometryChange={handleGeometryChange}
+            organizationId={resolveOrganizationId(records)}
+            onFeatureCreated={loadPending}
           />
 
           {selectedRecord && (

@@ -1,6 +1,7 @@
 // Pruebas de las funciones puras de lib/gisVectorEditor.js — cálculo de
 // área/auto-intersección y restricción de tipo de geometría por tabla
-// destino, usadas por app/dashboard/mapa/components/VectorEditorTools.jsx.
+// destino, usadas por app/dashboard/qc/components/VectorEditorTools.jsx
+// (reubicado desde /dashboard/mapa, ver specs/ui_reorganization_geoman.md).
 // Ver specs/gis_vector_editor.md.
 //
 // attachVectorEditor/useVectorEditor (en VectorEditorTools.jsx, dependen

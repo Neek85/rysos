@@ -1,7 +1,15 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import centroid from '@turf/centroid'
+import VectorEditorPanel, { useVectorEditor } from '@/app/dashboard/qc/components/VectorEditorTools'
+
+// Tablas destino que la Consola QC puede crear desde cero con el Editor
+// Vectorial — deliberadamente NO las 4 de GIS_TARGET_TABLES:
+// EUDR_INSTALACIONES/PADRON_PARCELAS quedan fuera a propósito
+// (specs/ui_reorganization_geoman.md pide explícitamente solo
+// EUDR_MONITOREO/EUDR_USO_SUELO desde acá).
+const QC_DRAWABLE_TABLES = ['EUDR_MONITOREO', 'EUDR_USO_SUELO']
 
 // Estilo por tabla_origen — deliberadamente distinto de los 11 colores de
 // MapDashboard.jsx (uso de suelo/infraestructura): esta es una vista de
@@ -50,13 +58,48 @@ function parseGeometry(record) {
  * tabla_origen, y flyTo + resaltado del registro seleccionado desde la
  * lista lateral (prop `selectedKey`). Selección también puede iniciarse
  * clickeando directamente una geometría (`onSelect`).
+ *
+ * Incluye el Editor Vectorial completo (reubicado desde /dashboard/mapa,
+ * ver specs/ui_reorganization_geoman.md): además de ajustar vértices del
+ * registro seleccionado (`editingKey`/`onGeometryChange`, mecanismo ya
+ * existente), permite dibujar una parcela nueva desde cero
+ * (`EUDR_MONITOREO`/`EUDR_USO_SUELO` únicamente) — `organizationId` y
+ * `onFeatureCreated` (refresca la lista de pendientes tras guardar) vienen
+ * del padre (`app/dashboard/qc/page.jsx`).
  */
-export default function QcConsoleMap({ records, selectedKey, onSelect, editingKey, onGeometryChange }) {
+export default function QcConsoleMap({
+  records,
+  selectedKey,
+  onSelect,
+  editingKey,
+  onGeometryChange,
+  organizationId,
+  onFeatureCreated,
+}) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const leafletRef = useRef(null)
   const layerGroupRef = useRef(null)
   const layersByKeyRef = useRef(new Map())
+  const [mapReady, setMapReady] = useState(false)
+
+  // Editor Vectorial (crear geometría nueva desde cero) — reubicado acá
+  // desde /dashboard/mapa (specs/ui_reorganization_geoman.md).
+  // `enableGlobalEditControls: false`: NO agrega los botones globales de
+  // Editar/Arrastrar/Eliminar de geoman — el modo "Editar" global
+  // (`map.pm.enableGlobalEditMode()`) habilitaría vértices en TODAS las
+  // capas PENDIENTE a la vez, chocando con el mecanismo de arriba
+  // (`editingKey`, que edita deliberadamente UNA sola capa). Solo quedan
+  // los botones de dibujo (Polígono/Marcador).
+  const vectorEditor = useVectorEditor({
+    mapRef,
+    leafletRef,
+    mapReady,
+    organizationId,
+    targetTables: QC_DRAWABLE_TABLES,
+    enableGlobalEditControls: false,
+    onSaved: onFeatureCreated,
+  })
 
   // Inicialización del mapa (una sola vez) — mismo patrón defensivo de
   // MapDashboard.jsx: cleanup siempre via mapRef.current (nunca una
@@ -71,11 +114,16 @@ export default function QcConsoleMap({ records, selectedKey, onSelect, editingKe
         const leaflet = await import('leaflet')
         const L = leaflet.default
         await import('leaflet/dist/leaflet.css')
-        // Geoman ANTES de crear el mapa (mismo motivo que MapDashboard.jsx):
-        // su hook vía L.Map.addInitHook solo aplica a mapas creados después
-        // de que el hook exista. Acá se usa únicamente en modo edición
-        // (layer.pm.enable()) sobre la capa seleccionada, nunca para dibujar
-        // capas nuevas — ver el efecto de editingKey más abajo.
+        // Geoman ANTES de crear el mapa (mismo motivo que MapDashboard.jsx
+        // tenía antes de perder su propio Editor Vectorial, ver
+        // specs/ui_reorganization_geoman.md): su hook vía L.Map.addInitHook
+        // solo aplica a mapas creados después de que el hook exista. Se usa
+        // en DOS modos independientes en este componente: edición de
+        // vértices de la capa seleccionada (layer.pm.enable(), ver el
+        // efecto de editingKey más abajo) y dibujo de geometría nueva desde
+        // cero (useVectorEditor/VectorEditorPanel, con los controles
+        // globales de Editar/Arrastrar/Eliminar de geoman deshabilitados a
+        // propósito para que no choquen con el primer modo).
         await import('@geoman-io/leaflet-geoman-free')
         await import('@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css')
         if (cancelled) return
@@ -92,9 +140,10 @@ export default function QcConsoleMap({ records, selectedKey, onSelect, editingKe
         const map = L.map(containerRef.current).setView([-6.5, -77.5], 8)
         mapRef.current = map
 
-        // Español consistente con /dashboard/mapa (VectorEditorTools.jsx) —
-        // esta consola no dibuja un toolbar propio, pero layer.pm.enable()
-        // sigue usando textos de geoman (ver specs/gis_mapa_dashboard_polish.md).
+        // Español para los tooltips de geoman — attachVectorEditor
+        // (VectorEditorTools.jsx) también lo llama al enganchar el toolbar
+        // de dibujo, pero L.PM.activeLang es un estado global del módulo
+        // así que da igual quién lo llame primero.
         map.pm.setLang('es')
 
         L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
@@ -103,6 +152,7 @@ export default function QcConsoleMap({ records, selectedKey, onSelect, editingKe
         }).addTo(map)
 
         layerGroupRef.current = L.layerGroup().addTo(map)
+        if (!cancelled) setMapReady(true)
       } catch {
         // Fallo al inicializar (Leaflet no cargó, DOM no listo) — se deja
         // el contenedor vacío en vez de tumbar la consola completa.
@@ -119,6 +169,7 @@ export default function QcConsoleMap({ records, selectedKey, onSelect, editingKe
       }
       layerGroupRef.current = null
       layersByKeyRef.current = new Map()
+      setMapReady(false)
     }
   }, [])
 
@@ -242,10 +293,17 @@ export default function QcConsoleMap({ records, selectedKey, onSelect, editingKe
   }, [editingKey, records])
 
   return (
-    <div
-      ref={containerRef}
-      style={{ height: '600px' }}
-      className="w-full rounded-lg border border-gray-200"
-    />
+    <div className="flex flex-col gap-3 lg:flex-row">
+      <div
+        ref={containerRef}
+        style={{ height: '600px' }}
+        className="w-full flex-1 rounded-lg border border-gray-200"
+      />
+      {mapReady && (
+        <div className="w-full lg:w-64 lg:flex-none">
+          <VectorEditorPanel editor={vectorEditor} />
+        </div>
+      )}
+    </div>
   )
 }

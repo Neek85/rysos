@@ -1,10 +1,14 @@
 'use client'
 
-// Editor Vectorial WebGIS para /dashboard/mapa — dibujar/editar
-// Polígonos y Puntos directo sobre la capa satelital vía
-// @geoman-io/leaflet-geoman-free (imperativo, mismo patrón que el resto
-// de components/gis/MapDashboard.jsx: import dinámico dentro de un
-// useEffect, nunca react-leaflet). Ver specs/gis_vector_editor.md.
+// Editor Vectorial (Geoman) — dibujar geometría nueva desde cero directo
+// sobre el mapa satelital vía @geoman-io/leaflet-geoman-free (imperativo,
+// mismo patrón que components/gis/MapDashboard.jsx: import dinámico
+// dentro de un useEffect, nunca react-leaflet). Reubicado de
+// app/dashboard/mapa/ a app/dashboard/qc/ en
+// specs/ui_reorganization_geoman.md — Mapa pasa a ser un visor de solo
+// lectura, toda la creación/edición de geometría vive en la Consola QC,
+// junto al mecanismo YA existente para ajustar vértices de un registro
+// PENDIENTE seleccionado (components/gis/QcConsoleMap.jsx::editingKey).
 //
 // Dos piezas en este archivo (las funciones puras de cálculo de área/
 // auto-intersección viven en lib/gisVectorEditor.js — separadas porque
@@ -30,26 +34,32 @@ import { evaluateGeometry, isGeometryAllowedForTable } from '@/lib/gisVectorEdit
 
 /**
  * Agrega los controles de dibujo/edición de geoman a un mapa ya creado.
- * Solo Polígono + Marcador + Editar + Arrastrar + Eliminar (nada de
- * círculo/rectángulo/polilínea/texto/rotar/cortar — fuera de alcance, ver
- * spec). `onDraftChange(evaluateGeometry(...) | null)`: se dispara en
- * cada vértice agregado durante el dibujo y tras cada edición/arrastre —
- * es lo que alimenta el área/validación en vivo del panel. `onFinalize(layer)`:
- * se dispara una sola vez, cuando geoman termina una geometría nueva
- * (`pm:create` — doble clic para cerrar un polígono, o clic simple para
- * un marcador).
+ * Solo Polígono + Marcador (nada de círculo/rectángulo/polilínea/texto/
+ * rotar/cortar — fuera de alcance, ver spec). `onDraftChange(evaluateGeometry(...) | null)`:
+ * se dispara en cada vértice agregado durante el dibujo y tras cada
+ * edición/arrastre — es lo que alimenta el área/validación en vivo del
+ * panel. `onFinalize(layer)`: se dispara una sola vez, cuando geoman
+ * termina una geometría nueva (`pm:create` — doble clic para cerrar un
+ * polígono, o clic simple para un marcador).
+ *
+ * `enableGlobalEditControls` (default `true`): si `false`, NO agrega los
+ * botones de toolbar de "Editar"/"Arrastrar"/"Eliminar" globales de
+ * geoman — SOLO dibujar. Necesario en la Consola QC
+ * (specs/ui_reorganization_geoman.md): el modo "Editar" global de geoman
+ * llama `map.pm.enableGlobalEditMode()`, que habilita edición de vértices
+ * en TODAS las capas editables del mapa a la vez — entraría en conflicto
+ * directo con el mecanismo ya existente de `QcConsoleMap.jsx`, que edita
+ * deliberadamente UNA sola capa (el registro PENDIENTE seleccionado) vía
+ * `layer.pm.enable()` propio. En /dashboard/mapa (visor de solo lectura,
+ * ya no usa este módulo) esa restricción no aplicaba.
  *
  * Devuelve una función de limpieza (quita los controles y los listeners),
  * pensada para el `return` de un `useEffect`.
  */
-export function attachVectorEditor(map, L, { onDraftChange, onFinalize } = {}) {
+export function attachVectorEditor(map, L, { onDraftChange, onFinalize, enableGlobalEditControls = true } = {}) {
   // Localización a español de los tooltips de geoman ("Draw Polygons" ->
   // "Dibujar Polígonos", etc.) — 'es' viene empaquetado en
   // @geoman-io/leaflet-geoman-free, no hace falta un diccionario propio.
-  // L.PM.activeLang es un estado global del módulo (no por instancia de
-  // mapa), así que basta con llamarlo una vez por carga de página; se deja
-  // acá (en vez de en MapDashboard.jsx) porque este es el único lugar que
-  // agrega un toolbar visible con esos textos.
   map.pm.setLang('es')
   map.pm.setGlobalOptions({ allowSelfIntersection: false, snappable: true })
   map.pm.addControls({
@@ -61,10 +71,10 @@ export function attachVectorEditor(map, L, { onDraftChange, onFinalize } = {}) {
     drawCircleMarker: false,
     drawRectangle: false,
     drawText: false,
-    editMode: true,
-    dragMode: true,
+    editMode: enableGlobalEditControls,
+    dragMode: enableGlobalEditControls,
     cutPolygon: false,
-    removalMode: true,
+    removalMode: enableGlobalEditControls,
     rotateMode: false,
   })
 
@@ -107,17 +117,30 @@ export function attachVectorEditor(map, L, { onDraftChange, onFinalize } = {}) {
 // ---------------------------------------------------------------
 
 /**
- * `mapRef`/`leafletRef`: mismos refs que ya mantiene MapDashboard.jsx
+ * `mapRef`/`leafletRef`: refs del componente dueño del mapa
  * (`mapRef.current` = instancia `L.Map`, `leafletRef.current` = módulo
- * `L`). `mapReady`: true una vez que el init() de MapDashboard.jsx
- * terminó — el efecto de acá espera a que sea true para enganchar geoman
- * (no puede hacerlo antes de que exista `map.pm`, agregado por el propio
- * import de geoman en MapDashboard.jsx). `organizationId`: resuelta por
- * el llamador (mismo `resolveOrganizationId(records)` que ya usa
- * `handleExportDDS`).
+ * `L`). `mapReady`: true una vez que el mapa terminó de inicializarse —
+ * el efecto de acá espera a que sea true para enganchar geoman (no puede
+ * hacerlo antes de que exista `map.pm`, agregado por el propio import de
+ * geoman). `organizationId`: resuelta por el llamador (mismo
+ * `resolveOrganizationId(records)` que usa el resto del módulo GIS).
+ * `targetTables`: subconjunto de `GIS_TARGET_TABLES` que este editor
+ * puede ofrecer como destino — la Consola QC solo pasa
+ * `['EUDR_MONITOREO', 'EUDR_USO_SUELO']` (specs/ui_reorganization_geoman.md,
+ * nunca `EUDR_INSTALACIONES`/`PADRON_PARCELAS` desde acá); default a
+ * `GIS_TARGET_TABLES` completo para no romper otro futuro consumidor que
+ * sí necesite las 4. `enableGlobalEditControls`: ver attachVectorEditor.
  */
-export function useVectorEditor({ mapRef, leafletRef, mapReady, organizationId }) {
-  const [targetTable, setTargetTable] = useState('EUDR_MONITOREO')
+export function useVectorEditor({
+  mapRef,
+  leafletRef,
+  mapReady,
+  organizationId,
+  targetTables = GIS_TARGET_TABLES,
+  enableGlobalEditControls = true,
+  onSaved,
+}) {
+  const [targetTable, setTargetTable] = useState(targetTables[0])
   const [draft, setDraft] = useState(null) // { areaHa, selfIntersects } | null
   const [drawnLayer, setDrawnLayer] = useState(null)
   const [fieldValues, setFieldValues] = useState({})
@@ -133,6 +156,7 @@ export function useVectorEditor({ mapRef, leafletRef, mapReady, organizationId }
         setFieldValues({})
         setResult(null)
       },
+      enableGlobalEditControls,
     })
     // mapRef/leafletRef son refs estables — solo re-engancha si mapReady cambia.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -176,21 +200,23 @@ export function useVectorEditor({ mapRef, leafletRef, mapReady, organizationId }
     try {
       await uploadGeoSpatialFeature(targetTable, { geometry, properties: {} }, organizationId, fieldValues)
       const pendienteNote =
-        targetTable === 'PADRON_PARCELAS' ? '' : ' Queda PENDIENTE de revisión en QGIS QC.'
+        targetTable === 'PADRON_PARCELAS' ? '' : ' Queda PENDIENTE de revisión — ya aparece en la lista de esta consola.'
       setResult({ type: 'success', message: `Geometría guardada correctamente.${pendienteNote}` })
       drawnLayer.remove()
       setDrawnLayer(null)
       setDraft(null)
+      onSaved?.(targetTable)
     } catch (err) {
       setResult({ type: 'error', message: err?.message || 'No se pudo guardar la geometría.' })
     } finally {
       setSaving(false)
     }
-  }, [drawnLayer, organizationId, targetTable, fieldValues])
+  }, [drawnLayer, organizationId, targetTable, fieldValues, onSaved])
 
   return {
     targetTable,
     setTargetTable,
+    targetTables,
     draft,
     drawnLayer,
     fieldValues,
@@ -209,8 +235,19 @@ export function useVectorEditor({ mapRef, leafletRef, mapReady, organizationId }
 // ---------------------------------------------------------------
 
 export default function VectorEditorPanel({ editor }) {
-  const { targetTable, setTargetTable, draft, drawnLayer, fieldValues, setFieldValues, saving, result, handleSave, handleCancel } =
-    editor
+  const {
+    targetTable,
+    setTargetTable,
+    targetTables,
+    draft,
+    drawnLayer,
+    fieldValues,
+    setFieldValues,
+    saving,
+    result,
+    handleSave,
+    handleCancel,
+  } = editor
   const fields = TARGET_TABLE_FIELDS[targetTable]
   const allowedTypes = (TARGET_TABLE_GEOMETRY_TYPES[targetTable] || []).join(' o ')
 
@@ -225,7 +262,7 @@ export default function VectorEditorPanel({ editor }) {
           onChange={(e) => setTargetTable(e.target.value)}
           className="w-full rounded border border-gray-200 px-2 py-1 text-xs text-gray-700"
         >
-          {GIS_TARGET_TABLES.map((t) => (
+          {targetTables.map((t) => (
             <option key={t} value={t}>
               {TARGET_TABLE_LABELS[t]}
             </option>

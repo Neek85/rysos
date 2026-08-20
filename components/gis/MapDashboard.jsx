@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import { exportTracesDDS, resolveOrganizationId, EUDRValidationError, EXPORT_FORMATS } from '@/lib/eudrDdsExporter'
-import VectorEditorPanel, { useVectorEditor } from '@/app/dashboard/mapa/components/VectorEditorTools'
 
 const EVIDENCIA_BUCKET = 'evidencias_eudr'
 const SIGNED_URL_TTL_SECONDS = 3600
@@ -337,7 +336,6 @@ export default function MapDashboard() {
   const [exporting, setExporting] = useState(false)
   const [exportFormat, setExportFormat] = useState(EXPORT_FORMATS[0].value)
   const [exportToast, setExportToast] = useState(null)
-  const [mapReady, setMapReady] = useState(false)
 
   // El toast de exportación se autolimpia — no requiere interacción del
   // usuario para desaparecer, igual que el resto de los estados efímeros
@@ -347,13 +345,6 @@ export default function MapDashboard() {
     const timer = setTimeout(() => setExportToast(null), 6000)
     return () => clearTimeout(timer)
   }, [exportToast])
-
-  const vectorEditor = useVectorEditor({
-    mapRef,
-    leafletRef,
-    mapReady,
-    organizationId: resolveOrganizationId(records),
-  })
 
   // Genera y descarga UNA de las 2 modalidades reales de exportación DDS
   // (elegida por el usuario en `exportFormat`, ver EXPORT_FORMATS en
@@ -489,12 +480,6 @@ export default function MapDashboard() {
         const leaflet = await import('leaflet')
         const L = leaflet.default
         await import('leaflet/dist/leaflet.css')
-        // Geoman se importa ANTES de crear la instancia del mapa: registra
-        // su hook vía L.Map.addInitHook, que solo aplica a mapas creados
-        // DESPUÉS de que el hook exista — importarlo después de L.map(...)
-        // dejaría el mapa sin `.pm` (ver app/dashboard/mapa/components/VectorEditorTools.jsx).
-        await import('@geoman-io/leaflet-geoman-free')
-        await import('@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css')
         if (cancelled) return
         leafletRef.current = L
 
@@ -509,11 +494,6 @@ export default function MapDashboard() {
         if (mapRef.current) return // otra inicializacion ya gano la carrera
         const map = L.map(containerRef.current).setView([-6.5, -77.5], 8)
         mapRef.current = map
-
-        // Español para los tooltips de geoman (Editor Vectorial) — 'es'
-        // viene empaquetado en @geoman-io/leaflet-geoman-free, no hace
-        // falta un diccionario propio (ver specs/gis_mapa_dashboard_polish.md).
-        map.pm.setLang('es')
 
         map.createPane(INFRA_PANE_NAME)
         map.getPane(INFRA_PANE_NAME).style.zIndex = INFRA_PANE_Z_INDEX
@@ -577,9 +557,6 @@ export default function MapDashboard() {
         })
 
         renderLayers(L, map, records)
-        // Recién acá `map.pm` existe (geoman ya importado arriba) y el mapa
-        // terminó de inicializarse — habilita useVectorEditor.
-        if (!cancelled) setMapReady(true)
       } catch (err) {
         // INVARIANTE: un fallo aca (ej. leaflet no pudo cargar, DOM no listo) no
         // debe tumbar el arbol de React entero — no hay ErrorBoundary en la app,
@@ -600,7 +577,6 @@ export default function MapDashboard() {
       layersRef.current = []
       layerGroupsRef.current = null
       infraMarkersRef.current = []
-      setMapReady(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -780,18 +756,11 @@ export default function MapDashboard() {
         </p>
       )}
 
-      <div className="flex flex-col gap-3 lg:flex-row">
-        <div
-          ref={containerRef}
-          style={{ height: '600px' }}
-          className="w-full flex-1 rounded-lg border border-gray-200"
-        />
-        {mapReady && (
-          <div className="w-full lg:w-64 lg:flex-none">
-            <VectorEditorPanel editor={vectorEditor} />
-          </div>
-        )}
-      </div>
+      <div
+        ref={containerRef}
+        style={{ height: '600px' }}
+        className="w-full rounded-lg border border-gray-200"
+      />
 
       {mapError && (
         <p className="text-sm text-red-600 bg-red-50 rounded p-2">
