@@ -98,3 +98,18 @@ spec y elegir entre las opciones 2/3 — ninguna implementada hoy.
 `python -m pytest tests/ -v` y `node --test tests/*.mjs` se ejecutan igual
 para confirmar que no hay regresión (no se tocó ningún archivo de
 producción) — ver conteos en el commit de esta tarea.
+
+## Formalización de la decisión (2026-08-19, misma sesión, dos tareas después)
+
+Un prompt de seguimiento pidió exactamente la opción 3 de arriba (parser
+GPKG en JS/WASM vía `jszip`+`sql.js`) — se pausó de nuevo con
+`AskUserQuestion` para confirmar que era un cambio de dirección real y no
+el generador de prompts re-proponiendo lo ya descartado. El usuario
+interrumpió esa pregunta y envió en su lugar un prompt nuevo
+(`specs/drive_sync_trigger.md`) que **reafirma explícitamente esta
+decisión** ("la ingesta de paquetes QField se mantiene de forma exclusiva
+vía Google Drive / Python ETL para evitar limitaciones de Vercel/WASM") —
+confirma que la opción 1 sigue siendo la vigente. Ver
+`specs/drive_sync_trigger.md` para el siguiente intento relacionado
+(disparar el mismo script Python vía un botón web) y por qué tampoco es
+viable, con una razón todavía más definitiva que la de este documento.
