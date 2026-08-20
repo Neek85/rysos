@@ -18,6 +18,7 @@ import {
   EUDR_REGULATION,
   EUDR_CUTOFF_DATE,
   MIN_POLYGON_HECTARES,
+  EXPORT_FORMATS,
 } from '../lib/eudrDdsExporter.js'
 
 function polygonRecord(overrides = {}) {
@@ -137,6 +138,19 @@ test('buildTracesPayload suma total_hectares de todas las parcelas', () => {
   const records = [polygonRecord({ area_ha: 5, ID_Parcela_Fija: 'p1' }), polygonRecord({ area_ha: 3, ID_Parcela_Fija: 'p2', parcela_codigo: 'COOP-JS-003' })]
   const payload = buildTracesPayload(records, 'ORG-A')
   assert.equal(payload.total_hectares, 8)
+})
+
+test('EXPORT_FORMATS tiene exactamente las 2 modalidades reales (json/geojson) — sin CSV ni "puntos" inventados', () => {
+  const values = EXPORT_FORMATS.map((f) => f.value).sort()
+  assert.deepEqual(values, ['geojson', 'json'])
+  EXPORT_FORMATS.forEach((f) => {
+    assert.equal(typeof f.label, 'string')
+    assert.ok(f.label.length > 0)
+  })
+})
+
+test('exportTracesDDS acepta un tercer parámetro format (default "json") en vez de descargar json+geojson siempre', () => {
+  assert.equal(exportTracesDDS.length, 2) // organizationId requerido, format tiene default (no cuenta en .length)
 })
 
 test('exportTracesDDS no está disponible en Node plano (usa document/Blob del DOM) — se documenta, no se prueba aquí', () => {

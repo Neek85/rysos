@@ -92,6 +92,11 @@ export default function QcConsoleMap({ records, selectedKey, onSelect, editingKe
         const map = L.map(containerRef.current).setView([-6.5, -77.5], 8)
         mapRef.current = map
 
+        // Español consistente con /dashboard/mapa (VectorEditorTools.jsx) —
+        // esta consola no dibuja un toolbar propio, pero layer.pm.enable()
+        // sigue usando textos de geoman (ver specs/gis_mapa_dashboard_polish.md).
+        map.pm.setLang('es')
+
         L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
           attribution: '© Google',
           maxZoom: 20,

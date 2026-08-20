@@ -37,6 +37,10 @@
 > (`specs/padron_web_socios.md`, `/dashboard/socios`) — confirma el schema
 > real completo de `PADRON_SOCIOS`/`PADRON_PARCELAS` (antes solo
 > parcialmente documentado) y agrega la primera Server Action del proyecto.
+> Actualizado: 2026-08-19, tras polish de `/dashboard/mapa`
+> (`specs/gis_mapa_dashboard_polish.md`) — `vw_monitoreo_web` gana
+> `productor_nombre` (`20260819_vw_monitoreo_web_productor_nombre.sql`), ver
+> nota en la sección de esa vista abajo.
 
 ## Tablas base (pre-existentes, no creadas por migraciones de este repo)
 
@@ -294,6 +298,21 @@ Filtra estrictamente
 visita de monitoreo más reciente sobre la misma parcela). Expone
 `geom_geojson` (`ST_AsGeoJSON(geom)::json`) porque PostgREST serializa
 `geometry` cruda como WKB hex, no como GeoJSON.
+
+> **`productor_nombre` agregado (2026-08-19,
+> `20260819_vw_monitoreo_web_productor_nombre.sql`):** `productor` (el
+> valor crudo, `ID_Socio` o texto libre) se conserva sin cambios;
+> `productor_nombre` es un `LEFT JOIN` nuevo a `PADRON_SOCIOS` que resuelve
+> `socio_nombre_completo` cuando `productor` matchea un `ID_Socio` real
+> (PII, catalogada desde Tarea 14). **Esta vista sigue sin filtrar por
+> `ID_Organizacion`** (no cambió con esta migración) — el cierre del riesgo
+> cross-tenant para el nombre se hizo del lado del cliente
+> (`components/gis/MapDashboard.jsx` ahora resuelve la organización activa
+> en un fetch previo liviano y filtra la consulta completa por ella, ver
+> `specs/gis_mapa_dashboard_polish.md`), no en la vista — cualquier otro
+> consumidor futuro de esta vista sin ese mismo filtro cliente-side
+> quedaría expuesto al mismo riesgo que ya se corrigió una vez en
+> `view_eudr_dashboard_aprobados`.
 
 > **Gap de integración cerrado (2026-08-18):** `vw_monitoreo_poligonos`,
 > `vw_monitoreo_puntos` y `vw_monitoreo_web` ahora exponen `area_calculada_ha`

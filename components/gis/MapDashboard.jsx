@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
-import { exportTracesDDS, resolveOrganizationId, EUDRValidationError } from '@/lib/eudrDdsExporter'
+import { exportTracesDDS, resolveOrganizationId, EUDRValidationError, EXPORT_FORMATS } from '@/lib/eudrDdsExporter'
 import CargaEspacialModal from '@/app/dashboard/mapa/components/CargaEspacialModal'
 import VectorEditorPanel, { useVectorEditor } from '@/app/dashboard/mapa/components/VectorEditorTools'
 
@@ -214,7 +214,7 @@ function formatNombreParcela(record) {
 function tooltipHtml(record) {
   const codigoParcela = escapeHtml(resolveParcelaCodigo(record, 'Parcela'))
   const nombreParcela = formatNombreParcela(record)
-  const productor = record?.productor ? escapeHtml(record.productor) : 'Sin registrar'
+  const productor = record?.productor_nombre ? escapeHtml(record.productor_nombre) : 'Sin registrar'
   const clasificacion = record?.clasificacion ? escapeHtml(record.clasificacion) : 'Sin clasificar'
 
   if (record?.tabla_origen === 'EUDR_USO_SUELO') {
@@ -268,7 +268,7 @@ function estadoBadgeHtml(estado) {
 function popupHtml(record, photoUrl) {
   const codigoParcela = escapeHtml(resolveParcelaCodigo(record))
   const nombreParcela = formatNombreParcela(record)
-  const productor = record?.productor ? escapeHtml(record.productor) : 'Sin registrar'
+  const productor = record?.productor_nombre ? escapeHtml(record.productor_nombre) : 'Sin registrar'
   const clasificacion = record?.clasificacion ? escapeHtml(record.clasificacion) : 'Sin clasificar'
   const estado = record.estado_revision ? escapeHtml(record.estado_revision) : '—'
 
@@ -328,6 +328,7 @@ export default function MapDashboard() {
   const [error, setError] = useState(null)
   const [mapError, setMapError] = useState(null)
   const [exporting, setExporting] = useState(false)
+  const [exportFormat, setExportFormat] = useState(EXPORT_FORMATS[0].value)
   const [exportToast, setExportToast] = useState(null)
   const [showUpload, setShowUpload] = useState(false)
   const [uploadToast, setUploadToast] = useState(null)
@@ -364,10 +365,14 @@ export default function MapDashboard() {
     setUploadToast({ type: 'success', message: `Carga completa: ${created} registro(s) creado(s).${pendienteNote}` })
   }
 
-  // Genera y descarga la DDS TRACES UE (JSON + GeoJSON) a partir de los
-  // registros aprobados ya cargados. La validación multi-tenant y la regla
-  // de polígono obligatorio (>= 4 ha) viven en lib/eudrDdsExporter.js — acá
-  // solo se traduce el resultado a estado de UI (spinner + toast).
+  // Genera y descarga UNA de las 2 modalidades reales de exportación DDS
+  // (elegida por el usuario en `exportFormat`, ver EXPORT_FORMATS en
+  // lib/eudrDdsExporter.js) a partir de los registros aprobados ya
+  // cargados — nunca ambas a la vez (antes de
+  // specs/gis_mapa_dashboard_polish.md, exportTracesDDS descargaba los 2
+  // archivos siempre en el mismo click). La validación multi-tenant y la
+  // regla de polígono obligatorio (>= 4 ha) viven en lib/eudrDdsExporter.js
+  // — acá solo se traduce el resultado a estado de UI (spinner + toast).
   async function handleExportDDS() {
     if (exporting) return
     setExporting(true)
@@ -379,11 +384,12 @@ export default function MapDashboard() {
           'No hay registros aprobados cargados para generar la DDS.'
         )
       }
-      const payload = exportTracesDDS(records, organizationId)
+      const payload = exportTracesDDS(records, organizationId, exportFormat)
+      const formatLabel = EXPORT_FORMATS.find((f) => f.value === exportFormat)?.label || exportFormat
       setExportToast({
         type: 'success',
         message:
-          `DDS exportada: ${payload.total_plots} parcela(s), ` +
+          `${formatLabel} exportado: ${payload.total_plots} parcela(s), ` +
           `${payload.total_hectares} ha certificadas.`,
       })
     } catch (err) {
@@ -399,7 +405,20 @@ export default function MapDashboard() {
     }
   }
 
-  // Carga de datos: vw_monitoreo_web ya filtra estrictamente estado_revision = 'APROBADO'.
+  // Carga de datos: vw_monitoreo_web ya filtra estrictamente estado_revision
+  // = 'APROBADO', pero NO por ID_Organizacion (por diseño — el Portal
+  // Público de Trazabilidad la consulta sin sesión, ver
+  // specs/gis_mapa_dashboard_polish.md). Desde que esa vista expone
+  // productor_nombre (PII real, socio_nombre_completo), un fetch sin filtro
+  // enviaría al navegador los nombres de socios de TODAS las
+  // organizaciones, no solo la que se está mirando. Sin Supabase Auth real
+  // no hay una "organización activa" de sesión — se resuelve con la misma
+  // heurística ya usada en otros módulos ("primera organización
+  // encontrada"), pero en un PRIMER fetch liviano (solo la columna
+  // ID_Organizacion) para decidir el filtro ANTES de pedir nombres/
+  // geometrías/fotos — a diferencia de resolveOrganizationId (que deriva la
+  // organización de datos ya cargados de todas las orgs), acá ninguna fila
+  // de otra organización llega nunca a este componente.
   useEffect(() => {
     let cancelled = false
 
@@ -412,11 +431,29 @@ export default function MapDashboard() {
       }
 
       try {
+        const { data: orgProbe, error: probeErr } = await supabase
+          .from('vw_monitoreo_web')
+          .select('ID_Organizacion')
+          .limit(1)
+
+        if (cancelled) return
+        if (probeErr) {
+          setError(probeErr.message)
+          return
+        }
+
+        const organizationId = orgProbe?.[0]?.ID_Organizacion
+        if (!organizationId) {
+          setRecords([])
+          return
+        }
+
         const { data, error: err } = await supabase
           .from('vw_monitoreo_web')
           .select(
-            'tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,cumple_eudr,geom_geojson'
+            'tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,productor_nombre,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,cumple_eudr,geom_geojson'
           )
+          .eq('ID_Organizacion', organizationId)
 
         if (cancelled) return
         if (err) {
@@ -480,6 +517,11 @@ export default function MapDashboard() {
         if (mapRef.current) return // otra inicializacion ya gano la carrera
         const map = L.map(containerRef.current).setView([-6.5, -77.5], 8)
         mapRef.current = map
+
+        // Español para los tooltips de geoman (Editor Vectorial) — 'es'
+        // viene empaquetado en @geoman-io/leaflet-geoman-free, no hace
+        // falta un diccionario propio (ver specs/gis_mapa_dashboard_polish.md).
+        map.pm.setLang('es')
 
         map.createPane(INFRA_PANE_NAME)
         map.getPane(INFRA_PANE_NAME).style.zIndex = INFRA_PANE_Z_INDEX
@@ -707,21 +749,36 @@ export default function MapDashboard() {
           >
             📤 Cargar Capa Espacial
           </button>
-          <button
-            type="button"
-            onClick={handleExportDDS}
-            disabled={exporting || records.length === 0}
-            className="inline-flex items-center gap-2 rounded-lg bg-green-800 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {exporting ? (
-              <>
-                <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                Generando DDS…
-              </>
-            ) : (
-              <>📄 Exportar DDS (TRACES UE)</>
-            )}
-          </button>
+          <div className="inline-flex items-center gap-1.5 rounded-lg border border-green-800 bg-white px-1.5 py-1 shadow-sm">
+            <select
+              value={exportFormat}
+              onChange={(e) => setExportFormat(e.target.value)}
+              disabled={exporting}
+              className="rounded border-0 bg-transparent px-1 py-0.5 text-xs font-medium text-green-900 focus:outline-none disabled:opacity-50"
+              aria-label="Modalidad de exportación DDS"
+            >
+              {EXPORT_FORMATS.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={handleExportDDS}
+              disabled={exporting || records.length === 0}
+              className="inline-flex items-center gap-2 rounded-md bg-green-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exporting ? (
+                <>
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  Generando…
+                </>
+              ) : (
+                <>📄 Exportar DDS</>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 

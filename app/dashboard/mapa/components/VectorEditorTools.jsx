@@ -43,6 +43,14 @@ import { evaluateGeometry, isGeometryAllowedForTable } from '@/lib/gisVectorEdit
  * pensada para el `return` de un `useEffect`.
  */
 export function attachVectorEditor(map, L, { onDraftChange, onFinalize } = {}) {
+  // Localización a español de los tooltips de geoman ("Draw Polygons" ->
+  // "Dibujar Polígonos", etc.) — 'es' viene empaquetado en
+  // @geoman-io/leaflet-geoman-free, no hace falta un diccionario propio.
+  // L.PM.activeLang es un estado global del módulo (no por instancia de
+  // mapa), así que basta con llamarlo una vez por carga de página; se deja
+  // acá (en vez de en MapDashboard.jsx) porque este es el único lugar que
+  // agrega un toolbar visible con esos textos.
+  map.pm.setLang('es')
   map.pm.setGlobalOptions({ allowSelfIntersection: false, snappable: true })
   map.pm.addControls({
     position: 'topleft',

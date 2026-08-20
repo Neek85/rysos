@@ -163,26 +163,35 @@ export default function CargaEspacialModal({ organizationId, onClose, onUploaded
               {rows.length} feature(s) totales.
             </p>
 
-            <div className="max-h-64 overflow-y-auto rounded-lg border border-gray-200">
-              <table className="w-full text-xs">
+            <div className="max-h-64 overflow-y-auto overflow-x-auto rounded-lg border border-gray-200">
+              <table className="w-full min-w-max text-xs">
                 <thead className="sticky top-0 bg-gray-50">
                   <tr>
-                    <th className="px-2 py-1.5 text-left font-semibold text-gray-500">#</th>
-                    <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Geometría</th>
+                    <th className="whitespace-nowrap px-2 py-1.5 text-left font-semibold text-gray-500">#</th>
+                    <th className="whitespace-nowrap px-2 py-1.5 text-left font-semibold text-gray-500">
+                      Geometría
+                    </th>
                     {fields.map((f) => (
-                      <th key={f.key} className="px-2 py-1.5 text-left font-semibold text-gray-500">
+                      <th
+                        key={f.key}
+                        className="whitespace-nowrap px-2 py-1.5 text-left font-semibold text-gray-500"
+                      >
                         {f.label}
                         {f.required ? ' *' : ''}
                       </th>
                     ))}
-                    <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Estado</th>
+                    <th className="whitespace-nowrap px-2 py-1.5 text-left font-semibold text-gray-500">
+                      Estado
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {rows.map((r) => (
                     <tr key={r.index} className={r.valid ? '' : 'bg-amber-50/50'}>
-                      <td className="px-2 py-1.5 text-gray-500">{r.index + 1}</td>
-                      <td className="px-2 py-1.5 font-mono text-gray-500">{r.feature.geometry.type}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5 text-gray-500">{r.index + 1}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5 font-mono text-gray-500">
+                        {r.feature.geometry.type}
+                      </td>
                       {fields.map((f) => (
                         <td key={f.key} className="px-2 py-1.5">
                           <input
@@ -190,11 +199,11 @@ export default function CargaEspacialModal({ organizationId, onClose, onUploaded
                             value={r.overrides[f.key] || ''}
                             onChange={(e) => handleFieldEdit(r.index, f.key, e.target.value)}
                             placeholder={f.required ? 'Requerido' : '—'}
-                            className="w-28 rounded border border-gray-200 px-1.5 py-1 text-xs"
+                            className="min-w-[7rem] rounded border border-gray-200 px-1.5 py-1 text-xs"
                           />
                         </td>
                       ))}
-                      <td className="px-2 py-1.5">
+                      <td className="whitespace-nowrap px-2 py-1.5">
                         {r.valid ? (
                           <span className="text-emerald-700">✓ Lista</span>
                         ) : (
