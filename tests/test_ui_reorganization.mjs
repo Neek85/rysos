@@ -73,7 +73,7 @@ test('QcConsoleMap.jsx deshabilita los controles globales de Editar/Arrastrar/El
 test('QcConsoleMap.jsx conserva el mecanismo de edición de vértices del registro seleccionado (editingKey)', () => {
   const source = read('components/gis/QcConsoleMap.jsx')
   assert.match(source, /editingKey/)
-  assert.match(source, /layer\.pm\?\.enable/)
+  assert.match(source, /childLayer\.pm\.enable/)
 })
 
 test('app/dashboard/qc/page.jsx pasa organizationId y onFeatureCreated a QcConsoleMap (refresca la lista al crear una geometría nueva)', () => {

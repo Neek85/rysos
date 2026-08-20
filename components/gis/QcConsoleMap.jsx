@@ -260,33 +260,44 @@ export default function QcConsoleMap({
     selectedLayer.openPopup?.()
   }, [selectedKey, records])
 
-  // Modo edición de vértices — habilita layer.pm SOLO en la capa cuyo key
+  // Modo edición de vértices — habilita .pm SOLO en la capa cuyo key
   // coincide con `editingKey` (nunca todas a la vez), y lo deshabilita en
   // cualquier otra que hubiera quedado en edición (cambio de selección
-  // mientras se editaba, por ejemplo). `layer` (L.geoJSON de una sola
-  // Feature) es un FeatureGroup — su `.pm.enable()` delega correctamente al
-  // sublayer real (confirmado en node_modules/.../L.PM.Edit.LayerGroup.js),
-  // pero los eventos pm:edit/pm:markerdragend los dispara ese SUBLAYER, no
-  // el FeatureGroup — hay que escucharlos en `layer.getLayers()[0]`, no en
-  // `layer`. Nada se escribe a la base desde acá — el botón "Guardar
-  // Geometría" en QcDetailEditor decide cuándo persistir el borrador.
+  // mientras se editaba, por ejemplo).
+  //
+  // `layer` (L.geoJSON de una sola Feature) es un FeatureGroup: llamar
+  // `.pm.enable()` sobre él delega correctamente al sublayer real vía
+  // L.PM.Edit.LayerGroup.enable() (confirmado leyendo
+  // node_modules/@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.js),
+  // incluyendo el caso Point → L.CircleMarker: geoman tiene un módulo
+  // dedicado `L.PM.Edit.CircleMarker` (no reusa el de L.Marker), y su
+  // `enable()` termina en `enableLayerDrag()` (mixin de arrastre genérico,
+  // ya que CircleMarker no tiene dragging nativo de Leaflet) — confirmado
+  // que esa ruta dispara `pm:edit` al soltar (`_dragMixinOnMouseUp` →
+  // `_fireEdit()`), igual que la edición de vértices de un polígono. Se
+  // llama `.pm.enable()`/`.disable()` directamente sobre `childLayer` (el
+  // sublayer real) en vez de sobre el FeatureGroup wrapper para no
+  // depender de esa delegación implícita y para pasar las opciones de
+  // arrastre/snap explícitas en vez de confiar en los defaults heredados
+  // por prototipo de `L.PM.Edit`. Nada se escribe a la base desde acá — el
+  // botón "Guardar Cambios de Geometría" en QcDetailEditor decide cuándo
+  // persistir el borrador.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
 
     layersByKeyRef.current.forEach((layer, key) => {
       const childLayer = layer.getLayers?.()[0]
+      if (!childLayer?.pm) return
       const shouldEdit = key === editingKey
-      const isEditing = layer.pm?.enabled?.()
+      const isEditing = childLayer.pm.enabled?.()
       if (shouldEdit && !isEditing) {
-        layer.pm?.enable({ allowSelfIntersection: false })
-        if (childLayer) {
-          const report = () => onGeometryChange?.(key, childLayer.toGeoJSON().geometry)
-          childLayer.on('pm:edit', report)
-          childLayer.on('pm:markerdragend', report)
-        }
+        childLayer.pm.enable({ draggable: true, snappable: true, allowSelfIntersection: false })
+        const report = () => onGeometryChange?.(key, childLayer.toGeoJSON().geometry)
+        childLayer.on('pm:edit', report)
+        childLayer.on('pm:markerdragend', report)
       } else if (!shouldEdit && isEditing) {
-        layer.pm?.disable()
+        childLayer.pm.disable()
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -55,9 +55,9 @@ test('QcConsoleMap.jsx sigue escuchando pm:edit y pm:markerdragend en la capa se
   assert.match(source, /childLayer\.on\('pm:markerdragend'/)
 })
 
-test('QcConsoleMap.jsx deshabilita layer.pm en cualquier capa que no sea editingKey (aislamiento por registro, nunca edición masiva)', () => {
+test('QcConsoleMap.jsx deshabilita .pm en cualquier capa que no sea editingKey (aislamiento por registro, nunca edición masiva)', () => {
   const source = read('components/gis/QcConsoleMap.jsx')
-  assert.match(source, /layer\.pm\?\.disable\(\)/)
+  assert.match(source, /childLayer\.pm\.disable\(\)/)
 })
 
 test('lib/eudrQcActions.js::updateRecordGeometry valida la organización antes de escribir (aislamiento multi-tenant)', () => {
