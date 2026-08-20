@@ -254,6 +254,17 @@ export default function QcConsolePage() {
     setEditingGeometryKey(null)
     setGeometryDraft(null)
     setToast({ type: 'success', message: `Geometría actualizada: ${displayParcela(selectedRecord)}.` })
+
+    // Re-validación topológica automática tras guardar — ver
+    // specs/qc_single_record_geometry_editing.md. Cualquier
+    // validationResults[key] anterior quedó calculado contra la
+    // geometría VIEJA (topología/solapamiento/área ya no reflejan el
+    // registro real) — se dispara sin esperar (no bloquea el toast de
+    // éxito de arriba); handleValidateTopology ya maneja sus propios
+    // errores sin lanzar, así que un fallo acá no rompe nada.
+    if (selectedRecord.tabla_origen !== 'EUDR_INSTALACIONES') {
+      handleValidateTopology(selectedRecord)
+    }
   }
 
   return (

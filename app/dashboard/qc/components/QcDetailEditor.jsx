@@ -192,13 +192,14 @@ export default function QcDetailEditor({
               disabled={savingGeometry}
               className="rounded bg-gray-700 px-3 py-1 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
             >
-              {savingGeometry ? 'Guardando…' : 'Guardar Geometría'}
+              {savingGeometry ? 'Guardando…' : 'Guardar Cambios de Geometría'}
             </button>
           )}
         </div>
         {isEditingGeometry && (
           <p className="text-[11px] text-gray-400">
-            Arrastrá los vértices directamente sobre el mapa. "Guardar Geometría" aparece cuando haya un cambio.
+            Arrastrá los vértices (o el marcador) directamente sobre el mapa. "Guardar Cambios de Geometría"
+            aparece cuando haya un cambio — al guardar, se vuelve a ejecutar el test espacial automáticamente.
           </p>
         )}
       </div>
