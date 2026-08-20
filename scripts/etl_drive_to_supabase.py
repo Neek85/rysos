@@ -1,3 +1,4 @@
+import json
 import math
 import mimetypes
 import os
@@ -539,4 +540,17 @@ if __name__ == "__main__":
 
     dry_run = "--dry-run" in sys.argv
     pipeline = DriveZipETLPipeline(url, key, sys.argv[1])
-    pipeline.run(execute_move=not dry_run)
+    results = pipeline.run(execute_move=not dry_run)
+
+    # Línea final machine-readable — el disparador manual desde
+    # /dashboard/qc y /dashboard/mapa (lib/driveSyncTrigger.js) la parsea
+    # de stdout para mostrar métricas reales en el toast, en vez de
+    # scrapear los prints humanos de arriba (que sí siguen sin cambios,
+    # para no romper a nadie que lea el log a ojo).
+    summary = {
+        "packages_processed": len(results),
+        "total_records": sum(len(r["inserted_ids"]) for r in results),
+        "total_photos": sum(len(r["uploaded_photos"]) for r in results),
+        "organizations": sorted({r["org_id"] for r in results}),
+    }
+    print("RYZOS_ETL_RESULT_JSON:" + json.dumps(summary))

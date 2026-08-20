@@ -17,6 +17,7 @@ import {
 } from '@/lib/eudrQcActions'
 import { EUDRValidationError } from '@/lib/eudrDdsExporter'
 import QcDetailEditor from './components/QcDetailEditor'
+import DriveSyncButton from '@/components/gis/DriveSyncButton'
 
 const QcConsoleMap = nextDynamic(() => import('@/components/gis/QcConsoleMap'), {
   ssr: false,
@@ -179,11 +180,14 @@ export default function QcConsolePage() {
 
   return (
     <div className="space-y-4 p-6">
-      <header>
-        <h1 className="text-xl font-bold text-gray-800">Consola de Auditoría QC</h1>
-        <p className="text-sm text-gray-500">
-          Registros pendientes de revisión — vw_monitoreo_poligonos / vw_monitoreo_puntos
-        </p>
+      <header className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-gray-800">Consola de Auditoría QC</h1>
+          <p className="text-sm text-gray-500">
+            Registros pendientes de revisión — vw_monitoreo_poligonos / vw_monitoreo_puntos
+          </p>
+        </div>
+        <DriveSyncButton onSynced={loadPending} />
       </header>
 
       <div className="flex flex-wrap gap-2">

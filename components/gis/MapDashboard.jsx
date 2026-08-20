@@ -5,6 +5,7 @@ import { getSupabaseClient } from '@/lib/supabaseClient'
 import { exportTracesDDS, resolveOrganizationId, EUDRValidationError, EXPORT_FORMATS } from '@/lib/eudrDdsExporter'
 import CargaEspacialModal from '@/app/dashboard/mapa/components/CargaEspacialModal'
 import VectorEditorPanel, { useVectorEditor } from '@/app/dashboard/mapa/components/VectorEditorTools'
+import DriveSyncButton from '@/components/gis/DriveSyncButton'
 
 const EVIDENCIA_BUCKET = 'evidencias_eudr'
 const SIGNED_URL_TTL_SECONDS = 3600
@@ -427,59 +428,59 @@ export default function MapDashboard() {
   // geometrías/fotos — a diferencia de resolveOrganizationId (que deriva la
   // organización de datos ya cargados de todas las orgs), acá ninguna fila
   // de otra organización llega nunca a este componente.
-  useEffect(() => {
-    let cancelled = false
+  // Extraída del efecto (que solo la llama una vez, al montar) para poder
+  // volver a invocarla como refresh manual tras una sincronización de
+  // Google Drive exitosa (ver DriveSyncButton más abajo) — mismo criterio
+  // que loadPending en app/dashboard/qc/page.jsx.
+  async function fetchRecords() {
+    const supabase = getSupabaseClient()
+    if (!supabase) {
+      setError('Cliente Supabase no configurado (revisa las variables de entorno).')
+      setLoading(false)
+      return
+    }
 
-    async function fetchRecords() {
-      const supabase = getSupabaseClient()
-      if (!supabase) {
-        setError('Cliente Supabase no configurado (revisa las variables de entorno).')
-        setLoading(false)
+    setLoading(true)
+    try {
+      const { data: orgProbe, error: probeErr } = await supabase
+        .from('vw_monitoreo_web')
+        .select('ID_Organizacion')
+        .limit(1)
+
+      if (probeErr) {
+        setError(probeErr.message)
         return
       }
 
-      try {
-        const { data: orgProbe, error: probeErr } = await supabase
-          .from('vw_monitoreo_web')
-          .select('ID_Organizacion')
-          .limit(1)
-
-        if (cancelled) return
-        if (probeErr) {
-          setError(probeErr.message)
-          return
-        }
-
-        const organizationId = orgProbe?.[0]?.ID_Organizacion
-        if (!organizationId) {
-          setRecords([])
-          return
-        }
-
-        const { data, error: err } = await supabase
-          .from('vw_monitoreo_web')
-          .select(
-            'tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,productor_nombre,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,cumple_eudr,geom_geojson'
-          )
-          .eq('ID_Organizacion', organizationId)
-
-        if (cancelled) return
-        if (err) {
-          setError(err.message)
-        } else {
-          setRecords(Array.isArray(data) ? data : [])
-        }
-      } catch (err) {
-        if (!cancelled) setError(err?.message || 'Error inesperado al consultar vw_monitoreo_web.')
-      } finally {
-        if (!cancelled) setLoading(false)
+      const organizationId = orgProbe?.[0]?.ID_Organizacion
+      if (!organizationId) {
+        setRecords([])
+        return
       }
-    }
 
-    fetchRecords()
-    return () => {
-      cancelled = true
+      const { data, error: err } = await supabase
+        .from('vw_monitoreo_web')
+        .select(
+          'tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,productor_nombre,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,cumple_eudr,geom_geojson'
+        )
+        .eq('ID_Organizacion', organizationId)
+
+      if (err) {
+        setError(err.message)
+      } else {
+        setError(null)
+        setRecords(Array.isArray(data) ? data : [])
+      }
+    } catch (err) {
+      setError(err?.message || 'Error inesperado al consultar vw_monitoreo_web.')
+    } finally {
+      setLoading(false)
     }
+  }
+
+  useEffect(() => {
+    fetchRecords()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Inicialización del mapa (una sola vez). Leaflet requiere `window`, por eso
@@ -750,6 +751,7 @@ export default function MapDashboard() {
           {records.length} registro(s) aprobado(s) cargado(s)
         </span>
         <div className="flex gap-2">
+          <DriveSyncButton onSynced={fetchRecords} />
           <button
             type="button"
             onClick={() => setShowUpload(true)}
