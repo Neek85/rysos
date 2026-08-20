@@ -17,6 +17,7 @@ import {
 } from '@/lib/eudrQcActions'
 import { EUDRValidationError } from '@/lib/eudrDdsExporter'
 import QcDetailEditor from './components/QcDetailEditor'
+import QcTable from './components/QcTable'
 import DriveSyncButton from '@/components/gis/DriveSyncButton'
 import CargaEspacialModal from './components/CargaEspacialModal'
 
@@ -58,6 +59,15 @@ export default function QcConsolePage() {
   const [editingGeometryKey, setEditingGeometryKey] = useState(null)
   const [geometryDraft, setGeometryDraft] = useState(null)
   const [showUpload, setShowUpload] = useState(false)
+  // Resultados de "Ejecutar Test Espacial" (POST /api/qc/validate-spatial)
+  // keyed por record.key — vive acá (no en QcDetailEditor) porque
+  // QcTable.jsx también los necesita para el badge de cada fila de la
+  // lista, y porque un resultado ya calculado no debe perderse solo
+  // porque QcDetailEditor se remonta (key={record.key}) al cambiar de
+  // selección. Ver specs/qc_visualization_panel_update.md.
+  const [validationResults, setValidationResults] = useState({})
+  const [validatingKey, setValidatingKey] = useState(null)
+  const [validationError, setValidationError] = useState(null)
 
   async function loadPending() {
     const supabase = getSupabaseClient()
@@ -140,6 +150,31 @@ export default function QcConsolePage() {
       })
     } finally {
       setActionBusyKey(null)
+    }
+  }
+
+  // Validación topológica bajo demanda (app/api/qc/validate-spatial) — ver
+  // specs/qc_topological_eudr_validation.md. Nunca se dispara
+  // automáticamente para toda la lista: cada corrida es una llamada real
+  // a fn_validar_topologia_eudr, solo cuando el usuario la pide desde
+  // QcDetailEditor ("Ejecutar Test Espacial") para el registro
+  // seleccionado.
+  async function handleValidateTopology(record) {
+    setValidationError(null)
+    setValidatingKey(record.key)
+    try {
+      const res = await fetch('/api/qc/validate-spatial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabla_origen: record.tabla_origen, registro_id: record.id_origen }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'No se pudo validar la topología.')
+      setValidationResults((prev) => ({ ...prev, [record.key]: data.result }))
+    } catch (err) {
+      setValidationError(err?.message || 'No se pudo validar la topología.')
+    } finally {
+      setValidatingKey(null)
     }
   }
 
@@ -251,29 +286,14 @@ export default function QcConsolePage() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
         <section className="max-h-[600px] space-y-2 overflow-y-auto rounded-xl border border-gray-200 bg-white p-3 lg:col-span-1">
-          {loading && <p className="text-sm text-gray-400">Cargando registros…</p>}
-          {!loading && error && <p className="rounded bg-red-50 p-2 text-sm text-red-600">{error}</p>}
-          {!loading && !error && filteredRecords.length === 0 && (
-            <p className="text-sm text-gray-400">Sin registros pendientes en esta capa.</p>
-          )}
-          {filteredRecords.map((record) => (
-            <button
-              key={record.key}
-              type="button"
-              onClick={() => setSelectedKey(record.key)}
-              className={`w-full rounded-lg border p-2 text-left text-xs ${
-                record.key === selectedKey
-                  ? 'border-green-700 bg-green-50'
-                  : 'border-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              <p className="font-semibold text-gray-700">
-                {LAYER_LABELS[record.tabla_origen] || record.tabla_origen}
-              </p>
-              <p className="text-gray-500">{displayParcela(record)}</p>
-              {record.clasificacion && <p className="text-gray-400">{record.clasificacion}</p>}
-            </button>
-          ))}
+          <QcTable
+            records={filteredRecords}
+            selectedKey={selectedKey}
+            onSelect={setSelectedKey}
+            validationResults={validationResults}
+            loading={loading}
+            error={error}
+          />
         </section>
 
         <section className="space-y-3 lg:col-span-3">
@@ -299,6 +319,10 @@ export default function QcConsolePage() {
               onApprove={() => handleDecision('approve')}
               onReject={() => handleDecision('reject')}
               busy={actionBusyKey === selectedRecord.key}
+              validationResult={validationResults[selectedRecord.key]}
+              validating={validatingKey === selectedRecord.key}
+              validationError={validationError}
+              onValidateTopology={handleValidateTopology}
             />
           )}
         </section>

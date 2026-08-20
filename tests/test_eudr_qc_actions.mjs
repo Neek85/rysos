@@ -34,6 +34,10 @@ function makeFakeSupabase(tableData) {
           rows = rows.filter((r) => vals.includes(r[col]))
           return builder
         },
+        limit(n) {
+          rows = rows.slice(0, n)
+          return builder
+        },
         update(payload) {
           pendingUpdate = payload
           return builder
@@ -163,6 +167,37 @@ test('fetchPendingRecords no explota sin ID_Parcela_Fija en ningún registro (ev
   })
   const records = await fetchPendingRecords(supabase)
   assert.deepEqual(records, [])
+})
+
+test('fetchPendingRecords aísla por organización — nunca devuelve PENDIENTE de otra organización (gap real cerrado, ver specs/qc_visualization_panel_update.md)', async () => {
+  const supabase = makeFakeSupabase({
+    vw_monitoreo_poligonos: [
+      {
+        tabla_origen: 'EUDR_USO_SUELO',
+        registro_id: '1',
+        id_origen: '1',
+        id_monitoreo: 'uuid-1',
+        ID_Organizacion: 'COOP-JS',
+        ID_Parcela_Fija: 'COOP-JS-001',
+        estado_revision: PENDING_STATE,
+      },
+      {
+        tabla_origen: 'EUDR_USO_SUELO',
+        registro_id: '2',
+        id_origen: '2',
+        id_monitoreo: 'uuid-2',
+        ID_Organizacion: 'OTRA-COOP',
+        ID_Parcela_Fija: 'OTRA-COOP-001',
+        estado_revision: PENDING_STATE,
+      },
+    ],
+    vw_monitoreo_puntos: [],
+    PADRON_PARCELAS: [],
+  })
+
+  const records = await fetchPendingRecords(supabase)
+  assert.equal(records.length, 1)
+  assert.equal(records[0].ID_Organizacion, 'COOP-JS')
 })
 
 // ---------------------------------------------------------------

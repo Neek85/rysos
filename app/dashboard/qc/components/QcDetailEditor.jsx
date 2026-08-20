@@ -61,6 +61,16 @@ export default function QcDetailEditor({
   onApprove,
   onReject,
   busy,
+  // Validación topológica & EUDR — el resultado vive en page.jsx
+  // (validationResults, keyed por record.key), no acá: QcTable.jsx
+  // también necesita leerlo para el badge de cada fila, y un registro
+  // seleccionado no debe "perder" su resultado ya calculado solo porque
+  // este componente se remonta con key={record.key} al cambiar de
+  // selección (ver specs/qc_visualization_panel_update.md).
+  validationResult,
+  validating,
+  validationError,
+  onValidateTopology,
 }) {
   const fields = EDITABLE_FIELDS[record.tabla_origen] || []
   const [attributeValues, setAttributeValues] = useState(() => buildInitialAttributes(record, fields))
@@ -68,9 +78,6 @@ export default function QcDetailEditor({
   const [savingGeometry, setSavingGeometry] = useState(false)
   const [localError, setLocalError] = useState(null)
   const [photoUrl, setPhotoUrl] = useState(null)
-  const [validating, setValidating] = useState(false)
-  const [validationResult, setValidationResult] = useState(null)
-  const [validationError, setValidationError] = useState(null)
   const canValidateTopology = record.tabla_origen !== 'EUDR_INSTALACIONES'
 
   // Firma la URL de la foto de evidencia solo cuando hay una para este
@@ -112,30 +119,6 @@ export default function QcDetailEditor({
       setLocalError(err?.message || 'No se pudo guardar la geometría.')
     } finally {
       setSavingGeometry(false)
-    }
-  }
-
-  // Validación topológica bajo demanda (app/api/qc/validate-spatial) — ver
-  // specs/qc_topological_eudr_validation.md. El badge de deforestación
-  // siempre viene de la respuesta real de la API ({disponible:false, ...}
-  // hoy, no hay fuente de datos satelital integrada) — nunca se inventa un
-  // resultado en el cliente si la llamada falla.
-  async function handleValidateTopology() {
-    setValidationError(null)
-    setValidating(true)
-    try {
-      const res = await fetch('/api/qc/validate-spatial', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tabla_origen: record.tabla_origen, registro_id: record.id_origen }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data?.error || 'No se pudo validar la topología.')
-      setValidationResult(data.result)
-    } catch (err) {
-      setValidationError(err?.message || 'No se pudo validar la topología.')
-    } finally {
-      setValidating(false)
     }
   }
 
@@ -226,11 +209,11 @@ export default function QcDetailEditor({
             <p className="text-xs font-semibold text-gray-500">Validación topológica &amp; EUDR</p>
             <button
               type="button"
-              onClick={handleValidateTopology}
+              onClick={() => onValidateTopology(record)}
               disabled={validating}
               className="rounded border border-gray-300 px-3 py-1 text-xs font-semibold text-gray-700 hover:bg-white disabled:opacity-50"
             >
-              {validating ? 'Validando…' : 'Validar Topología & EUDR'}
+              {validating ? 'Validando…' : 'Ejecutar Test Espacial'}
             </button>
           </div>
 
