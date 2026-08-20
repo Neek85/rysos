@@ -421,6 +421,19 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
   la defensa real). **Sigue vacía** — cargar un dataset real (MINAM
   Geobosques/Hansen GFW/SERNANP) es una tarea de ingesta de datos aparte,
   no incluida en esta migración.
+- **`public.audit_logs`** (2026-08-20, `specs/qc_batch_audit_trail.md`):
+  traza inmutable de decisiones Aprobar/Rechazar de la Consola QC —
+  `"ID_Organizacion" text`, `accion text CHECK IN ('APROBADO','RECHAZADO')`
+  (nunca `'OBSERVADO'`, ese estado no existe), `tabla_origen text CHECK IN
+  ('EUDR_MONITOREO','EUDR_USO_SUELO','EUDR_INSTALACIONES')`, `entidad_id
+  text` (no `uuid` — mismo motivo que `id_origen` en
+  `fn_validar_topologia_eudr`), `detalles jsonb`, `created_at`. Trigger
+  `BEFORE UPDATE OR DELETE` rechaza cualquier modificación/borrado para
+  CUALQUIER rol (inmutabilidad real, no solo de RLS). RLS habilitada sin
+  políticas — solo `app/api/qc/audit-log/route.js` (Service Role Key)
+  escribe ahí. Escritura best-effort (no atómica con el `UPDATE` de
+  `estado_revision` de `approveRecord`/`rejectRecord`) — ver la spec para
+  el razonamiento completo.
 
 ## Índices espaciales
 

@@ -130,6 +130,8 @@ export default function QcConsolePage() {
         await rejectRecord(supabase, selectedRecord, motivo, organizationId)
       }
 
+      logQcDecisionAudit(selectedRecord, kind === 'approve' ? 'APROBADO' : 'RECHAZADO', organizationId, motivo)
+
       setRecords((prev) => prev.filter((r) => r.key !== selectedRecord.key))
       setSelectedKey(null)
       setMotivo('')
@@ -175,6 +177,38 @@ export default function QcConsolePage() {
       setValidationError(err?.message || 'No se pudo validar la topología.')
     } finally {
       setValidatingKey(null)
+    }
+  }
+
+  // Traza inmutable de la decisión (app/api/qc/audit-log) — ver
+  // specs/qc_batch_audit_trail.md. Best-effort, no bloquea la respuesta
+  // al usuario si falla (mismo criterio ya aceptado para
+  // qc_validation_audit_log en app/api/qc/validate-spatial/route.js) —
+  // NO es una transacción atómica con el UPDATE de estado_revision de
+  // arriba (eso hubiera exigido reemplazar approveRecord/rejectRecord,
+  // ya cubiertos por 8 tests reales tal como están). `detalles` incluye
+  // el último resultado de "Ejecutar Test Espacial" para este registro si
+  // existe (nunca PII — solo topología/solapamiento/deforestación).
+  async function logQcDecisionAudit(record, accion, organizationId, motivoTexto) {
+    if (!organizationId) return
+    try {
+      await fetch('/api/qc/audit-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ID_Organizacion: organizationId,
+          accion,
+          tabla_origen: record.tabla_origen,
+          entidad_id: record.id_origen,
+          detalles: {
+            validacion: validationResults[record.key] || null,
+            motivo: accion === 'RECHAZADO' ? motivoTexto : null,
+          },
+        }),
+      })
+    } catch {
+      // No-op: la auditoría es best-effort, un fallo acá no debe impedir
+      // que la decisión ya aplicada se refleje en la UI.
     }
   }
 
@@ -293,6 +327,7 @@ export default function QcConsolePage() {
             validationResults={validationResults}
             loading={loading}
             error={error}
+            onValidateTopology={handleValidateTopology}
           />
         </section>
 
