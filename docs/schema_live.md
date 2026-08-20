@@ -314,6 +314,21 @@ visita de monitoreo más reciente sobre la misma parcela). Expone
 > quedaría expuesto al mismo riesgo que ya se corrigió una vez en
 > `view_eudr_dashboard_aprobados`.
 
+> **Fallback de `productor_nombre` vía dueño de parcela (2026-08-19,
+> `20260819_vw_monitoreo_web_productor_nombre_parcela_fallback.sql`):** el
+> primer intento de resolución (JOIN sobre el `productor` ya resuelto —
+> `ID_Socio` de la visita EUDR_MONITOREO más reciente de la parcela) deja
+> "Sin registrar" a cualquier Subdivisión/Infraestructura cuya parcela nunca
+> tuvo una visita EUDR_MONITOREO registrada (común si se cargó vía el
+> Ingestor de Capas Espaciales o el Editor Vectorial, sin perímetro QField
+> previo). Se agrega un segundo `LEFT JOIN` independiente a `PADRON_SOCIOS`
+> (alias `ps_parcela`) sobre `PADRON_PARCELAS."ID_Socio"` (el dueño
+> REGISTRADO de la parcela — `pp` ya estaba joineada en esta vista, no hace
+> falta un JOIN nuevo a `PADRON_PARCELAS`), como fallback independiente del
+> primero (no se fusionan las llaves en un solo JOIN porque un `productor`
+> de texto libre no debe bloquear el intento de resolver por el dueño real
+> de la parcela).
+
 > **Gap de integración cerrado (2026-08-18):** `vw_monitoreo_poligonos`,
 > `vw_monitoreo_puntos` y `vw_monitoreo_web` ahora exponen `area_calculada_ha`
 > y `requiere_revision_area` en cada rama de su `UNION ALL` — ver

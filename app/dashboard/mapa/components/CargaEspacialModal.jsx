@@ -109,8 +109,15 @@ export default function CargaEspacialModal({ organizationId, onClose, onUploaded
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
+    // z-[9999]: leaflet.css fija z-index:1000 en .leaflet-top/.leaflet-bottom
+    // (controles de zoom/capas) — como esos controles son descendientes de
+    // .leaflet-container (position: relative, SIN z-index propio, así que no
+    // aísla su propio stacking context), ese z-index:1000 compite en el
+    // mismo contexto que este overlay. z-50 (raw z-index: 50) quedaba por
+    // debajo — los controles de Leaflet podían dibujarse encima del modal.
+    // Ver specs/gis_mapa_dashboard_polish_v2.md.
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 p-4">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-6 shadow-2xl">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-base font-bold text-gray-800">Cargar Capa Espacial</h2>
           <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600">
