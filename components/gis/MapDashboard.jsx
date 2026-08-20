@@ -214,7 +214,11 @@ function formatNombreParcela(record) {
 function tooltipHtml(record) {
   const codigoParcela = escapeHtml(resolveParcelaCodigo(record, 'Parcela'))
   const nombreParcela = formatNombreParcela(record)
-  const productor = record?.productor_nombre ? escapeHtml(record.productor_nombre) : 'Sin registrar'
+  // vw_monitoreo_web ya garantiza productor_nombre no-nulo (cascada termina
+  // en 'Socio no asignado', ver 20260819_vw_monitoreo_web_productor_nombre_parcela_fallback.sql)
+  // — este fallback es solo defensivo (ej. si la migración todavía no se
+  // aplicó en la instancia real, la columna puede faltar o venir NULL).
+  const productor = record?.productor_nombre ? escapeHtml(record.productor_nombre) : 'Socio no asignado'
   const clasificacion = record?.clasificacion ? escapeHtml(record.clasificacion) : 'Sin clasificar'
 
   if (record?.tabla_origen === 'EUDR_USO_SUELO') {
@@ -268,7 +272,11 @@ function estadoBadgeHtml(estado) {
 function popupHtml(record, photoUrl) {
   const codigoParcela = escapeHtml(resolveParcelaCodigo(record))
   const nombreParcela = formatNombreParcela(record)
-  const productor = record?.productor_nombre ? escapeHtml(record.productor_nombre) : 'Sin registrar'
+  // vw_monitoreo_web ya garantiza productor_nombre no-nulo (cascada termina
+  // en 'Socio no asignado', ver 20260819_vw_monitoreo_web_productor_nombre_parcela_fallback.sql)
+  // — este fallback es solo defensivo (ej. si la migración todavía no se
+  // aplicó en la instancia real, la columna puede faltar o venir NULL).
+  const productor = record?.productor_nombre ? escapeHtml(record.productor_nombre) : 'Socio no asignado'
   const clasificacion = record?.clasificacion ? escapeHtml(record.clasificacion) : 'Sin clasificar'
   const estado = record.estado_revision ? escapeHtml(record.estado_revision) : '—'
 

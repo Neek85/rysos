@@ -328,6 +328,19 @@ visita de monitoreo más reciente sobre la misma parcela). Expone
 > primero (no se fusionan las llaves en un solo JOIN porque un `productor`
 > de texto libre no debe bloquear el intento de resolver por el dueño real
 > de la parcela).
+>
+> **Cascada final con default literal (2026-08-19, misma migración,
+> actualizada el mismo día):** `productor_nombre` ya nunca es `NULL` —
+> `COALESCE(ps.socio_nombre_completo, ps_parcela.socio_nombre_completo,
+> src.productor, mon.productor, 'Socio no asignado')`. El texto libre
+> (`nuevo_productor_nombre`, cuando un técnico QField anotó un nombre sin
+> `ID_Socio` formal) se conserva ANTES del default — solo cae a "Socio no
+> asignado" cuando no hay absolutamente ningún dato de productor. Se evaluó
+> y descartó un "parche defensivo" client-side en `MapDashboard.jsx` que
+> buscara en otras filas de `records` la misma parcela: como esta cascada es
+> determinística por parcela+organización, todas las filas de una misma
+> parcela ya comparten el mismo `productor_nombre` calculado por la vista —
+> no hay ningún valor mejor que un parche así pudiera encontrar.
 
 > **Gap de integración cerrado (2026-08-18):** `vw_monitoreo_poligonos`,
 > `vw_monitoreo_puntos` y `vw_monitoreo_web` ahora exponen `area_calculada_ha`

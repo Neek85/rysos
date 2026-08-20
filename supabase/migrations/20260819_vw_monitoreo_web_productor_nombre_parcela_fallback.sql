@@ -22,17 +22,37 @@
 -- separado del existente (alias ps, sobre el productor ya resuelto) en vez
 -- de fusionar las llaves en un solo COALESCE, porque si `productor` es
 -- texto libre (nuevo_productor_nombre, no matchea ningún ID_Socio real) no
--- debe "ganarle" en el COALESCE al intento de resolver por PADRON_PARCELAS
--- — cada camino se resuelve de forma independiente y se combinan recién al
--- final: COALESCE(ps.socio_nombre_completo, ps_parcela.socio_nombre_completo,
--- src.productor, mon.productor).
+-- debe "ganarle" en el COALESCE al intento de resolver por PADRON_PARCELAS.
+--
+-- ACTUALIZADO (2026-08-19, mismo día — specs/gis_mapa_dashboard_polish_v3.md):
+-- un prompt de seguimiento pidió terminar la cascada con un default literal
+-- "Socio no asignado" en vez de dejar que caiga a NULL (que el cliente
+-- mostraba como "Sin registrar"). Se agrega ese default AL FINAL de la
+-- cascada, pero **sin quitar el fallback a `src.productor`/`mon.productor`**
+-- como pedía el prompt al pie de la letra — esos dos valores pueden ser el
+-- nombre libre real que un técnico QField escribió para un productor sin
+-- `ID_Socio` formal todavía (`nuevo_productor_nombre`, ver
+-- scripts/etl_drive_to_supabase.py); reemplazarlos directamente por "Socio
+-- no asignado" descartaría un nombre real ya conocido. Cascada final:
+-- COALESCE(ps.socio_nombre_completo, ps_parcela.socio_nombre_completo,
+-- src.productor, mon.productor, 'Socio no asignado') — el default solo
+-- aplica cuando NINGÚN dato de productor existe en absoluto.
 --
 -- No se toca lib/actions/gisActions.js ni se agrega ningún helper cliente
 -- nuevo tipo enrichWithParcelaInfo — a diferencia de la Consola QC
 -- (lib/eudrQcActions.js), que enriquece del lado del cliente porque
 -- vw_monitoreo_poligonos/puntos no traen datos de PADRON_PARCELAS,
 -- vw_monitoreo_web YA joinea PADRON_PARCELAS (pp) del lado del servidor —
--- resolver el nombre ahí es más simple y evita un segundo roundtrip.
+-- resolver el nombre ahí es más simple y evita un segundo roundtrip. El
+-- prompt de seguimiento también pidió un "parche defensivo" client-side en
+-- MapDashboard.jsx que buscara en un array de parcelas en memoria — no
+-- existe tal array (MapDashboard.jsx no hace ningún fetch propio a
+-- PADRON_PARCELAS, todo llega ya resuelto en `records` vía esta vista) y,
+-- como esta cascada es determinística por parcela+organización (no por
+-- fila), todos los registros de una misma parcela ya comparten el mismo
+-- `productor_nombre` — un "parche" que revisara otras filas de `records`
+-- nunca encontraría un valor mejor que el que la vista ya calculó. Ver
+-- specs/gis_mapa_dashboard_polish_v3.md para el detalle de esta decisión.
 --
 -- CREATE OR REPLACE VIEW: mismo nombre/tipo/posición de columna
 -- (productor_nombre sigue siendo la última columna) — solo cambia la
@@ -61,8 +81,10 @@ SELECT
     src.requiere_revision_area,
     src.geom,
     ST_AsGeoJSON(src.geom)::json AS geom_geojson,
-    COALESCE(ps.socio_nombre_completo, ps_parcela.socio_nombre_completo, src.productor, mon.productor)
-        AS productor_nombre
+    COALESCE(
+        ps.socio_nombre_completo, ps_parcela.socio_nombre_completo,
+        src.productor, mon.productor, 'Socio no asignado'
+    ) AS productor_nombre
 FROM public.vw_monitoreo_poligonos src
 LEFT JOIN public."PADRON_PARCELAS" pp ON src."ID_Parcela_Fija" = pp."ID_Parcela_Fija"
 LEFT JOIN LATERAL (
@@ -99,8 +121,10 @@ SELECT
     src.requiere_revision_area,
     src.geom,
     ST_AsGeoJSON(src.geom)::json AS geom_geojson,
-    COALESCE(ps.socio_nombre_completo, ps_parcela.socio_nombre_completo, src.productor, mon.productor)
-        AS productor_nombre
+    COALESCE(
+        ps.socio_nombre_completo, ps_parcela.socio_nombre_completo,
+        src.productor, mon.productor, 'Socio no asignado'
+    ) AS productor_nombre
 FROM public.vw_monitoreo_puntos src
 LEFT JOIN public."PADRON_PARCELAS" pp ON src."ID_Parcela_Fija" = pp."ID_Parcela_Fija"
 LEFT JOIN LATERAL (
