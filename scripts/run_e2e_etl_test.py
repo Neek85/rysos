@@ -106,8 +106,35 @@ def verify_photo_criterion(result: dict) -> str:
     return storage_path
 
 
-def run_e2e(base_dir: Path, mock_supabase: MagicMock | None = None) -> dict:
-    """Orquesta el escenario E2E completo y devuelve resultados + evidencias de verificacion."""
+
+# HALLAZGO REAL (2026-08-21, ver docs/adr/ADR-007-integridad-referencial-id-organizacion.md):
+# este script, en modo REAL (con SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY
+# reales), inserta filas de verdad en EUDR_MONITOREO usando ORG_ID =
+# "ORG-COOP-NORTE" — un código de organización de prueba que nunca tuvo
+# fila correspondiente en ORGANIZACIONES, y el script no las limpiaba al
+# terminar. Corridas repetidas (confirmado: 6 filas huérfanas
+# acumuladas en EUDR_MONITOREO) dejaban basura permanente en la
+# instancia viva. Este teardown borra, en un `finally` (corre tanto si
+# el test pasa como si falla a mitad de camino), únicamente las filas
+# que ESTE run creó (por `id_monitoreo`, nunca un `DELETE ... WHERE
+# "ID_Organizacion" = ORG_ID` sin acotar — evita borrar corridas
+# anteriores que hayan quedado por otro motivo, o cualquier fila real
+# que coincidiera por casualidad con el mismo ID_Organizacion).
+def teardown_e2e_rows(pipeline: DriveZipETLPipeline, inserted_ids: list[str]) -> None:
+    if not inserted_ids:
+        return
+    for row_id in inserted_ids:
+        pipeline.supabase.table("EUDR_MONITOREO").delete().eq("id_monitoreo", row_id).execute()
+
+
+def run_e2e(base_dir: Path, mock_supabase: MagicMock | None = None, cleanup: bool = True) -> dict:
+    """Orquesta el escenario E2E completo y devuelve resultados + evidencias de verificacion.
+
+    `cleanup=True` (default): borra, en un `finally`, las filas reales que
+    este run insertó en EUDR_MONITOREO — corre incluso si una verificación
+    intermedia lanza `AssertionError`. `cleanup=False` es solo para
+    depuración manual (inspeccionar las filas insertadas a propósito).
+    """
     supabase_url = os.getenv("SUPABASE_URL", "https://fake.supabase.co")
     supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "fake-key")
 
@@ -117,30 +144,38 @@ def run_e2e(base_dir: Path, mock_supabase: MagicMock | None = None) -> dict:
     gdf_reprojected = verify_reprojection(zip_path, base_dir / "_verify_reproj")
 
     pipeline = build_pipeline(base_dir, supabase_url, supabase_key, mock_supabase=mock_supabase)
-    result = pipeline.process_package(zip_path, execute_move=True)
+    inserted_ids: list[str] = []
+    try:
+        result = pipeline.process_package(zip_path, execute_move=True)
+        inserted_ids = list(result.get("inserted_ids") or [])
 
-    archived_zip = verify_archive_criterion(archive_dir)
-    storage_path = verify_photo_criterion(result)
+        archived_zip = verify_archive_criterion(archive_dir)
+        storage_path = verify_photo_criterion(result)
 
-    if mock_supabase is not None:
-        insert_payload = mock_supabase.table.return_value.upsert.call_args[0][0]
-        estado_revision = insert_payload["estado_revision"]
-    else:
-        response = (
-            pipeline.supabase.table("EUDR_MONITOREO")
-            .select("estado_revision")
-            .eq("id_monitoreo", result["inserted_ids"][0])
-            .execute()
-        )
-        estado_revision = response.data[0]["estado_revision"]
+        if mock_supabase is not None:
+            insert_payload = mock_supabase.table.return_value.upsert.call_args[0][0]
+            estado_revision = insert_payload["estado_revision"]
+        else:
+            response = (
+                pipeline.supabase.table("EUDR_MONITOREO")
+                .select("estado_revision")
+                .eq("id_monitoreo", result["inserted_ids"][0])
+                .execute()
+            )
+            estado_revision = response.data[0]["estado_revision"]
 
-    return {
-        "result": result,
-        "archived_zip": archived_zip,
-        "storage_path": storage_path,
-        "gdf_epsg": gdf_reprojected.crs.to_epsg(),
-        "estado_revision": estado_revision,
-    }
+        return {
+            "result": result,
+            "archived_zip": archived_zip,
+            "storage_path": storage_path,
+            "gdf_epsg": gdf_reprojected.crs.to_epsg(),
+            "estado_revision": estado_revision,
+        }
+    finally:
+        # mock_supabase: no hay nada real que borrar (modo simulado).
+        # cleanup=False: depuración manual, se deja la fila a propósito.
+        if cleanup and mock_supabase is None:
+            teardown_e2e_rows(pipeline, inserted_ids)
 
 
 def main() -> int:

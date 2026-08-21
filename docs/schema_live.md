@@ -1,11 +1,20 @@
 # Schema Live — Snapshot Manual
 
 > **Nota de alcance:** este documento es un snapshot manual derivado de leer
-> `supabase/migrations/*.sql` en orden cronológico. No existe ningún script
-> `npm run sync-schema` en este repo (no hay conexión Postgres viva ni
-> Service Role Key disponible en este entorno de desarrollo) — para mantenerlo
-> al día, volver a generarlo a mano tras cada migración nueva, o pedir que se
-> regenere leyendo el historial completo de `supabase/migrations/`.
+> `supabase/migrations/*.sql` en orden cronológico, verificado puntualmente
+> contra la instancia real vía REST cuando hace falta confirmar algo (ver
+> las notas fechadas abajo). No existe ningún script `npm run sync-schema`
+> en este repo — para mantenerlo al día, volver a generarlo a mano tras
+> cada migración nueva, o pedir que se regenere leyendo el historial
+> completo de `supabase/migrations/`. **Corrección (2026-08-21):** la
+> frase anterior de esta nota decía "no hay conexión Postgres viva ni
+> Service Role Key disponible en este entorno de desarrollo" — eso es
+> falso, ambas están disponibles en `.env.local` (`NEXT_PUBLIC_SUPABASE_URL`
+> + `SUPABASE_SERVICE_ROLE_KEY`) y se usaron repetidamente durante toda
+> la sesión para verificar en vivo (lectura de tablas sin política `anon`,
+> conteos, introspección de FK vía PostgREST). No hay un cliente `psql`
+> directo, pero sí hay forma real de consultar la instancia — no asumir
+> lo contrario en tareas futuras.
 >
 > **Instancia Supabase:** `jhtocgxlozfuzullrtol`. Ninguna migración de este
 > repo se aplica automáticamente contra esa instancia — todas requieren
@@ -33,6 +42,16 @@
 > fortification, flags de área en las vistas, guardado atómico de
 > Inspecciones, fix RLS Inspecciones) ya está aplicada encima — la consulta
 > de esta tarea no pidió esas columnas nuevas.
+> Actualizado: 2026-08-21 — investigación puntual (no una regeneración
+> completa): agrega `fn_parcelas_vecinas_eudr` (única función creada desde
+> la última actualización real, 2026-08-20, que faltaba documentar acá) y
+> documenta con detalle real `ORGANIZACIONES` (columnas confirmadas con
+> Service Role Key, las 2 filas reales que existen, ausencia confirmada de
+> FK hacia esa tabla desde las 5 tablas transaccionales principales, y el
+> origen real de `"ORG-COOP-NORTE"` — dato de un E2E test real, no un
+> huérfano accidental). El resto del documento se revisó y sigue
+> reflejando el estado real (última actualización completa: 2026-08-20,
+> commit `529ac0a`).
 > Actualizado: 2026-08-18, tras construir el Padrón Web de Socios y Fincas
 > (`specs/padron_web_socios.md`, `/dashboard/socios`) — confirma el schema
 > real completo de `PADRON_SOCIOS`/`PADRON_PARCELAS` (antes solo
@@ -51,8 +70,41 @@ referenciadas por las migraciones y vistas de este repo; puede haber columnas
 adicionales no documentadas aquí.
 
 ### `public."ORGANIZACIONES"`
-- `"ID"` — PK de tenant (texto), comparado contra el claim JWT `ID_Organizacion`.
+- Columnas reales confirmadas en vivo con Service Role Key (2026-08-21 —
+  `anon` no tiene política `SELECT` acá, solo `authenticated`, así que no
+  es introspeccionable con la anon key): `"ID"` (PK de tenant, texto —
+  código manual como `"COOP-JS"`/`"COOP-ND"`, comparado contra el claim
+  JWT `ID_Organizacion`), `"Nombre_Organizacion"`, `"RUC"`,
+  `"Direccion_Fiscal"`, `"Representante_Legal"`, `"Logo"`, `"Config"`
+  (jsonb, **`NULL`** en las 2 filas reales hoy — sin estructura definida
+  todavía, ver `ORGANIZACIONES.Config.gis.radio_contexto_vecinos_m` en
+  `docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md` para el primer uso
+  real), `creado_en`, `actualizado_en`, `creado_por`.
+- **Solo 2 filas reales existen hoy: `"COOP-JS"` (COOP. JESUS SOLIDARIO)
+  y `"COOP-ND"` (Asociacion Miladro de Jesus).**
 - RLS: solo `SELECT` (asimetría deliberada — Tarea 9.1).
+- **Sin FK real desde ninguna tabla transaccional** (confirmado en vivo,
+  2026-08-21, vía PostgREST — `?select=*,ORGANIZACIONES(*)` contra
+  `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES`/
+  `PADRON_SOCIOS`/`PADRON_PARCELAS` devuelve `PGRST200`, "no matches
+  were found" para las 5 — `ID_Organizacion` es una convención de texto
+  sin constraint en todo el schema, no solo en la tabla que se esté
+  mirando puntualmente). Un valor de `ID_Organizacion` que no exista en
+  `ORGANIZACIONES` no genera ningún error de escritura.
+- **`"ORG-COOP-NORTE"` es dato real de prueba E2E, no orgánico ni
+  huérfano por accidente:** aparece en 6 filas de `EUDR_MONITOREO`, 4 de
+  `EUDR_USO_SUELO`, 4 de `EUDR_INSTALACIONES` (0 en `PADRON_SOCIOS`/
+  `PADRON_PARCELAS`, confirmado en vivo) pero en NINGUNA fila de
+  `ORGANIZACIONES` — origen: `scripts/run_e2e_etl_test.py`
+  (`ORG_ID = "ORG-COOP-NORTE"`, línea 17), un script de prueba
+  end-to-end real (no un fixture de test unitario) que ingesta un `.zip`
+  de QField de prueba a través del pipeline real
+  (`scripts/etl_drive_to_supabase.py`) contra la instancia viva — ver
+  `docs/prompts/prompt_e2e_etl_test.md`. Nunca se creó la fila
+  correspondiente en `ORGANIZACIONES` porque el pipeline de ingesta no
+  la necesita (sin FK, ver arriba) y el E2E test no la crea. No es un bug
+  del pipeline ni pérdida de datos — es un artefacto esperado de haber
+  corrido esa prueba contra la base real sin limpieza posterior.
 
 ### `public."PADRON_SOCIOS"`
 Schema real completo confirmado en vivo el 2026-08-18 (`specs/padron_web_socios.md`,
@@ -402,6 +454,7 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
 | `public.trg_sanitize_geom_monitoreo/uso_suelo/instalaciones()` | `trigger` | **Nuevo (2026-08-18).** Aplican las dos funciones de arriba a la columna de geometría de su tabla y setean `area_calculada_ha`/`requiere_revision_area`. |
 | `public.fn_guardar_inspeccion_completa(...)` | `jsonb` (`{id, created}`) | **Nuevo (2026-08-18).** Guardado atómico de `INSPECCIONES` + 6 `CAP_*` en una sola transacción — reemplaza 7 llamadas REST independientes que antes no eran atómicas. Sin `SECURITY DEFINER` (corre con el rol del llamador). Llamada desde `lib/inspeccionesActions.js::saveInspeccion()` vía `supabase.rpc(...)`. |
 | `public.fn_validar_topologia_eudr(p_tabla_origen text, p_registro_id text)` | `jsonb` | **Nuevo (2026-08-20), actualizada el mismo día.** Validación topológica bajo demanda (`ST_IsValid`/`ST_IsSimple`/solapamiento contra otros `APROBADO` de la misma org/`fn_calcular_area_ha`) para un registro `EUDR_MONITOREO`/`EUDR_USO_SUELO` — rechaza `EUDR_INSTALACIONES` (siempre puntual). Sin `SECURITY DEFINER`; se llama solo desde `app/api/qc/validate-spatial/route.js` con el Service Role Key. El campo `deforestacion` cruza contra `EUDR_COBERTURA_BOSCOSA_2020` SI esa tabla tiene filas (`anio_perdida > 2020` + `ST_Intersects`) — mientras siga vacía (estado por defecto), sigue devolviendo `{disponible:false,...}` igual que su primera versión. |
+| `public.fn_parcelas_vecinas_eudr(p_organizacion_id text, p_geom geometry, p_radio_m numeric DEFAULT 500, p_excluir_id uuid DEFAULT NULL, p_limite integer DEFAULT 25)` | `TABLE(id uuid, geom geometry, codigo_socio text, total_encontrados integer, total_devueltos integer)` | **Nuevo (2026-08-21), pendiente de aplicación manual.** Capa de contexto de parcelas vecinas (`EUDR_MONITOREO` `APROBADO` dentro de un radio, `ST_DWithin` sobre `::geography`) para la Consola QC — ver `docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md`. Sin `SECURITY DEFINER`; se llama solo desde `lib/actions/qcActions.js::fetchParcelasVecinas` con el Service Role Key (nunca expuesta a `anon` — `p_organizacion_id` lo decide el llamador, exponerla abriría fuga cross-tenant). |
 
 ## Tablas nuevas fuera del núcleo EUDR/Padrón
 
