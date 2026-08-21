@@ -248,3 +248,40 @@ así que el orden de creación por sí solo logra el mismo z-order buscado.
 
 Commit: `fix(qc): excluye mutuamente editor de geometria nueva y ajuste
 de geometria existente`, push a `staging`.
+
+## Fase 2 — verificación explícita del redondeo cliente/server (2026-08-21, a pedido directo)
+
+A pedido explícito, verificación línea por línea de que el redondeo del
+panel en vivo (`lib/geo/areaUtils.js`) coincide con el server:
+
+- **Cliente** (`lib/geo/areaUtils.js:32-37`): `AREA_HA_DECIMALS = 4`,
+  `roundTo(value, decimals) { const factor = 10**decimals; return
+  Math.round(value * factor) / factor }`.
+- **`fn_validar_topologia_eudr` NO redondea ella misma**
+  (`supabase/migrations/20260820_fn_validar_topologia_eudr.sql:127`):
+  `v_area_ha := public.fn_calcular_area_ha(v_geom);` — delega.
+- **La constante real** (`supabase/migrations/20260818_gis_core_sanitization.sql:88`):
+  `ROUND((ST_Area(p_geom::geography) / 10000)::numeric, 4)`.
+
+Cantidad de decimales: coincide (4 ambos lados). Dirección de redondeo:
+coincide (Postgres `numeric` `ROUND` y JS `Math.round` redondean
+half-away-from-zero para valores positivos, y el área nunca es
+negativa).
+
+**Probado en vivo si `Number(x.toFixed(4))` sería más preciso que
+`Math.round(x*10**4)/10**4`** (la sospecha específica que motivó la
+pregunta) — no lo es: `node -e` confirmó que ambas técnicas devuelven
+exactamente el mismo resultado en el caso clásico de imprecisión de
+punto flotante (`1.005` con 2 decimales → ambas dan `1`, no `1.01`,
+porque `1.005` no es representable exacto en binario IEEE754). Ninguna
+técnica de redondeo nativa de JS evita esto — solo una librería de
+precisión arbitraria (`decimal.js`/`big.js`) lo haría, y no se agregó esa
+dependencia porque no resolvería el problema real: el área del cliente
+(`@turf/area`, esfera aproximada) y la del server
+(`ST_Area(geography)`, geodésica sobre el elipsoide WGS84) usan modelos
+matemáticos distintos de la forma de la Tierra y ya divergen varios
+dígitos ANTES del último decimal — un redondeo perfecto no las haría
+coincidir, solo redondearía con más precisión dos números que ya son
+distintos. Se documentó esto explícitamente como comentario en
+`roundTo()` (`lib/geo/areaUtils.js`) para que no se persiga esta misma
+pista de nuevo — commit de documentación, sin cambio funcional.
