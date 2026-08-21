@@ -28,7 +28,7 @@ function read(relPath) {
 
 function getEditingKeyEffect(source) {
   const match = source.match(
-    /\/\/ Modo edición de vértices[\s\S]*?\}, \[editingKey, records\]\)/
+    /\/\/ Modo edición de vértices[\s\S]*?\}, \[editingKey, records, mapReady\]\)/
   )
   assert.ok(match, 'el efecto de editingKey debería existir')
   return match[0]

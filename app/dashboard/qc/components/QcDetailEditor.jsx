@@ -54,6 +54,12 @@ export default function QcDetailEditor({
   geometryDraft,
   isEditingGeometry,
   onToggleGeometryEdit,
+  // true mientras hay una sesión de dibujo de geometría nueva en curso en
+  // el Editor Vectorial (mutua exclusión, ver
+  // docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md) — deshabilita
+  // el toggle para EMPEZAR a editar este registro, pero nunca bloquea
+  // terminar una edición ya en curso (page.jsx ya excluye ese caso).
+  geometryEditDisabled,
   onSaveAttributes,
   onSaveGeometry,
   motivo,
@@ -196,7 +202,9 @@ export default function QcDetailEditor({
           <button
             type="button"
             onClick={onToggleGeometryEdit}
-            className={`rounded border px-3 py-1 text-xs font-semibold ${
+            disabled={geometryEditDisabled}
+            title={geometryEditDisabled ? 'Terminá o cancelá el dibujo en curso en el Editor Vectorial primero.' : undefined}
+            className={`rounded border px-3 py-1 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
               isEditingGeometry
                 ? 'border-amber-400 bg-amber-50 text-amber-700'
                 : 'border-gray-300 text-gray-700 hover:bg-white'

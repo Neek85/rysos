@@ -167,3 +167,84 @@ un batch sobrescribiría la capa de comparación con la del último registro
 validado, no la que el usuario está mirando). Se limpia
 (`setComparisonFeatures([])`) en el mismo efecto que ya reseteaba
 `editingGeometryKey`/`geometryDraft` al cambiar `selectedKey`.
+
+## Re-investigación (2026-08-21, mismo día) — "editor de puntos abre modo polígono" SÍ era real
+
+Un prompt de seguimiento aportó evidencia nueva y específica (2 capturas
+reales de sesión, 1 minuto de diferencia, mismo registro Instalaciones):
+la hipótesis de colisión entre el toolbar del Editor Vectorial (crear
+registro nuevo — botones ⬠ Polígono/📍 Marcador, siempre visibles arriba
+a la izquierda del mapa) y el modo "Ajustar Geometría" (editar el registro
+ya seleccionado). Esta vez SÍ se confirmó.
+
+**Código relevante ANTES de tocar nada:** `useVectorEditor`
+(`app/dashboard/qc/components/VectorEditorTools.jsx`) engancha
+`attachVectorEditor` en un `useEffect` con dependencia `[mapReady]`
+únicamente — se ejecuta una sola vez al montar el mapa y nunca se
+reevalúa por `editingKey`. El toolbar de dibujo (`map.pm.addControls(...)`)
+queda activo y clickeable durante TODA la vida del componente,
+completamente independiente de si un registro existente está en modo
+"Ajustar Geometría".
+
+**Reproducido en vivo** (no solo inspección de código, como pide el
+prompt) con `javascript_tool`, secuencia exacta: seleccionar un registro
+Point → "Ajustar Geometría" → sin salir de "Editando…" → click real
+(`.click()`) sobre el botón "Dibujar Polígono" del toolbar. Resultado
+confirmado con una sola consulta al DOM:
+
+```json
+{ "stillEditing": true, "hasFinishAction": true, "hasRemoveLastVertex": true, "hasCancel": true, "markerStillDraggable": true }
+```
+
+Los 5 campos en `true` a la vez: el registro seguía en "Editando…", el
+marcador seguía arrastrable, Y el toolbar completo de dibujo de polígono
+(Finalizar/Eliminar último vértice/Cancelar) estaba activo — exactamente
+lo que muestran las 2 capturas del reporte.
+
+(Nota metodológica: los clicks del `computer` tool sobre este botón
+específico no lo activaban de forma confiable — mismo tipo de flakiness
+ya documentado en esta sesión para otros elementos — por eso la
+reproducción se hizo con un `.click()` real vía `javascript_tool` sobre
+el elemento DOM, que sí dispara el evento que Leaflet escucha.)
+
+### Regresión real y no relacionada, encontrada en el camino
+
+Antes de poder reproducir nada, el toolbar del Editor Vectorial no
+aparecía en absoluto — ni un solo botón de dibujo, en ningún registro. Se
+aisló con un `console.error` temporal en el `catch` de `init()`
+(`components/gis/QcConsoleMap.jsx`): `layerGroupRef.current.bringToFront
+is not a function`. Causa: `L.layerGroup()` crea un `L.LayerGroup` plano,
+que **no tiene** `.bringToFront()` — ese método solo existe en
+`L.FeatureGroup`/capas basadas en `L.Path`. La línea se agregó en la
+tarea anterior (capa de comparación de solapamiento) para intentar
+garantizar el z-order visual; al tirar, quedaba atrapada por el
+`catch {}` silencioso de `init()`, dejando `mapReady` en `false` para
+siempre — con eso, **todo** el Editor Vectorial (no solo el toolbar de
+dibujo) quedaba inoperable desde el commit anterior. Corregido sin
+`bringToFront()`: `comparisonGroupRef` ahora se agrega al mapa ANTES que
+`layerGroupRef` — Leaflet apila las capas en el orden en que se agregan,
+así que el orden de creación por sí solo logra el mismo z-order buscado.
+
+### Fix: exclusión mutua real, en ambas direcciones
+
+1. **Editar bloquea dibujar** (la dirección reportada): el mismo efecto
+   de `editingKey` en `QcConsoleMap.jsx` ahora llama
+   `map.pm.Toolbar.setButtonDisabled('drawPolygon'|'drawMarker',
+   isAnyEditing)` — API real de geoman que agrega la clase CSS
+   `pm-disabled` + `aria-disabled="true"` (deshabilitado **visualmente**,
+   no solo un flag lógico, tal como pedía el prompt). Confirmado en vivo:
+   con un registro en "Editando…", el botón de Polígono muestra
+   `pm-disabled`/`aria-disabled="true"`, y clickearlo ya no crea ningún
+   vértice (`vertexMarkerCount: 0`, contenedor de acciones con
+   `display: none`). Al terminar la edición, la clase se remueve.
+2. **Dibujar bloquea editar** (dirección inversa, para exclusión mutua
+   real): `QcConsoleMap.jsx` reporta hacia `page.jsx` (nuevo callback
+   `onDrawSessionActiveChange`) cuando hay un borrador o una capa dibujada
+   sin guardar (`vectorEditor.draft || vectorEditor.drawnLayer`).
+   `page.jsx` deshabilita el botón "Ajustar Geometría" en
+   `QcDetailEditor.jsx` (nueva prop `geometryEditDisabled`) para
+   cualquier registro que NO esté ya en edición — nunca bloquea terminar
+   una edición ya en curso.
+
+Commit: `fix(qc): excluye mutuamente editor de geometria nueva y ajuste
+de geometria existente`, push a `staging`.

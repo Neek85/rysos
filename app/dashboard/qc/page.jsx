@@ -77,6 +77,17 @@ export default function QcConsolePage() {
   // seleccionado. Se limpia al cambiar de registro (ver el efecto de
   // [selectedKey] más abajo), nunca sobrevive apuntando a otra capa.
   const [comparisonFeatures, setComparisonFeatures] = useState([])
+  // Exclusión mutua entre "crear registro nuevo" (Editor Vectorial, toolbar
+  // de dibujo dentro de QcConsoleMap) y "Ajustar Geometría" (editar un
+  // registro existente ya seleccionado) — ver
+  // docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md, hallazgo
+  // confirmado en vivo: ambos mecanismos podían estar activos a la vez.
+  // QcConsoleMap reporta acá cuando hay un dibujo en curso (borrador o
+  // capa ya dibujada sin guardar) para deshabilitar el botón "Ajustar
+  // Geometría" en QcDetailEditor.jsx — la dirección inversa (editingKey
+  // deshabilita el toolbar de dibujo) la maneja QcConsoleMap.jsx
+  // directamente contra la API de geoman.
+  const [isDrawSessionActive, setIsDrawSessionActive] = useState(false)
 
   async function loadPending() {
     const supabase = getSupabaseClient()
@@ -392,6 +403,7 @@ export default function QcConsolePage() {
             organizationId={resolveOrganizationId(records)}
             onFeatureCreated={loadPending}
             comparisonFeatures={comparisonFeatures}
+            onDrawSessionActiveChange={setIsDrawSessionActive}
           />
         </section>
 
@@ -403,6 +415,7 @@ export default function QcConsolePage() {
               geometryDraft={geometryDraft}
               isEditingGeometry={editingGeometryKey === selectedRecord.key}
               onToggleGeometryEdit={handleToggleGeometryEdit}
+              geometryEditDisabled={isDrawSessionActive && editingGeometryKey !== selectedRecord.key}
               onSaveAttributes={handleSaveAttributes}
               onSaveGeometry={handleSaveGeometry}
               motivo={motivo}

@@ -76,6 +76,7 @@ export default function QcConsoleMap({
   organizationId,
   onFeatureCreated,
   comparisonFeatures,
+  onDrawSessionActiveChange,
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
@@ -153,13 +154,17 @@ export default function QcConsoleMap({
           maxZoom: 20,
         }).addTo(map)
 
-        layerGroupRef.current = L.layerGroup().addTo(map)
-        // Capa secundaria de comparación de solapamiento (ver el efecto de
-        // comparisonFeatures más abajo) — DEBAJO de layerGroupRef en el
-        // z-order (agregada antes) para que el registro en revisión quede
-        // siempre visualmente por encima de lo que solapa con él.
+        // Capa de comparación de solapamiento PRIMERO — Leaflet apila las
+        // capas en el orden en que se agregan al mapa (sin necesidad de
+        // bringToFront(), que además no existe en L.LayerGroup, solo en
+        // L.FeatureGroup/L.Path — usarlo acá rompía init() en silencio,
+        // dejando mapReady en false para siempre y con eso tumbando TODO
+        // el toolbar de "Editor Vectorial", ver
+        // docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md). Se
+        // agrega layerGroupRef DESPUÉS para que el registro en revisión
+        // quede siempre visualmente por encima de lo que solapa con él.
         comparisonGroupRef.current = L.layerGroup().addTo(map)
-        layerGroupRef.current.bringToFront()
+        layerGroupRef.current = L.layerGroup().addTo(map)
         if (!cancelled) setMapReady(true)
       } catch {
         // Fallo al inicializar (Leaflet no cargó, DOM no listo) — se deja
@@ -303,9 +308,38 @@ export default function QcConsoleMap({
   // completa, no de mover un vértice — la edición de vértices ya la cubre
   // `pm:edit`), pero se deja el listener por si alguna vez se habilita el
   // modo de arrastre de la forma completa.
+  //
+  // MUTUA EXCLUSIÓN con el toolbar de "crear registro nuevo" (Editor
+  // Vectorial, useVectorEditor/attachVectorEditor arriba) — ver
+  // docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md, hallazgo real
+  // confirmado en vivo (reproducido con javascript_tool): antes de este
+  // cambio, `attachVectorEditor` engancha el toolbar de dibujo UNA sola
+  // vez al montar (dependencia `[mapReady]` en useVectorEditor), sin
+  // ninguna relación con `editingKey` — mientras un registro existente
+  // estaba en modo "Ajustar Geometría", los botones ⬠ Polígono/📍
+  // Marcador seguían 100% clickeables, y clickearlos arrancaba una sesión
+  // de dibujo de polígono/marcador SUPERPUESTA (el toolbar completo con
+  // Finalizar/Eliminar último vértice/Cancelar aparece mientras el
+  // registro original sigue mostrando "Editando…"). Se deshabilitan
+  // visualmente los 2 botones de dibujo (`map.pm.Toolbar.setButtonDisabled`
+  // — agrega la clase CSS `pm-disabled` de geoman, no solo un estado
+  // lógico) mientras `editingKey` esté activo.
   useEffect(() => {
     const map = mapRef.current
-    if (!map) return
+    if (!map || !mapReady) return
+
+    const isAnyEditing = !!editingKey
+    // setButtonDisabled tira si el botón no existe todavía — solo puede
+    // pasar si este efecto corre antes de que useVectorEditor enganche el
+    // toolbar (mapReady ya lo garantiza acá, pero se guarda igual por las
+    // dudas de un desmontaje a mitad de camino).
+    try {
+      map.pm.Toolbar.setButtonDisabled('drawPolygon', isAnyEditing)
+      map.pm.Toolbar.setButtonDisabled('drawMarker', isAnyEditing)
+    } catch {
+      // No-op — el toolbar todavía no existe (condición de carrera al
+      // desmontar), no hay nada que deshabilitar.
+    }
 
     layersByKeyRef.current.forEach((layer, key) => {
       const childLayer = layer.getLayers?.()[0]
@@ -323,7 +357,18 @@ export default function QcConsoleMap({
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingKey, records])
+  }, [editingKey, records, mapReady])
+
+  // Dirección inversa de la misma exclusión mutua: mientras haya una
+  // sesión de dibujo de geometría nueva en curso (borrador con área/
+  // capa ya dibujada, aunque todavía sin guardar), se avisa al padre
+  // (`page.jsx`) para que deshabilite el botón "Ajustar Geometría" en
+  // QcDetailEditor.jsx — evita el caso simétrico (empezar a editar un
+  // registro existente mientras se está dibujando uno nuevo).
+  useEffect(() => {
+    const isDrawing = Boolean(vectorEditor.draft || vectorEditor.drawnLayer)
+    onDrawSessionActiveChange?.(isDrawing)
+  }, [vectorEditor.draft, vectorEditor.drawnLayer, onDrawSessionActiveChange])
 
   // Capa de comparación de solapamiento — dibuja las geometrías APROBADAS
   // reales devueltas por fetchComparisonGeometries (lib/eudrQcActions.js,
