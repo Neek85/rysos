@@ -7,14 +7,16 @@ import nextDynamic from 'next/dynamic'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import {
   fetchPendingRecords,
-  approveRecord,
-  rejectRecord,
-  updateRecordAttributes,
-  updateRecordGeometry,
   resolveOrganizationId,
   LAYER_LABELS,
   EUDRQcError,
 } from '@/lib/eudrQcActions'
+import {
+  approveQcRecord,
+  rejectQcRecord,
+  updateQcRecordAttributes,
+  updateQcRecordGeometry,
+} from '@/lib/actions/qcActions'
 import { EUDRValidationError } from '@/lib/eudrDdsExporter'
 import QcDetailEditor from './components/QcDetailEditor'
 import QcTable from './components/QcTable'
@@ -118,16 +120,14 @@ export default function QcConsolePage() {
 
   async function handleDecision(kind) {
     if (!selectedRecord || actionBusyKey) return
-    const supabase = getSupabaseClient()
-    if (!supabase) return
 
     setActionBusyKey(selectedRecord.key)
     try {
       const organizationId = resolveOrganizationId(records)
       if (kind === 'approve') {
-        await approveRecord(supabase, selectedRecord, organizationId)
+        await approveQcRecord(selectedRecord, organizationId)
       } else {
-        await rejectRecord(supabase, selectedRecord, motivo, organizationId)
+        await rejectQcRecord(selectedRecord, motivo, organizationId)
       }
 
       logQcDecisionAudit(selectedRecord, kind === 'approve' ? 'APROBADO' : 'RECHAZADO', organizationId, motivo)
@@ -236,20 +236,16 @@ export default function QcConsolePage() {
 
   async function handleSaveAttributes(attributes) {
     if (!selectedRecord) return
-    const supabase = getSupabaseClient()
-    if (!supabase) return
     const organizationId = resolveOrganizationId(records)
-    await updateRecordAttributes(supabase, selectedRecord, attributes, organizationId)
+    await updateQcRecordAttributes(selectedRecord, attributes, organizationId)
     setRecords((prev) => prev.map((r) => (r.key === selectedRecord.key ? { ...r, ...attributes } : r)))
     setToast({ type: 'success', message: `Atributos actualizados: ${displayParcela(selectedRecord)}.` })
   }
 
   async function handleSaveGeometry(geometry) {
     if (!selectedRecord || !geometry) return
-    const supabase = getSupabaseClient()
-    if (!supabase) return
     const organizationId = resolveOrganizationId(records)
-    await updateRecordGeometry(supabase, selectedRecord, geometry, organizationId)
+    await updateQcRecordGeometry(selectedRecord, geometry, organizationId)
     setRecords((prev) => prev.map((r) => (r.key === selectedRecord.key ? { ...r, geom: geometry } : r)))
     setEditingGeometryKey(null)
     setGeometryDraft(null)
@@ -329,8 +325,19 @@ export default function QcConsolePage() {
         </p>
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
-        <section className="max-h-[600px] space-y-2 overflow-y-auto rounded-xl border border-gray-200 bg-white p-3 lg:col-span-1">
+      {/* Layout de 3 columnas (lista | mapa | panel de edición fijo) — ver
+          specs/consola_qc_layout_y_validacion.md. Antes el panel de edición
+          vivía debajo del mapa en la misma columna (grid-cols-4, mapa+panel
+          en col-span-3 apilados), obligando a hacer scroll de página para
+          llegar a Aprobar/Rechazar al seleccionar un registro. Ahora el
+          panel es su propia columna con `sticky` + scroll interno propio
+          (`overflow-y-auto`) — la página nunca necesita scrollear para
+          llegar a los botones de acción; si el panel es más alto que la
+          pantalla, scrollea DENTRO de su propia columna, no la página
+          entera. Mismas proporciones relativas que antes (lista 25%, antes
+          mapa+panel 75% combinados → ahora mapa 50% + panel 25%). */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <section className="max-h-[600px] space-y-2 overflow-y-auto rounded-xl border border-gray-200 bg-white p-3 lg:col-span-3">
           <QcTable
             records={filteredRecords}
             selectedKey={selectedKey}
@@ -342,7 +349,7 @@ export default function QcConsolePage() {
           />
         </section>
 
-        <section className="space-y-3 lg:col-span-3">
+        <section className="lg:col-span-6">
           <QcConsoleMap
             records={filteredRecords}
             selectedKey={selectedKey}
@@ -352,8 +359,10 @@ export default function QcConsolePage() {
             organizationId={resolveOrganizationId(records)}
             onFeatureCreated={loadPending}
           />
+        </section>
 
-          {selectedRecord && (
+        <section className="lg:col-span-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+          {selectedRecord ? (
             <QcDetailEditor
               key={selectedRecord.key}
               record={selectedRecord}
@@ -372,6 +381,10 @@ export default function QcConsolePage() {
               validationError={validationError}
               onValidateTopology={handleValidateTopology}
             />
+          ) : (
+            <p className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-xs text-gray-400">
+              Seleccioná un registro de la lista para ver sus detalles.
+            </p>
           )}
         </section>
       </div>

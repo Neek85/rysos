@@ -316,10 +316,15 @@ export default function QcConsoleMap({
 
   return (
     <div className="flex flex-col gap-3 lg:flex-row">
+      {/* Antes 600px fijos — con el panel de edición ahora en su propia
+          columna sticky (ver app/dashboard/qc/page.jsx), el mapa puede
+          ocupar el alto disponible de la pantalla en vez de un valor fijo
+          (specs/consola_qc_layout_y_validacion.md: "el mapa ocupa el
+          centro, a toda la altura disponible"). min-h conserva un alto
+          usable en pantallas muy bajas. */}
       <div
         ref={containerRef}
-        style={{ height: '600px' }}
-        className="w-full flex-1 rounded-lg border border-gray-200"
+        className="h-[70vh] min-h-[500px] w-full flex-1 rounded-lg border border-gray-200 lg:h-[calc(100vh-220px)]"
       />
       {mapReady && (
         <div className="w-full lg:w-64 lg:flex-none">
