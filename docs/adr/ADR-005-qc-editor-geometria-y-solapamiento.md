@@ -285,3 +285,67 @@ coincidir, solo redondearía con más precisión dos números que ya son
 distintos. Se documentó esto explícitamente como comentario en
 `roundTo()` (`lib/geo/areaUtils.js`) para que no se persiga esta misma
 pista de nuevo — commit de documentación, sin cambio funcional.
+
+## Divergencia turf/PostGIS cuantificada (2026-08-21, mismo día)
+
+Cuantificación real (no estimada) de la divergencia entre turf.js
+(cliente) y `fn_calcular_area_ha` (server, `ST_Area(geometry::geography)`)
+para polígonos cerca del umbral de 4.0 ha, en coordenadas reales de
+operación de RYZOS: lat/lng tomadas de un polígono `EUDR_MONITOREO` real
+existente en `ORG-COOP-NORTE`, vía consulta REST directa (`lng ≈ -78.87,
+lat ≈ -5.89`, zona Jaén, Cajamarca — no se asumió el ecuador). El área
+PostGIS se obtuvo con una llamada RPC real y directa a
+`fn_calcular_area_ha` (`POST .../rest/v1/rpc/fn_calcular_area_ha`, ya
+tiene `EXECUTE` para `anon` por default de Postgres, sin `GRANT`
+explícito) — nunca reimplementada a mano.
+
+**7 cuadrados cerca de 4.0 ha:**
+
+| área objetivo (ha) | turf (ha) | PostGIS (ha) | diff (ha) | diff (%) |
+|---|---|---|---|---|
+| 3.90 | 3.891252 | 3.874400 | 0.016852 | 0.4350% |
+| 3.95 | 3.941140 | 3.924100 | 0.017040 | 0.4342% |
+| 3.99 | 3.981050 | 3.963800 | 0.017250 | 0.4352% |
+| 4.00 | 3.991028 | 3.973700 | 0.017328 | 0.4361% |
+| 4.01 | 4.001005 | 3.983700 | 0.017305 | 0.4344% |
+| 4.05 | 4.040916 | 4.023400 | 0.017516 | 0.4353% |
+| 4.10 | 4.090803 | 4.073100 | 0.017703 | 0.4346% |
+
+**Confirmación de que la divergencia no depende de la forma** (misma
+zona real, 2 formas adicionales, área objetivo ~3.95/4.00/4.05 ha cada
+una): rectángulo 4:1 → diff 0.017040 / 0.017328 / 0.017516 ha (idéntico
+al cuadrado); pentágono irregular → diff 0.017100 / 0.017300 / 0.017500
+ha. Prácticamente el mismo valor sin importar la forma — confirma que es
+un factor de escala sistemático (esfera aproximada de turf vs elipsoide
+WGS84 real de PostGIS), no un artefacto de la forma probada.
+
+**Conclusión:** la divergencia es real, consistente, y **siempre en la
+misma dirección** — turf sobreestima respecto a PostGIS, nunca al revés,
+~0.017–0.018 ha (~0.43–0.44%) en todos los casos probados cerca de 4.0
+ha. No es despreciable frente al margen sugerido de referencia
+(0.05 ha) pero tampoco lo agota.
+
+**Decisión:** como turf siempre sobreestima, un polígono cuya área real
+(server) ya está por debajo de 4.0 ha puede aparecer en el cliente como
+>= 4.0 ha — el badge informativo de `polygonBelowThreshold` no se
+mostraría pese a que el server sí consideraría el área por debajo del
+umbral ("sub-advertencia" del cliente respecto al server, exactamente lo
+que pedía evitar la tarea). Se agregó `CLIENT_AREA_SAFETY_MARGIN_HA =
+0.03` (`lib/gisVectorEditor.js`) — corre el punto de disparo del cliente
+hacia arriba (~70% de margen sobre el máximo medido, 0.0177 ha) para que
+el cliente jamás deje de mostrar el aviso en un caso donde el server sí
+lo mostraría. No es un margen simétrico "por las dudas": la dirección
+(hacia arriba, no hacia abajo) refleja la dirección real y medida de la
+divergencia — turf nunca subestima en esta zona, así que un margen hacia
+abajo no habría corregido nada. El texto del badge se actualizó para no
+sobre-prometer precisión ("Área cercana o menor a 4.0 ha... el valor
+exacto se recalcula al guardar").
+
+`MIN_POLYGON_HECTARES` (`lib/eudrDdsExporter.js`) **no se tocó** — sigue
+siendo el umbral regulatorio real, usado tal cual en el export DDS
+(sobre el área ya calculada server-side, autoritativa, sin esta
+divergencia). El margen solo afecta la vista previa informativa del
+cliente durante el dibujo.
+
+Commit: `fix(qc): margen de seguridad en badge Requiere Polygon segun
+divergencia turf/postgis`, push a `staging` tras confirmación explícita.

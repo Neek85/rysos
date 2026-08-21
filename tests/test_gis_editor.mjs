@@ -99,6 +99,32 @@ test('evaluateGeometry nunca marca polygonBelowThreshold para un Point (no hay �
 })
 
 // ---------------------------------------------------------------
+// polygonBelowThreshold — margen de seguridad (CLIENT_AREA_SAFETY_MARGIN_HA
+// = 0.03 ha, ver docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md,
+// "Divergencia turf/PostGIS cuantificada"). turf SIEMPRE sobreestima el
+// área respecto a fn_calcular_area_ha real (medido en vivo, ~0.017-0.018
+// ha en polígonos cerca de 4.0 ha, en 3 formas distintas) — sin el
+// margen, un polígono cuya área real (server) ya está por debajo de 4.0
+// ha podría aparecer en el cliente como >= 4.0 ha y el badge no se
+// mostraría pese a que el server sí lo consideraría por debajo del
+// umbral.
+// ---------------------------------------------------------------
+
+test('evaluateGeometry marca polygonBelowThreshold=true para un área apenas por encima de 4.0 ha (dentro del margen de seguridad)', () => {
+  const justAbove = { type: 'Polygon', coordinates: [[[0, 0], [0.0018, 0], [0.0018, 0.0018], [0, 0.0018], [0, 0]]] }
+  const { areaHa, polygonBelowThreshold } = evaluateGeometry(justAbove)
+  assert.ok(areaHa >= 4.0 && areaHa < 4.03, `área debería caer dentro del margen (4.0-4.03 ha): ${areaHa}`)
+  assert.equal(polygonBelowThreshold, true, 'el margen de seguridad debería seguir mostrando el aviso acá')
+})
+
+test('evaluateGeometry marca polygonBelowThreshold=false para un área claramente por encima del margen de seguridad', () => {
+  const clearlyAbove = { type: 'Polygon', coordinates: [[[0, 0], [0.00181, 0], [0.00181, 0.00181], [0, 0.00181], [0, 0]]] }
+  const { areaHa, polygonBelowThreshold } = evaluateGeometry(clearlyAbove)
+  assert.ok(areaHa >= 4.03, `área debería estar claramente fuera del margen de seguridad: ${areaHa}`)
+  assert.equal(polygonBelowThreshold, false)
+})
+
+// ---------------------------------------------------------------
 // evaluateGeometry — LineString en construcción (Fase 2, hallazgo real:
 // mientras se dibuja un polígono, geoman lo serializa como LineString
 // hasta cerrar el anillo — confirmado en vivo con un log temporal, 3

@@ -305,7 +305,8 @@ export default function VectorEditorPanel({ editor }) {
           {draft.selfIntersects && <p className="text-red-600">⚠ El polígono tiene auto-intersecciones.</p>}
           {draft.polygonBelowThreshold && (
             <p className="text-amber-600">
-              ℹ Área menor a 4.0 ha — un Point también sería válido para esta parcela según la regla EUDR.
+              ℹ Área cercana o menor a 4.0 ha (con margen de precisión cliente/servidor) — un Point también
+              podría ser válido para esta parcela según la regla EUDR; el valor exacto se recalcula al guardar.
             </p>
           )}
         </div>

@@ -48,7 +48,7 @@ test('gisVectorEditor.js::evaluateGeometry usa calcularAreaHa/calcularPerimetroM
 test('gisVectorEditor.js::evaluateGeometry reutiliza MIN_POLYGON_HECTARES de lib/eudrDdsExporter.js (no un 4.0 hardcodeado de nuevo)', () => {
   const source = read('lib/gisVectorEditor.js')
   assert.match(source, /import \{ MIN_POLYGON_HECTARES \} from '\.\/eudrDdsExporter\.js'/)
-  assert.match(source, /areaHa < MIN_POLYGON_HECTARES/)
+  assert.match(source, /< MIN_POLYGON_HECTARES/)
 })
 
 test('VectorEditorPanel muestra el área con 4 decimales (toFixed(4)), no 2', () => {
@@ -122,4 +122,26 @@ test('gisVectorEditor.js convierte un LineString en construcción (>=3 puntos) a
   assert.match(source, /function toPreviewPolygon\(geometry\)/)
   assert.match(source, /geometry\?\.type !== 'LineString'/)
   assert.match(source, /const previewGeometry = toPreviewPolygon\(geometry\)/)
+})
+
+// ---------------------------------------------------------------
+// Margen de seguridad turf/PostGIS cuantificado a pedido explícito — ver
+// docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md, "Divergencia
+// turf/PostGIS cuantificada". Medido en vivo contra fn_calcular_area_ha
+// real (RPC), no reimplementado a mano: ~0.017-0.018 ha de divergencia
+// consistente (turf siempre sobreestima) en polígonos cerca de 4.0 ha,
+// en 3 formas distintas (cuadrado, rectángulo 4:1, pentágono irregular),
+// en coordenadas reales de operación (Jaén, Cajamarca).
+// ---------------------------------------------------------------
+
+test('gisVectorEditor.js declara CLIENT_AREA_SAFETY_MARGIN_HA y lo resta antes de comparar contra MIN_POLYGON_HECTARES', () => {
+  const source = read('lib/gisVectorEditor.js')
+  assert.match(source, /const CLIENT_AREA_SAFETY_MARGIN_HA = 0\.03/)
+  assert.match(source, /areaHa - CLIENT_AREA_SAFETY_MARGIN_HA < MIN_POLYGON_HECTARES/)
+})
+
+test('docs/adr/ADR-005 documenta la divergencia medida (no solo la decisión, los números reales)', () => {
+  const source = read('docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md')
+  assert.match(source, /Divergencia turf\/PostGIS cuantificada/)
+  assert.match(source, /0\.017/)
 })
