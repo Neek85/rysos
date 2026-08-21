@@ -135,3 +135,29 @@ manda sobre la spec para detalles de UI) solo pide el layout de 3 columnas
 con scroll interno del panel, sin mencionar pestañas; agregarlas habría
 sido una abstracción no pedida por el documento que gobierna esta
 decisión.
+
+## Addendum (2026-08-21) — Solapamiento auditable + 2 bugs del Editor Vectorial
+
+Ver `docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md` para el
+detalle completo. Resumen:
+
+- **Popup con nombre crudo de tabla** (`bindPopup`/`openPopup` en
+  `QcConsoleMap.jsx`): confirmado real en vivo, eliminado — el panel
+  derecho ya mostraba la misma info con etiqueta legible.
+- **"Editor de puntos abre modo polígono"**: investigado a fondo (código +
+  inspección del DOM en vivo con `javascript_tool`) y no se reprodujo —
+  geoman ya maneja `L.CircleMarker` con su propio módulo dedicado, sin
+  cadena de vértices. Se mejoró igual el texto de ayuda de "Ajustar
+  geometría" para derivar del tipo de geometría real (`record.geom.type`),
+  nunca de `tabla_origen`.
+- **Mecanismo de solapamiento** (`fn_validar_topologia_eudr`): ya filtraba
+  por `ID_Organizacion`, ya excluía el propio registro, y ya calculaba el
+  % con `::geography` — los 3 checks pedidos ya estaban correctos, sin
+  necesidad de una migración de corrección.
+- **Nueva capa de comparación visual**: cuando "Ejecutar Test Espacial"
+  detecta solapamiento, `QcConsoleMap.jsx` dibuja las geometrías
+  APROBADAS reales contra las que solapa (contorno punteado ámbar), vía
+  `fetchComparisonGeometries` (`lib/eudrQcActions.js`, nueva) — consulta
+  `vw_monitoreo_poligonos` por los `registro_id` que la RPC ya identificó,
+  filtrado igual por `ID_Organizacion` como defensa en profundidad. Se
+  limpia al cambiar de registro seleccionado.

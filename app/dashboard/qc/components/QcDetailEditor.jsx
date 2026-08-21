@@ -79,6 +79,25 @@ export default function QcDetailEditor({
   const [localError, setLocalError] = useState(null)
   const [photoUrl, setPhotoUrl] = useState(null)
   const canValidateTopology = record.tabla_origen !== 'EUDR_INSTALACIONES'
+  // Fuente de verdad para el texto de ayuda de "Ajustar geometría": el
+  // tipo real de geometría del registro (record.geom, normalmente ya un
+  // objeto GeoJSON — ver el comentario de parseGeometry en
+  // components/gis/QcConsoleMap.jsx, que igual lo trata como
+  // potencialmente string por las dudas), NUNCA tabla_origen. Un
+  // EUDR_MONITOREO puede ser Point si el técnico QField lo capturó así
+  // (ver ST_Dimension() en fn_validar_topologia_eudr) — inferir por
+  // nombre de tabla habría sido incorrecto para esos casos.
+  const recordGeometry =
+    typeof record.geom === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(record.geom)
+          } catch {
+            return null
+          }
+        })()
+      : record.geom
+  const isPointRecord = recordGeometry?.type === 'Point'
 
   // Firma la URL de la foto de evidencia solo cuando hay una para este
   // registro — `key={record.key}` en el padre (page.jsx) ya remonta este
@@ -198,8 +217,11 @@ export default function QcDetailEditor({
         </div>
         {isEditingGeometry && (
           <p className="text-[11px] text-gray-400">
-            Arrastrá los vértices (o el marcador) directamente sobre el mapa. "Guardar Cambios de Geometría"
-            aparece cuando haya un cambio — al guardar, se vuelve a ejecutar el test espacial automáticamente.
+            {isPointRecord
+              ? 'Arrastrá el marcador directamente sobre el mapa.'
+              : 'Arrastrá los vértices directamente sobre el mapa.'}{' '}
+            "Guardar Cambios de Geometría" aparece cuando haya un cambio — al guardar, se vuelve a ejecutar el
+            test espacial automáticamente.
           </p>
         )}
       </div>

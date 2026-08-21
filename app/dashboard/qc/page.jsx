@@ -7,6 +7,7 @@ import nextDynamic from 'next/dynamic'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import {
   fetchPendingRecords,
+  fetchComparisonGeometries,
   resolveOrganizationId,
   LAYER_LABELS,
   EUDRQcError,
@@ -70,6 +71,12 @@ export default function QcConsolePage() {
   const [validationResults, setValidationResults] = useState({})
   const [validatingKey, setValidatingKey] = useState(null)
   const [validationError, setValidationError] = useState(null)
+  // Capa de comparación de solapamiento (specs/consola_qc_layout_y_validacion.md,
+  // addendum solapamiento auditable) — geometrías APROBADAS reales contra
+  // las que "Ejecutar Test Espacial" detectó solapamiento para el registro
+  // seleccionado. Se limpia al cambiar de registro (ver el efecto de
+  // [selectedKey] más abajo), nunca sobrevive apuntando a otra capa.
+  const [comparisonFeatures, setComparisonFeatures] = useState([])
 
   async function loadPending() {
     const supabase = getSupabaseClient()
@@ -106,6 +113,7 @@ export default function QcConsolePage() {
   useEffect(() => {
     setEditingGeometryKey(null)
     setGeometryDraft(null)
+    setComparisonFeatures([])
   }, [selectedKey])
 
   const filteredRecords = useMemo(() => {
@@ -160,7 +168,11 @@ export default function QcConsolePage() {
   // automáticamente para toda la lista: cada corrida es una llamada real
   // a fn_validar_topologia_eudr, solo cuando el usuario la pide desde
   // QcDetailEditor ("Ejecutar Test Espacial") para el registro
-  // seleccionado.
+  // seleccionado. También la usa "Validar Todos PENDIENTES" (QcTable.jsx)
+  // en modo batch — por eso la capa de comparación de solapamiento (ver
+  // fetchComparisonGeometries) solo se calcula cuando `record` es el
+  // registro ACTUALMENTE seleccionado, nunca durante un batch sobre
+  // registros que el usuario no está mirando en el mapa.
   async function handleValidateTopology(record) {
     setValidationError(null)
     setValidatingKey(record.key)
@@ -173,6 +185,27 @@ export default function QcConsolePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'No se pudo validar la topología.')
       setValidationResults((prev) => ({ ...prev, [record.key]: data.result }))
+
+      if (record.key === selectedKey) {
+        const solapados = data.result?.registros_solapados
+        if (data.result?.solapa && solapados?.length > 0) {
+          // Fallo acá no debe mostrarse como "no se pudo validar la
+          // topología" — la validación en sí ya tuvo éxito (arriba), solo
+          // no se pudo dibujar la capa de comparación visual.
+          try {
+            const supabase = getSupabaseClient()
+            if (supabase) {
+              const organizationId = resolveOrganizationId(records)
+              const comparisons = await fetchComparisonGeometries(supabase, solapados, organizationId)
+              setComparisonFeatures(comparisons)
+            }
+          } catch {
+            setComparisonFeatures([])
+          }
+        } else {
+          setComparisonFeatures([])
+        }
+      }
     } catch (err) {
       setValidationError(err?.message || 'No se pudo validar la topología.')
     } finally {
@@ -358,6 +391,7 @@ export default function QcConsolePage() {
             onGeometryChange={handleGeometryChange}
             organizationId={resolveOrganizationId(records)}
             onFeatureCreated={loadPending}
+            comparisonFeatures={comparisonFeatures}
           />
         </section>
 

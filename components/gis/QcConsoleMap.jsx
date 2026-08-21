@@ -75,12 +75,14 @@ export default function QcConsoleMap({
   onGeometryChange,
   organizationId,
   onFeatureCreated,
+  comparisonFeatures,
 }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const leafletRef = useRef(null)
   const layerGroupRef = useRef(null)
   const layersByKeyRef = useRef(new Map())
+  const comparisonGroupRef = useRef(null)
   const [mapReady, setMapReady] = useState(false)
 
   // Editor Vectorial (crear geometría nueva desde cero) — reubicado acá
@@ -152,6 +154,12 @@ export default function QcConsoleMap({
         }).addTo(map)
 
         layerGroupRef.current = L.layerGroup().addTo(map)
+        // Capa secundaria de comparación de solapamiento (ver el efecto de
+        // comparisonFeatures más abajo) — DEBAJO de layerGroupRef en el
+        // z-order (agregada antes) para que el registro en revisión quede
+        // siempre visualmente por encima de lo que solapa con él.
+        comparisonGroupRef.current = L.layerGroup().addTo(map)
+        layerGroupRef.current.bringToFront()
         if (!cancelled) setMapReady(true)
       } catch {
         // Fallo al inicializar (Leaflet no cargó, DOM no listo) — se deja
@@ -168,6 +176,7 @@ export default function QcConsoleMap({
         mapRef.current = null
       }
       layerGroupRef.current = null
+      comparisonGroupRef.current = null
       layersByKeyRef.current = new Map()
       setMapReady(false)
     }
@@ -200,9 +209,6 @@ export default function QcConsoleMap({
               weight: 2,
             }),
         }
-      )
-      layer.bindPopup(
-        `<strong>${record.tabla_origen}</strong><br/>${record.clasificacion || 'Sin clasificar'}`
       )
       layer.on('click', () => onSelect?.(record.key))
 
@@ -257,7 +263,12 @@ export default function QcConsoleMap({
     if (target) {
       map.flyTo(target, Math.max(map.getZoom(), 16))
     }
-    selectedLayer.openPopup?.()
+    // Antes se llamaba abrir-popup acá, mostrando un popup permanente con
+    // el nombre crudo de tabla_origen (ej. "EUDR_INSTALACIONES") apenas se
+    // seleccionaba un registro. El panel derecho ("Corregir atributos" en
+    // QcDetailEditor.jsx) ya muestra esa misma info con la etiqueta legible
+    // (LAYER_LABELS) — el popup era redundante y confuso, se eliminó junto
+    // con el bind-popup del efecto de renderizado de arriba.
   }, [selectedKey, records])
 
   // Modo edición de vértices — habilita .pm SOLO en la capa cuyo key
@@ -313,6 +324,41 @@ export default function QcConsoleMap({
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingKey, records])
+
+  // Capa de comparación de solapamiento — dibuja las geometrías APROBADAS
+  // reales devueltas por fetchComparisonGeometries (lib/eudrQcActions.js,
+  // vía handleValidateTopology en app/dashboard/qc/page.jsx) cuando
+  // "Ejecutar Test Espacial" detecta solapamiento > 0% para el registro
+  // seleccionado — contorno punteado, color distinto (ámbar) y sin
+  // relleno, para que el auditor vea físicamente contra qué está
+  // solapando sin confundirlo con el estilo del registro en revisión
+  // (ver styleFor/LAYER_STYLES arriba). Se limpia solo (clearLayers) cada
+  // vez que `comparisonFeatures` cambia — page.jsx ya lo vacía al cambiar
+  // de registro seleccionado (specs/consola_qc_layout_y_validacion.md,
+  // addendum solapamiento auditable).
+  useEffect(() => {
+    const L = leafletRef.current
+    const group = comparisonGroupRef.current
+    if (!L || !group) return
+
+    group.clearLayers()
+    ;(comparisonFeatures || []).forEach((feature) => {
+      L.geoJSON(
+        { type: 'Feature', geometry: feature.geometry, properties: {} },
+        {
+          style: () => ({
+            color: '#b45309',
+            weight: 2,
+            dashArray: '6, 6',
+            fillOpacity: 0.05,
+            fillColor: '#b45309',
+          }),
+        }
+      )
+        .bindTooltip(`Solapa con: ${feature.tabla_origen} (${feature.registro_id})`)
+        .addTo(group)
+    })
+  }, [comparisonFeatures])
 
   return (
     <div className="flex flex-col gap-3 lg:flex-row">

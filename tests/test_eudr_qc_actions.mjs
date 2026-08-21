@@ -8,7 +8,14 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { fetchPendingRecords, approveRecord, rejectRecord, EUDRQcError, PENDING_STATE } from '../lib/eudrQcActions.js'
+import {
+  fetchPendingRecords,
+  fetchComparisonGeometries,
+  approveRecord,
+  rejectRecord,
+  EUDRQcError,
+  PENDING_STATE,
+} from '../lib/eudrQcActions.js'
 
 /**
  * Mock encadenable que soporta tanto lectura (`.select().eq()`, resuelve
@@ -274,4 +281,66 @@ test('rejectRecord lanza EUDRQcError si 0 filas fueron afectadas', async () => {
     EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: 'RECHAZADO' }],
   })
   await assert.rejects(() => rejectRecord(supabase, baseRecord(), 'motivo', 'COOP-JS'), EUDRQcError)
+})
+
+// ---------------------------------------------------------------
+// fetchComparisonGeometries — capa de comparación de solapamiento
+// (specs/consola_qc_layout_y_validacion.md, addendum solapamiento
+// auditable). fn_validar_topologia_eudr YA filtra sus candidatos por
+// ID_Organizacion del lado del servidor — este fetch defiende igual por
+// ID_Organizacion (defensa en profundidad), no porque la lista de IDs sea
+// insegura.
+// ---------------------------------------------------------------
+
+test('fetchComparisonGeometries devuelve [] si no hay registros_solapados', async () => {
+  const supabase = makeFakeSupabase({ vw_monitoreo_poligonos: [] })
+  const result = await fetchComparisonGeometries(supabase, [], 'COOP-JS')
+  assert.deepEqual(result, [])
+})
+
+test('fetchComparisonGeometries trae geom + tabla_origen de los registros solapados, filtrado por ID_Organizacion', async () => {
+  const supabase = makeFakeSupabase({
+    vw_monitoreo_poligonos: [
+      {
+        id_origen: 'uuid-aprobado-1',
+        tabla_origen: 'EUDR_USO_SUELO',
+        ID_Organizacion: 'COOP-JS',
+        geom: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] },
+      },
+      // Misma organización que el registro de arriba, distinto id — no
+      // debería aparecer porque no está en registrosSolapados.
+      { id_origen: 'uuid-no-solapado', tabla_origen: 'EUDR_USO_SUELO', ID_Organizacion: 'COOP-JS', geom: {} },
+      // Otra organización — no debería aparecer aunque coincida el id
+      // (defensa en profundidad, ver comentario de arriba).
+      { id_origen: 'uuid-otra-org', tabla_origen: 'EUDR_MONITOREO', ID_Organizacion: 'OTRA-COOP', geom: {} },
+    ],
+  })
+  const solapados = [
+    { registro_id: 'uuid-aprobado-1', tabla_origen: 'EUDR_USO_SUELO', solapamiento_pct: 45.2 },
+    { registro_id: 'uuid-otra-org', tabla_origen: 'EUDR_MONITOREO', solapamiento_pct: 10 },
+  ]
+  const result = await fetchComparisonGeometries(supabase, solapados, 'COOP-JS')
+  assert.equal(result.length, 1, 'debería excluir el registro de OTRA-COOP pese a venir en registros_solapados')
+  assert.equal(result[0].registro_id, 'uuid-aprobado-1')
+  assert.equal(result[0].tabla_origen, 'EUDR_USO_SUELO')
+  assert.equal(result[0].geometry.type, 'Polygon')
+})
+
+test('fetchComparisonGeometries parsea geom si llega como string JSON (mismo caso defensivo que parseGeometry en QcConsoleMap.jsx)', async () => {
+  const supabase = makeFakeSupabase({
+    vw_monitoreo_poligonos: [
+      {
+        id_origen: 'uuid-1',
+        tabla_origen: 'EUDR_MONITOREO',
+        ID_Organizacion: 'COOP-JS',
+        geom: JSON.stringify({ type: 'Point', coordinates: [1, 2] }),
+      },
+    ],
+  })
+  const result = await fetchComparisonGeometries(
+    supabase,
+    [{ registro_id: 'uuid-1', tabla_origen: 'EUDR_MONITOREO' }],
+    'COOP-JS'
+  )
+  assert.equal(result[0].geometry.type, 'Point')
 })
