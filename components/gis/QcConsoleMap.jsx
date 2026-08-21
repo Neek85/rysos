@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import centroid from '@turf/centroid'
 import VectorEditorPanel, { useVectorEditor } from '@/app/dashboard/qc/components/VectorEditorTools'
+import { fetchParcelasVecinas } from '@/lib/actions/qcActions'
 
 // Tablas destino que la Consola QC puede crear desde cero con el Editor
 // Vectorial — deliberadamente NO las 4 de GIS_TARGET_TABLES:
@@ -52,6 +53,20 @@ function parseGeometry(record) {
   return raw
 }
 
+// Fase 3 (capa de contexto de parcelas vecinas) — el "punto en cuestión"
+// para centrar la búsqueda: la geometría misma si ya es Point, o su
+// centroide real (@turf/centroid, no getBounds().getCenter() — mismo
+// motivo que el flyTo de más abajo) si es Polygon/MultiPolygon.
+function centerPointOf(geometry) {
+  if (!geometry) return null
+  if (geometry.type === 'Point') return geometry
+  try {
+    return centroid({ type: 'Feature', properties: {}, geometry }).geometry
+  } catch {
+    return null
+  }
+}
+
 /**
  * Mapa Leaflet dedicado a la Consola QC — un solo layerGroup con las
  * geometrías PENDIENTE ya filtradas por capa (prop `records`), estilo por
@@ -84,7 +99,15 @@ export default function QcConsoleMap({
   const layerGroupRef = useRef(null)
   const layersByKeyRef = useRef(new Map())
   const comparisonGroupRef = useRef(null)
+  const neighborsGroupRef = useRef(null)
   const [mapReady, setMapReady] = useState(false)
+  // Capa de contexto de parcelas vecinas (Fase 3, ver
+  // docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md) — toggle ON por
+  // defecto, SIN persistencia entre sesiones (limitación conocida y
+  // documentada a propósito, ver ADR-006 — estado de componente puro).
+  const [neighborsEnabled, setNeighborsEnabled] = useState(true)
+  const [neighborFeatures, setNeighborFeatures] = useState([])
+  const [neighborsInfo, setNeighborsInfo] = useState(null) // { totalEncontrados, totalDevueltos, radioM } | null
 
   // Editor Vectorial (crear geometría nueva desde cero) — reubicado acá
   // desde /dashboard/mapa (specs/ui_reorganization_geoman.md).
@@ -154,15 +177,17 @@ export default function QcConsoleMap({
           maxZoom: 20,
         }).addTo(map)
 
-        // Capa de comparación de solapamiento PRIMERO — Leaflet apila las
-        // capas en el orden en que se agregan al mapa (sin necesidad de
+        // Orden de agregado = orden de apilado visual en Leaflet (sin
         // bringToFront(), que además no existe en L.LayerGroup, solo en
         // L.FeatureGroup/L.Path — usarlo acá rompía init() en silencio,
         // dejando mapReady en false para siempre y con eso tumbando TODO
         // el toolbar de "Editor Vectorial", ver
-        // docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md). Se
-        // agrega layerGroupRef DESPUÉS para que el registro en revisión
-        // quede siempre visualmente por encima de lo que solapa con él.
+        // docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md). De
+        // abajo hacia arriba: parcelas vecinas de contexto (Fase 3, la
+        // capa más "de fondo" — nunca debe tapar nada) → comparación de
+        // solapamiento (Fase 1) → registros PENDIENTE / el que está en
+        // revisión, siempre arriba de todo.
+        neighborsGroupRef.current = L.layerGroup().addTo(map)
         comparisonGroupRef.current = L.layerGroup().addTo(map)
         layerGroupRef.current = L.layerGroup().addTo(map)
         if (!cancelled) setMapReady(true)
@@ -182,6 +207,7 @@ export default function QcConsoleMap({
       }
       layerGroupRef.current = null
       comparisonGroupRef.current = null
+      neighborsGroupRef.current = null
       layersByKeyRef.current = new Map()
       setMapReady(false)
     }
@@ -405,6 +431,119 @@ export default function QcConsoleMap({
     })
   }, [comparisonFeatures])
 
+  // Fase 3 — capa de contexto de parcelas vecinas (Monitoreos EUDR
+  // APROBADOS dentro del radio configurado, ver
+  // docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md). Se dispara SOLO
+  // al ENTRAR en modo edición de un registro existente (`editingKey`) o
+  // al TERMINAR de dibujar uno nuevo (`vectorEditor.drawnLayer`) —
+  // nunca en cada pan/zoom del mapa, ni en cada vértice mientras se
+  // dibuja (eso sí sería excesivo: cada corrida es una consulta real al
+  // server). Centrada en el centroide (Polygon) o el punto mismo (Point)
+  // de la geometría en cuestión.
+  useEffect(() => {
+    if (!editingKey || !organizationId) return
+    const record = (records || []).find((r) => r.key === editingKey)
+    const geometry = parseGeometry(record)
+    const point = centerPointOf(geometry)
+    if (!record || !point) return
+
+    let cancelled = false
+    // Solo EUDR_MONITOREO tiene sentido excluir de sí mismo — es la única
+    // tabla que fn_parcelas_vecinas_eudr consulta (ver ADR-006, "Uso de
+    // Suelo/Instalaciones fuera de alcance a propósito").
+    const excludeId = record.tabla_origen === 'EUDR_MONITOREO' ? record.id_monitoreo : null
+    fetchParcelasVecinas(organizationId, point, excludeId)
+      .then((result) => {
+        if (cancelled) return
+        setNeighborFeatures(result.parcelas)
+        setNeighborsInfo({
+          totalEncontrados: result.totalEncontrados,
+          totalDevueltos: result.totalDevueltos,
+          radioM: result.radioM,
+        })
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNeighborFeatures([])
+          setNeighborsInfo(null)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingKey, organizationId])
+
+  // Misma capa, dirección "dibujar geometría nueva" — dispara una sola
+  // vez cuando geoman termina la forma (pm:create ya corrió,
+  // vectorEditor.drawnLayer pasa de null a la capa real), nunca mientras
+  // se colocan los vértices uno a uno.
+  useEffect(() => {
+    if (!vectorEditor.drawnLayer || !organizationId) return
+    const geometry = vectorEditor.drawnLayer.toGeoJSON?.().geometry
+    const point = centerPointOf(geometry)
+    if (!point) return
+
+    let cancelled = false
+    fetchParcelasVecinas(organizationId, point, null)
+      .then((result) => {
+        if (cancelled) return
+        setNeighborFeatures(result.parcelas)
+        setNeighborsInfo({
+          totalEncontrados: result.totalEncontrados,
+          totalDevueltos: result.totalDevueltos,
+          radioM: result.radioM,
+        })
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNeighborFeatures([])
+          setNeighborsInfo(null)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [vectorEditor.drawnLayer, organizationId])
+
+  // Limpia la capa de contexto cuando no hay ni edición ni dibujo en
+  // curso (deseleccionar un registro, guardar/cancelar un dibujo nuevo)
+  // — nunca debe sobrevivir un resultado "colgado" de una sesión previa.
+  useEffect(() => {
+    if (!editingKey && !vectorEditor.drawnLayer) {
+      setNeighborFeatures([])
+      setNeighborsInfo(null)
+    }
+  }, [editingKey, vectorEditor.drawnLayer])
+
+  // Render — contorno punteado gris/slate (dashArray '2, 6', punteado más
+  // fino que el '6, 6' de la capa de solapamiento de Fase 1, y color
+  // totalmente distinto: gris neutro vs ámbar) para que un auditor jamás
+  // confunda "vecino de contexto" (informativo, sin ningún conflicto real
+  // detectado) con "solapa de verdad" (Fase 1, alerta real). Se limpia
+  // por completo si `neighborsEnabled` es false — apagar el toggle quita
+  // la capa del mapa, no solo la oculta con CSS.
+  useEffect(() => {
+    const L = leafletRef.current
+    const group = neighborsGroupRef.current
+    if (!L || !group) return
+
+    group.clearLayers()
+    if (!neighborsEnabled) return
+    ;(neighborFeatures || []).forEach((feature) => {
+      const style = { color: '#64748b', weight: 1.5, dashArray: '2, 6', fillOpacity: 0.03, fillColor: '#94a3b8' }
+      L.geoJSON(
+        { type: 'Feature', geometry: feature.geometry, properties: {} },
+        {
+          style: () => style,
+          pointToLayer: (_f, latlng) => L.circleMarker(latlng, { radius: 5, ...style, fillOpacity: 0.2 }),
+        }
+      )
+        .bindTooltip(`Vecino de contexto${feature.codigoSocio ? ` — ${feature.codigoSocio}` : ''}`)
+        .addTo(group)
+    })
+  }, [neighborFeatures, neighborsEnabled])
+
   return (
     <div className="flex flex-col gap-3 lg:flex-row">
       {/* Antes 600px fijos — con el panel de edición ahora en su propia
@@ -418,8 +557,31 @@ export default function QcConsoleMap({
         className="h-[70vh] min-h-[500px] w-full flex-1 rounded-lg border border-gray-200 lg:h-[calc(100vh-220px)]"
       />
       {mapReady && (
-        <div className="w-full lg:w-64 lg:flex-none">
+        <div className="w-full space-y-3 lg:w-64 lg:flex-none">
           <VectorEditorPanel editor={vectorEditor} />
+
+          {/* Toggle de la capa de contexto (Fase 3) — ON por defecto, sin
+              persistencia entre sesiones (estado de componente puro, ver
+              docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md,
+              "limitación conocida"). */}
+          <div className="space-y-1 rounded-lg border border-gray-200 bg-white p-3 text-xs">
+            <label className="flex items-center gap-2 font-semibold text-gray-700">
+              <input
+                type="checkbox"
+                checked={neighborsEnabled}
+                onChange={(e) => setNeighborsEnabled(e.target.checked)}
+              />
+              Parcelas vecinas de contexto
+            </label>
+            {neighborsEnabled && neighborsInfo && (
+              <p className="text-[11px] text-gray-400">
+                {neighborsInfo.totalDevueltos} de {neighborsInfo.totalEncontrados} en {neighborsInfo.radioM} m
+                {neighborsInfo.totalEncontrados > neighborsInfo.totalDevueltos && (
+                  <span className="text-amber-600"> — hay más parcelas en el radio, acercate al mapa.</span>
+                )}
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>
