@@ -161,3 +161,57 @@ detalle completo. Resumen:
   `vw_monitoreo_poligonos` por los `registro_id` que la RPC ya identificó,
   filtrado igual por `ID_Organizacion` como defensa en profundidad. Se
   limpia al cambiar de registro seleccionado.
+
+## Addendum Fase 2 (2026-08-21, mismo día) — Panel de información en vivo al dibujar
+
+Aprobado explícitamente por el usuario tras el checkpoint de Fase 1. Ver
+`docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md` para el detalle
+técnico completo; resumen:
+
+- **Nuevo `lib/geo/areaUtils.js`**: `calcularAreaHa`/`calcularPerimetroM`,
+  única fuente de verdad del redondeo a 4 decimales en el cliente
+  (`AREA_HA_DECIMALS = 4`). **Corrección de premisa:** el ROUND(...,4) no
+  vive dentro de `fn_validar_topologia_eudr` (esa función solo reutiliza
+  `fn_calcular_area_ha`, no calcula el área ella misma) — la constante
+  real está en `fn_calcular_area_ha`
+  (`supabase/migrations/20260818_gis_core_sanitization.sql:88`:
+  `ROUND((ST_Area(p_geom::geography) / 10000)::numeric, 4)`).
+- **`lib/gisVectorEditor.js::evaluateGeometry`** ahora también devuelve
+  `perimetroM` (vía `@turf/length`, dependencia nueva agregada a
+  `package.json`) y `polygonBelowThreshold` (reutiliza
+  `MIN_POLYGON_HECTARES` de `lib/eudrDdsExporter.js`, no un `4.0`
+  hardcodeado de nuevo).
+- **Hallazgo real durante la implementación** (no un simple gap): mientras
+  se dibuja un polígono, geoman lo serializa como GeoJSON tipo
+  `LineString` hasta que el anillo se cierra — confirmado en vivo, con 3
+  vértices reales colocados `geometry.type` seguía siendo `"LineString"`.
+  Sin tratar ese caso, el panel nunca hubiera mostrado un valor numérico
+  mientras se dibuja (solo al terminar). Se agregó `toPreviewPolygon` en
+  `gisVectorEditor.js` para sintetizar un anillo cerrado a partir del
+  `LineString` en construcción (≥ 3 puntos), usado únicamente para esta
+  estimación de UI.
+- **Segundo hallazgo real, más profundo:** `pm:vertexadded` de geoman NO
+  se dispara sobre `map` (a diferencia de `pm:create`/`pm:remove`, que sí
+  — confirmado leyendo el bundle instalado: ese evento se dispara con
+  `propagate:false` sobre la capa "de trabajo" en construcción, nunca
+  burbujea al mapa). El código anterior (`map.on('pm:vertexadded', ...)`)
+  nunca se ejecutaba — confirmado en vivo con un log temporal (0 disparos
+  pese a colocar vértices reales). Corregido escuchando `pm:drawstart`
+  sobre `map` (ese sí llega, con `workingLayer` en el payload) y
+  enganchando `pm:vertexadded` directo sobre esa capa de trabajo —
+  confirmado en vivo: 3 disparos reales para 3 vértices colocados, con
+  "Área estimada"/"Perímetro estimado" actualizándose en el panel en cada
+  uno.
+- **Badge "Requiere Polygon" — corrección de alcance:** el prompt original
+  pedía avisar tanto si "un Polygon mide menos de 4.0 ha" (implementado,
+  informativo) como si "un Point supera 4.0 ha" — esto último es
+  matemáticamente imposible de calcular en vivo: un Point no tiene área
+  medible por definición. Se documentó explícitamente en
+  `evaluateGeometry` en vez de simular un chequeo falso; en su lugar, al
+  dibujar un Point se muestra una nota estática recordando la regla
+  (`VectorEditorPanel`, "Un Point no tiene área medible…").
+- **Validez geométrica en vivo**: ya existía desde antes de esta fase
+  (`@turf/kinks`, sin cambios) — solo se extendió para operar también
+  sobre el polígono de previsualización durante el dibujo.
+- **Fuera de alcance, tal como pedía el prompt**: % de solapamiento en
+  vivo — requeriría una consulta al server en cada vértice.

@@ -83,10 +83,21 @@ export function attachVectorEditor(map, L, { onDraftChange, onFinalize, enableGl
     onDraftChange?.(evaluateGeometry(layer.toGeoJSON().geometry))
   }
 
-  // Vértice agregado mientras se dibuja (antes de terminar) — geoman
-  // entrega la capa "de trabajo" en construcción vía e.workingLayer.
-  function handleVertexAdded(e) {
-    evaluateLayer(e.workingLayer)
+  // Vértice agregado mientras se dibuja (antes de terminar) — HALLAZGO
+  // REAL (Fase 2, ver docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md):
+  // geoman dispara `pm:vertexadded` sobre la capa "de trabajo" en
+  // construcción (`this._layer` dentro de geoman, propagate:false — no
+  // llega nunca a `map`), no sobre `map` como se podría asumir por
+  // analogía con `pm:create`/`pm:remove` (esos sí se disparan
+  // explícitamente sobre `this._map`). `map.on('pm:vertexadded', ...)`
+  // nunca se ejecutaba — confirmado en vivo con un log temporal (0
+  // disparos pese a colocar vértices reales). Patrón correcto: escuchar
+  // `pm:drawstart` (ese SÍ llega a `map`, con `workingLayer` en el
+  // payload) y enganchar `pm:vertexadded` directo sobre esa capa de
+  // trabajo — mismo objeto durante toda la sesión de dibujo, confirmado
+  // en vivo (3 disparos reales para 3 vértices colocados).
+  function handleDrawStart(e) {
+    e.workingLayer?.on('pm:vertexadded', () => evaluateLayer(e.workingLayer))
   }
 
   function handleCreate(e) {
@@ -100,12 +111,12 @@ export function attachVectorEditor(map, L, { onDraftChange, onFinalize, enableGl
     onDraftChange?.(null)
   }
 
-  map.on('pm:vertexadded', handleVertexAdded)
+  map.on('pm:drawstart', handleDrawStart)
   map.on('pm:create', handleCreate)
   map.on('pm:remove', handleRemove)
 
   return function detach() {
-    map.off('pm:vertexadded', handleVertexAdded)
+    map.off('pm:drawstart', handleDrawStart)
     map.off('pm:create', handleCreate)
     map.off('pm:remove', handleRemove)
     map.pm.removeControls()
@@ -271,15 +282,39 @@ export default function VectorEditorPanel({ editor }) {
         <p className="mt-1 text-[11px] text-gray-400">Acepta geometría: {allowedTypes}.</p>
       </div>
 
+      {/* Panel de información en vivo (Fase 2, recalculado en cada
+          vértice vía pm:vertexadded — ver attachVectorEditor arriba) —
+          área/perímetro con el mismo redondeo que fn_calcular_area_ha
+          server-side (lib/geo/areaUtils.js::AREA_HA_DECIMALS), validez
+          geométrica (@turf/kinks) y el aviso informativo de la regla
+          "parcelas >= 4.0 ha requieren Polygon" (lib/eudrDdsExporter.js::
+          MIN_POLYGON_HECTARES) — nunca bloqueante, ninguno de estos
+          impide guardar. */}
       {draft && (
         <div className="space-y-1 rounded bg-gray-50 p-2">
           {draft.areaHa != null && (
             <p>
-              Área estimada: <span className="font-semibold">{draft.areaHa.toFixed(2)} ha</span>
+              Área estimada: <span className="font-semibold">{draft.areaHa.toFixed(4)} ha</span>
+            </p>
+          )}
+          {draft.perimetroM != null && (
+            <p>
+              Perímetro estimado: <span className="font-semibold">{draft.perimetroM} m</span>
             </p>
           )}
           {draft.selfIntersects && <p className="text-red-600">⚠ El polígono tiene auto-intersecciones.</p>}
+          {draft.polygonBelowThreshold && (
+            <p className="text-amber-600">
+              ℹ Área menor a 4.0 ha — un Point también sería válido para esta parcela según la regla EUDR.
+            </p>
+          )}
         </div>
+      )}
+
+      {drawnLayer && drawnLayer.toGeoJSON?.().geometry?.type === 'Point' && (
+        <p className="rounded bg-gray-50 p-2 text-[11px] text-gray-500">
+          ℹ Un Point no tiene área medible — si la parcela real mide 4.0 ha o más, usa Polygon en su lugar.
+        </p>
       )}
 
       {drawnLayer && (
