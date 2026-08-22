@@ -79,8 +79,13 @@ class TestRunE2eTeardownIntegration(unittest.TestCase):
         pipeline = self._patch_common(
             process_package_return={"inserted_ids": ["uuid-real-1"], "uploaded_photos": ["x"]}
         )
+        # El mismo canned response sirve para dos consultas distintas que
+        # comparten la misma cadena de mocks (pipeline.supabase.table(...)
+        # no distingue por nombre de tabla al ser un MagicMock): el
+        # guardarail de ADR-008 (assert_org_is_test_marked, consulta
+        # ORGANIZACIONES) y la lectura posterior de estado_revision.
         pipeline.supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
-            {"estado_revision": "PENDIENTE"}
+            {"estado_revision": "PENDIENTE", "es_organizacion_prueba": True}
         ]
 
         run_e2e(base_dir=MagicMock())
@@ -117,7 +122,7 @@ class TestRunE2eTeardownIntegration(unittest.TestCase):
             process_package_return={"inserted_ids": ["uuid-real-4"], "uploaded_photos": ["x"]}
         )
         pipeline.supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
-            {"estado_revision": "PENDIENTE"}
+            {"estado_revision": "PENDIENTE", "es_organizacion_prueba": True}
         ]
 
         run_e2e(base_dir=MagicMock(), cleanup=False)

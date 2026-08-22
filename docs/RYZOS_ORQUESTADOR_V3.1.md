@@ -101,6 +101,7 @@ Código / Archivos a crear o modificar:
 * **Sanitización de Geometrías:** Coordenadas exportadas a TRACES UE en EPSG:4326 (WGS84), redondeo estricto a 6 decimales. Parcelas >= 4.0 ha exigen representación tipo Polygon, validada con `ST_IsValid`.
 * **PII Pública:** Ningún hash expuesto en `/trace/[lot_hash]` puede generarse sin salt secreto por organización (HMAC-SHA256, salt en variable de entorno, nunca en código).
 * **Staging Obligatorio:** Ninguna migración o feature va directo a `main`. Todo pasa primero por `staging` con revisión antes de merge. `DROP TABLE`/`TRUNCATE` requieren confirmación explícita fuera del flujo autónomo.
+* **Confirmación de Borrados/Actualizaciones Masivas:** Cualquier `DELETE`/`UPDATE` masivo contra una tabla con datos de una organización donde `es_organizacion_prueba = false` (o sin fila en `ORGANIZACIONES`) requiere reportar el conteo real de filas afectadas y el nombre real de la organización (ver `lib/safety/confirmarOperacionMasiva.js`), y esperar confirmación humana explícita citando esos números — un "sí" genérico no basta. Aplica sin importar si la acción se ejecuta desde Claude Code CLI, un script (`scripts/*.py`), o directamente en Supabase Studio. Motivado por el incidente de ADR-007/ADR-008 (14 filas de prueba borradas correctamente pero sin ninguna barrera de esquema que lo distinguiera de un borrado real).
 * **Manejo de Errores de Claude Code:** Ver Sección 3, punto 2.
 
 ---

@@ -79,9 +79,15 @@ adicionales no documentadas aquí.
   (jsonb, **`NULL`** en las 2 filas reales hoy — sin estructura definida
   todavía, ver `ORGANIZACIONES.Config.gis.radio_contexto_vecinos_m` en
   `docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md` para el primer uso
-  real), `creado_en`, `actualizado_en`, `creado_por`.
+  real), `creado_en`, `actualizado_en`, `creado_por`. **Pendiente de
+  aplicación manual (ver ADR-008 abajo):** `es_organizacion_prueba
+  boolean NOT NULL DEFAULT false` — no existe todavía en la instancia
+  real (confirmado en vivo, 2026-08-22: `column
+  ORGANIZACIONES.es_organizacion_prueba does not exist`).
 - **Solo 2 filas reales existen hoy: `"COOP-JS"` (COOP. JESUS SOLIDARIO)
-  y `"COOP-ND"` (Asociacion Miladro de Jesus).**
+  y `"COOP-ND"` (Asociacion Miladro de Jesus).** Una 3ra fila,
+  `"ORG-TEST-E2E"`, queda pendiente de creación por la misma migración
+  (organización de prueba explícita para `scripts/run_e2e_etl_test.py`).
 - RLS: solo `SELECT` (asimetría deliberada — Tarea 9.1).
 - **Sin FK real desde ninguna tabla transaccional** (confirmado en vivo,
   2026-08-21, vía PostgREST — `?select=*,ORGANIZACIONES(*)` contra
@@ -91,20 +97,29 @@ adicionales no documentadas aquí.
   sin constraint en todo el schema, no solo en la tabla que se esté
   mirando puntualmente). Un valor de `ID_Organizacion` que no exista en
   `ORGANIZACIONES` no genera ningún error de escritura.
-- **`"ORG-COOP-NORTE"` es dato real de prueba E2E, no orgánico ni
-  huérfano por accidente:** aparece en 6 filas de `EUDR_MONITOREO`, 4 de
-  `EUDR_USO_SUELO`, 4 de `EUDR_INSTALACIONES` (0 en `PADRON_SOCIOS`/
-  `PADRON_PARCELAS`, confirmado en vivo) pero en NINGUNA fila de
-  `ORGANIZACIONES` — origen: `scripts/run_e2e_etl_test.py`
-  (`ORG_ID = "ORG-COOP-NORTE"`, línea 17), un script de prueba
-  end-to-end real (no un fixture de test unitario) que ingesta un `.zip`
-  de QField de prueba a través del pipeline real
-  (`scripts/etl_drive_to_supabase.py`) contra la instancia viva — ver
-  `docs/prompts/prompt_e2e_etl_test.md`. Nunca se creó la fila
-  correspondiente en `ORGANIZACIONES` porque el pipeline de ingesta no
-  la necesita (sin FK, ver arriba) y el E2E test no la crea. No es un bug
-  del pipeline ni pérdida de datos — es un artefacto esperado de haber
-  corrido esa prueba contra la base real sin limpieza posterior.
+- **`"ORG-COOP-NORTE"` fue dato real de prueba E2E (RESUELTO, ver
+  ADR-007/ADR-008):** apareció en 6 filas de `EUDR_MONITOREO`, 4 de
+  `EUDR_USO_SUELO`, 4 de `EUDR_INSTALACIONES` sin fila correspondiente en
+  `ORGANIZACIONES` — origen: `scripts/run_e2e_etl_test.py` corrido
+  repetidas veces contra la instancia viva sin teardown. Las 14 filas
+  fueron borradas (commit `2391859`, confirmado en vivo con conteos en 0
+  antes de pushear) y el script ya no usa este `ORG_ID` — reemplazado por
+  `"ORG-TEST-E2E"` (ver abajo). Se deja esta entrada como registro
+  histórico del incidente.
+- **Migración pendiente de aplicación manual
+  (`20260822_021532_es_organizacion_prueba.sql`, ver
+  ADR-008):** agrega `es_organizacion_prueba boolean NOT NULL DEFAULT
+  false` (DEFAULT seguro — sin marcar explícitamente, se trata como
+  organización real) e inserta/actualiza una fila real
+  `"ORG-TEST-E2E"` (`Nombre_Organizacion = "Organización de Prueba — NO
+  ES CLIENTE REAL"`, `es_organizacion_prueba = true`) para que
+  `scripts/run_e2e_etl_test.py` tenga una organización de prueba real y
+  etiquetada en vez de un `ID_Organizacion` sin fila correspondiente. El
+  script aborta (`assert_org_is_test_marked`) si el `ORG_ID` que va a
+  usar no tiene `es_organizacion_prueba = true` en el momento de
+  correr — hasta que esta migración se aplique manualmente, correr el
+  script en modo real fallará con `UnsafeOrgIdError` (comportamiento
+  esperado: sin la fila, es más seguro abortar que escribir).
 
 ### `public."PADRON_SOCIOS"`
 Schema real completo confirmado en vivo el 2026-08-18 (`specs/padron_web_socios.md`,

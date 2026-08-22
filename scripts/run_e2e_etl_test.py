@@ -14,7 +14,7 @@ from scripts.etl_drive_to_supabase import DriveZipETLPipeline, EVIDENCIA_BUCKET
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASE_DIR = PROJECT_ROOT / "temp_drive"
 
-ORG_ID = "ORG-COOP-NORTE"
+ORG_ID = "ORG-TEST-E2E"
 ZIP_NAME = "monitoreo_campo_e2e.zip"
 PHOTO_NAME = "foto_campo_01.jpg"
 SOURCE_CRS = "EPSG:32718"  # UTM 18S — coordenadas de campo reales antes de reproyectar
@@ -107,9 +107,38 @@ def verify_photo_criterion(result: dict) -> str:
 
 
 
+class UnsafeOrgIdError(Exception):
+    """El ID_Organizacion que el script va a usar no está marcado como de prueba."""
+
+
+# GUARDARAIL DE ENTORNO (2026-08-22, ver
+# docs/adr/ADR-008-etiqueta-organizacion-prueba-y-guardarail-e2e.md):
+# antes de escribir cualquier fila real, confirma en vivo que ORG_ID tiene
+# es_organizacion_prueba = true en ORGANIZACIONES. Si la fila no existe o
+# no está marcada como de prueba, aborta sin escribir nada — nunca debe
+# ser posible que una corrida real de este script escriba contra una
+# organización real por error de configuración (ORG_ID mal copiado, .env
+# apuntando al ambiente equivocado, etc.). Motivado por el incidente de
+# ADR-007: antes de esto, el script escribía con ORG_ID = "ORG-COOP-NORTE"
+# sin fila correspondiente en ORGANIZACIONES ni forma de detectarlo en
+# código — solo se descubrió por auditoría manual del schema.
+def assert_org_is_test_marked(supabase, org_id: str) -> None:
+    response = (
+        supabase.table("ORGANIZACIONES").select("ID,es_organizacion_prueba").eq("ID", org_id).execute()
+    )
+    rows = response.data or []
+    if not rows or not rows[0].get("es_organizacion_prueba"):
+        raise UnsafeOrgIdError(
+            f'Guardarail E2E: "{org_id}" no existe en ORGANIZACIONES o no tiene '
+            f"es_organizacion_prueba = true. Abortando sin escribir nada — este script "
+            f"nunca debe poder escribir contra una organización no marcada explícitamente "
+            f"como de prueba. Ver docs/adr/ADR-008-etiqueta-organizacion-prueba-y-guardarail-e2e.md."
+        )
+
+
 # HALLAZGO REAL (2026-08-21, ver docs/adr/ADR-007-integridad-referencial-id-organizacion.md):
 # este script, en modo REAL (con SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY
-# reales), inserta filas de verdad en EUDR_MONITOREO usando ORG_ID =
+# reales), insertaba filas de verdad en EUDR_MONITOREO usando ORG_ID =
 # "ORG-COOP-NORTE" — un código de organización de prueba que nunca tuvo
 # fila correspondiente en ORGANIZACIONES, y el script no las limpiaba al
 # terminar. Corridas repetidas (confirmado: 6 filas huérfanas
@@ -119,7 +148,9 @@ def verify_photo_criterion(result: dict) -> str:
 # que ESTE run creó (por `id_monitoreo`, nunca un `DELETE ... WHERE
 # "ID_Organizacion" = ORG_ID` sin acotar — evita borrar corridas
 # anteriores que hayan quedado por otro motivo, o cualquier fila real
-# que coincidiera por casualidad con el mismo ID_Organizacion).
+# que coincidiera por casualidad con el mismo ID_Organizacion). Sigue
+# funcionando sin cambios con el nuevo ORG_ID = "ORG-TEST-E2E" — nunca
+# dependió del valor de ORG_ID, solo de los ids que este run insertó.
 def teardown_e2e_rows(pipeline: DriveZipETLPipeline, inserted_ids: list[str]) -> None:
     if not inserted_ids:
         return
@@ -144,6 +175,9 @@ def run_e2e(base_dir: Path, mock_supabase: MagicMock | None = None, cleanup: boo
     gdf_reprojected = verify_reprojection(zip_path, base_dir / "_verify_reproj")
 
     pipeline = build_pipeline(base_dir, supabase_url, supabase_key, mock_supabase=mock_supabase)
+    if mock_supabase is None:
+        assert_org_is_test_marked(pipeline.supabase, ORG_ID)
+
     inserted_ids: list[str] = []
     try:
         result = pipeline.process_package(zip_path, execute_move=True)
