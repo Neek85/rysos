@@ -466,19 +466,50 @@ migración.
 ### Verificación
 
 `node --test tests/test_qc_editor_bugs_and_solapamiento.mjs` — pruebas
-de inspección de código sobre la nueva migración (la migración no está
-aplicada todavía en la instancia real, mismo criterio que el resto de
-migraciones no aplicadas de esta sesión): confirma que el heurístico solo
-aplica a `EUDR_USO_SUELO`, solo excluye con conteo exacto de 1, solo toca
-la rama `EUDR_MONITOREO` del CTE (nunca la rama `EUDR_USO_SUELO` —
-preserva la regla 2), y que el filtro por organización / exclusión del
-propio registro siguen intactos (preserva la regla 3). La verificación
-EN VIVO del "después" (aplicar la migración y repetir las llamadas RPC de
-la tabla de arriba, más un caso sintético desechable de dos subdivisiones
-hermanas solapadas entre sí para confirmar la regla 2 en vivo) queda
-pendiente de que el usuario aplique la migración — se ofreció como
-siguiente paso antes del push.
+de inspección de código sobre la nueva migración: confirma que el
+heurístico solo aplica a `EUDR_USO_SUELO`, solo excluye con conteo exacto
+de 1, solo toca la rama `EUDR_MONITOREO` del CTE (nunca la rama
+`EUDR_USO_SUELO` — preserva la regla 2), y que el filtro por organización
+/ exclusión del propio registro siguen intactos (preserva la regla 3).
+
+**Bug real encontrado en la primera aplicación:** `MIN(id_monitoreo)`
+falló en vivo con `{"code":"42883","message":"function min(uuid) does
+not exist"}` — Postgres no tiene un agregado `MIN`/`MAX` registrado para
+`uuid` (sí soporta `<`/`>`, pero no el agregado). Reemplazado por
+`(array_agg(id_monitoreo))[1]`, que no depende de ningún agregado de
+orden (`count(*) = 1` ya garantiza que es el único elemento). Confirmado
+con los 3 registros reales, que fallaban los 3 por igual con el mismo
+error (no era específico de uno).
+
+**Verificación EN VIVO del "después"** (tras aplicar la migración
+corregida):
+
+| Caso | Antes | Después | ¿Coincide con lo esperado? |
+|---|---|---|---|
+| `id=18` (0.9455 ha) | `solapa:true`, 100% | `solapa:false`, `contenido_en_parcela_propia:true` | Sí |
+| `id=19` (4.8570 ha) | `solapa:true`, 100% | `solapa:false`, `contenido_en_parcela_propia:true` | Sí |
+| `id=20` (10.1873 ha) | `solapa:true`, 99.64% | `solapa:true`, 99.64%, `contenido_en_parcela_propia:false` | **Sin cambio — y es correcto** |
+
+`id=20` NO se excluyó, a propósito: su solapamiento con su propio
+Monitoreo padre es 99.64%, no 100% — un 0.36% de su área queda fuera del
+perímetro (desalineación real de GPS de campo entre las dos capturas).
+`ST_Contains` exige contención completa; al no cumplirse, no hay ningún
+candidato con containment exclusivo (0 candidatos, no >1), así que el
+heurístico correctamente NO excluye nada — exactamente el comportamiento
+"el error va siempre hacia seguir mostrando la alerta" que pidió el
+usuario, demostrado con un caso real, no solo documentado en teoría.
+
+**Regla 2 confirmada en vivo con un fixture desechable:** se insertaron 2
+filas reales en `EUDR_USO_SUELO` (`ID_Organizacion=ORG-TEST-E2E`,
+`estado_revision=APROBADO`, mismo `id_parcela` sintético, dos cuadrados
+solapados 25% entre sí, ubicados lejos de cualquier parcela real para
+aislar la prueba) — `id=21`/`id=22`. Ambos devolvieron `solapa:true,
+solapamiento_max_pct:25.00, contenido_en_parcela_propia:false`, cada uno
+señalando al otro como `registros_solapados`. Confirma la regla 2 sin
+cambios. Fixture borrado por `id` inmediatamente después (`DELETE
+... WHERE id IN (21,22)`, nunca un DELETE sin acotar) — conteo verificado
+en 2 antes y 0 después, sin nada residual.
 
 Commit: `fix(qc): excluye contencion esperada dentro de la misma parcela
-del calculo de solapamiento`, sin push — pendiente de confirmación
-explícita.
+del calculo de solapamiento` + `fix(qc): corrige MIN(uuid) inexistente en
+Postgres`, sin push — pendiente de confirmación explícita.

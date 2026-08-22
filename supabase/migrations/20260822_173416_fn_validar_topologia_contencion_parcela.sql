@@ -106,7 +106,10 @@ BEGIN
     -- excluye nada (lado seguro: sigue marcando como antes).
     v_contenedor_exclusivo := NULL;
     IF p_tabla_origen = 'EUDR_USO_SUELO' THEN
-        SELECT CASE WHEN count(*) = 1 THEN MIN(id_monitoreo) ELSE NULL END
+        -- MIN(uuid) no existe en Postgres (uuid no tiene orden por defecto)
+        -- — array_agg(...)[1] evita depender de un agregado de orden;
+        -- count(*) = 1 ya garantiza que es el único elemento del array.
+        SELECT CASE WHEN count(*) = 1 THEN (array_agg(id_monitoreo))[1] ELSE NULL END
         INTO v_contenedor_exclusivo
         FROM public."EUDR_MONITOREO"
         WHERE "ID_Organizacion" = v_org

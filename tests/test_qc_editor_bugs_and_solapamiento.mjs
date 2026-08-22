@@ -124,7 +124,7 @@ const CONTENCION_MIGRATION_PATH = 'supabase/migrations/20260822_173416_fn_valida
 test('la migración de Fase A calcula v_contenedor_exclusivo SOLO para EUDR_USO_SUELO, y solo cuando hay EXACTAMENTE UN Monitoreo aprobado que contiene por completo la subdivisión', () => {
   const source = read(CONTENCION_MIGRATION_PATH)
   assert.match(source, /IF p_tabla_origen = 'EUDR_USO_SUELO' THEN/)
-  assert.match(source, /CASE WHEN count\(\*\) = 1 THEN MIN\(id_monitoreo\) ELSE NULL END/)
+  assert.match(source, /CASE WHEN count\(\*\) = 1 THEN \(array_agg\(id_monitoreo\)\)\[1\] ELSE NULL END/)
   assert.match(source, /AND ST_Contains\(geom_inspeccion, v_geom\);/)
 })
 
