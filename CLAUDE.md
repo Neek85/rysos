@@ -37,6 +37,23 @@ are not wired into CI** — `.github/workflows/test_and_deploy.yml` only runs
 `python -m pytest tests/ -v --tb=short`, so a regression in one of those
 `lib/` files would not fail the pipeline today.
 
+**Dev server hygiene (Windows/PowerShell):** always kill `node` processes,
+delete `.next`, and restart `npm run dev` clean after running `npm run
+build` — a `next dev` process left running across a `build` ends up
+serving a `.next/` it no longer matches (dev-mode manifests pointing at
+unhashed chunk names that the production build just overwrote with hashed
+ones), which renders any route with no CSS and hydration that never
+resolves. Additionally, in long, intensive Claude Code sessions, restart
+`npm run dev` **periodically even without an intervening build** — two
+real, independently-diagnosed incidents in the same session (2026-08-21)
+both traced back to a long-lived `next dev`/spawned-child process quietly
+entering a broken state with no visible error until much later: the
+`/dashboard/mapa` stale-build-cache incident above, and
+`app/api/gis/sync-drive/route.js`'s `child_process.spawn('python', ...)`
+failing with Windows `STATUS_DLL_INIT_FAILED` (`0xC0000142`) and zero
+captured output — both resolved by simply restarting the dev server, with
+no code change required.
+
 ### Database (Supabase PostGIS)
 
 Migrations live in `supabase/migrations/*.sql` as plain, idempotent SQL
