@@ -1,11 +1,15 @@
 # ADR-005 — Editor Vectorial de QC: 2 bugs reales, y solapamiento auditable visualmente
 
 - **Estado:** Aceptado
-- **Fecha:** 2026-08-21
-- **Migraciones:** ninguna nueva — `fn_validar_topologia_eudr`
+- **Fecha:** 2026-08-21 (Fase A agregada 2026-08-22)
+- **Migraciones:** ninguna nueva en la versión original — `fn_validar_topologia_eudr`
   (`supabase/migrations/20260820_fn_validar_topologia_eudr.sql`) ya estaba
   correcta en los 3 puntos investigados (ver abajo), confirmada aplicada en
-  la instancia real como precondición de esta tarea.
+  la instancia real como precondición de esta tarea. **Fase A (2026-08-22)
+  sí agrega una migración:**
+  `supabase/migrations/20260822_173416_fn_validar_topologia_contencion_parcela.sql`
+  (pendiente de aplicación manual en Supabase Studio, como toda migración
+  de este repo).
 - **Spec:** `specs/consola_qc_layout_y_validacion.md` (addendum
   "Solapamiento auditable")
 - **Tests:** `tests/test_qc_editor_bugs_and_solapamiento.mjs`,
@@ -349,3 +353,132 @@ cliente durante el dibujo.
 
 Commit: `fix(qc): margen de seguridad en badge Requiere Polygon segun
 divergencia turf/postgis`, push a `staging` tras confirmación explícita.
+
+## Fase A (2026-08-22) — excluir la contención esperada dentro de la misma parcela
+
+**Reporte real:** una subdivisión de `EUDR_USO_SUELO` de 0.95 ha,
+completamente contenida dentro del perímetro de `EUDR_MONITOREO` de su
+propia parcela, se marcaba como "Solapado 100%" — un falso positivo, no
+un conflicto real (es la estructura esperada: el perímetro de Monitoreo
+contiene sus propias subdivisiones de Uso de Suelo).
+
+**Reglas de negocio confirmadas con el usuario:**
+1. Subdivisión de Uso de Suelo contenida en el perímetro de Monitoreo de
+   SU MISMA parcela → NO es conflicto, no cuenta en el % de "Solapado".
+2. Dos subdivisiones de Uso de Suelo de la MISMA parcela que se solapan
+   ENTRE SÍ → SÍ es conflicto (posible doble registro de la misma tierra
+   con dos usos) — sin cambios.
+3. Solapamiento contra geometrías de OTRA parcela (Monitoreo o Uso de
+   Suelo) → SÍ es conflicto (posible invasión de terreno ajeno) — sin
+   cambios.
+
+### Premisa verificada antes de escribir código — y descartada
+
+La precondición de la tarea asumía que `EUDR_USO_SUELO` tenía un campo de
+parcela comparable contra `EUDR_MONITOREO."ID_Parcela_Fija"` (con la
+advertencia explícita de "no darlo por sentado"). Verificado contra datos
+reales (REST en vivo + el GeoPackage real de un paquete de prueba
+ingerido en la sesión) y **confirmado que NO existe tal campo hoy**:
+
+- `EUDR_USO_SUELO.id_parcela` / `EUDR_INSTALACIONES.id_parcela` = el GUID
+  interno de QField del Monitoreo padre en el proyecto de campo original
+  (ej. `{4166dc2a-4cf0-452b-8eee-d5f68ce05e5c}`) — confirmado comparando
+  el layer `EUDR_MONITOREO` crudo del GeoPackage (donde `id_monitoreo` SÍ
+  es ese mismo GUID) contra el layer `EUDR_USO_SUELO` (`id_parcela`
+  idéntico para las subdivisiones de esa misma parcela).
+- Pero `scripts/etl_drive_to_supabase.py::build_monitoreo_payload`
+  **recalcula `id_monitoreo` de forma determinística** a partir de
+  `(org, ID_Parcela_Fija, fecha)` antes de escribir a `EUDR_MONITOREO` —
+  confirmado en datos reales insertados (GUID crudo `{4166dc2a-...}` →
+  `id_monitoreo` almacenado `b12677bd-6b88-...`, sin relación). El GUID
+  original que vincularía ambas tablas **nunca se persiste**.
+- Conclusión: `EUDR_USO_SUELO.id_parcela` y `EUDR_MONITOREO."ID_Parcela_Fija"`
+  son identificadores de espacios completamente distintos — comparables
+  por igualdad, esa comparación NUNCA sería verdadera. Implementar el fix
+  así habría sido un no-op disfrazado de fix.
+
+### Decisión: heurístico espacial de contención exclusiva (temporal)
+
+Confirmado con el usuario tras plantear la disyuntiva (ampliar el ETL
+para preservar el GUID real, vs. un heurístico espacial sin tocar
+ingesta): se usa un heurístico espacial con una condición de seguridad
+estricta. En `fn_validar_topologia_eudr`, al validar una fila de
+`EUDR_USO_SUELO`, "misma parcela" = el **único** perímetro de
+`EUDR_MONITOREO` APROBADO (misma organización) que **contiene por
+completo** (`ST_Contains`) la subdivisión:
+
+- Si hay **exactamente un** perímetro que la contiene → se excluye del
+  cálculo de `% Solapado` (es la estructura esperada).
+- Si hay **cero o más de uno** → no se excluye nada, se mantiene el
+  comportamiento anterior (se sigue marcando como solapamiento). Nunca se
+  asume silenciosamente cuál es "la" parcela correcta ante ambigüedad —
+  el error va siempre hacia "seguir mostrando la alerta", nunca hacia
+  "ocultarla de más".
+
+**Esto es un heurístico TEMPORAL, no una relación real de datos.**
+Depende de que las parcelas vecinas no se solapen físicamente entre sí en
+la práctica — si dos perímetros de parcelas vecinas sí se solapan y ambos
+contienen la misma subdivisión, el caso cae en "más de uno" y se sigue
+marcando (correcto por el lado seguro, aunque implique una alerta
+innecesaria en ese caso específico). Antes de la Fase B (cobertura
+completa de deforestación, que sí bloquea aprobaciones) hace falta
+resolver el vínculo real vía GUID — usar un match geométrico para decidir
+qué áreas sumar y bloquear una aprobación es un riesgo mucho mayor que
+usarlo acá solo para suprimir una alerta informativa.
+
+La regla 2 (dos subdivisiones de la misma parcela solapadas entre sí)
+**no requirió ningún cambio**: el heurístico solo excluye geometrías de
+la rama `EUDR_MONITOREO` del CTE de candidatos, nunca de la rama
+`EUDR_USO_SUELO` — dos subdivisiones que se solapan entre sí siguen
+comparándose exactamente igual que antes, sin importar si son de la
+misma parcela o de parcelas distintas.
+
+### Reproducción real del bug (en vivo, antes del fix)
+
+Contra la instancia real (`curl` a `/rest/v1/rpc/fn_validar_topologia_eudr`,
+Service Role Key, sin aplicar todavía la migración de Fase A):
+
+| `EUDR_USO_SUELO.id` | Área | `solapa` | `solapamiento_max_pct` | Contra |
+|---|---|---|---|---|
+| 18 | 0.9455 ha | `true` | 100.00% | su propio `EUDR_MONITOREO` (`b2f305a0-...`, `ID_Parcela_Fija=COOP-JS-001`) |
+| 19 | 4.8570 ha | `true` | 100.00% | su propio `EUDR_MONITOREO` (`10425cbd-...`, `ID_Parcela_Fija=COOP-JS-003`) |
+| 20 | 10.1873 ha | `true` | 99.64% | su propio `EUDR_MONITOREO` (`10425cbd-...`, `ID_Parcela_Fija=COOP-JS-003`) |
+
+El caso `id=18` (0.9455 ha) coincide con el reporte original ("0.95 ha
+completamente dentro del perímetro de su propia parcela"). `id=19`/`id=20`
+confirman el mismo patrón con otra parcela — ambas reproducciones reales,
+no fixtures sintéticos.
+
+### Frontend — sin cambios de código necesarios
+
+El badge y la alerta ámbar de "Validación topológica & EUDR"
+(`QcDetailEditor.jsx`) ya derivan exclusivamente de `result.solapa` /
+`result.solapamiento_max_pct`, que vienen tal cual de la RPC. Con el fix
+en la función, un caso de contención exclusiva pasa a `solapa: false`
+automáticamente — sin tocar ningún componente. El indicador neutral
+opcional ("Contenido correctamente en su parcela") mencionado como
+posible mejora en el prompt no se implementó en esta fase (explícitamente
+no obligatorio) — sí se agregó el campo `contenido_en_parcela_propia`
+(booleano) en la respuesta de la RPC, de costo casi nulo ya que el valor
+se calcula de todos modos, disponible para una UI futura sin otra
+migración.
+
+### Verificación
+
+`node --test tests/test_qc_editor_bugs_and_solapamiento.mjs` — pruebas
+de inspección de código sobre la nueva migración (la migración no está
+aplicada todavía en la instancia real, mismo criterio que el resto de
+migraciones no aplicadas de esta sesión): confirma que el heurístico solo
+aplica a `EUDR_USO_SUELO`, solo excluye con conteo exacto de 1, solo toca
+la rama `EUDR_MONITOREO` del CTE (nunca la rama `EUDR_USO_SUELO` —
+preserva la regla 2), y que el filtro por organización / exclusión del
+propio registro siguen intactos (preserva la regla 3). La verificación
+EN VIVO del "después" (aplicar la migración y repetir las llamadas RPC de
+la tabla de arriba, más un caso sintético desechable de dos subdivisiones
+hermanas solapadas entre sí para confirmar la regla 2 en vivo) queda
+pendiente de que el usuario aplique la migración — se ofreció como
+siguiente paso antes del push.
+
+Commit: `fix(qc): excluye contencion esperada dentro de la misma parcela
+del calculo de solapamiento`, sin push — pendiente de confirmación
+explícita.
