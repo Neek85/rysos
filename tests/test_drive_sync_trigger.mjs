@@ -108,8 +108,8 @@ test('formatSyncMessage da un mensaje razonable si summary es null (parseEtlSumm
 // buildSyncErrorDetail / summarizeErrorDetail — ver
 // docs/adr/ADR-009-fix-mensaje-error-sync-drive.md (detail vacío en
 // fallos reales: la causa NO era timing/buffering de child.stderr, sino
-// que el proceso Python moría a nivel de SO (Windows STATUS_DLL_NOT_FOUND,
-// code=3221225794) sin llegar a escribir nada — (stderr || stdout) sobre
+// que el proceso Python moría a nivel de SO (Windows STATUS_DLL_INIT_FAILED,
+// code=3221225794, 0xC0000142) sin llegar a escribir nada — (stderr || stdout) sobre
 // dos strings vacíos daba "" silencioso).
 // ---------------------------------------------------------------
 
@@ -131,9 +131,10 @@ test('buildSyncErrorDetail NUNCA devuelve cadena vacía cuando code !== 0, aunqu
   assert.match(detail, /sin producir ninguna salida/)
 })
 
-test('buildSyncErrorDetail agrega la pista conocida para STATUS_DLL_NOT_FOUND (code=3221225794) sin salida', () => {
+test('buildSyncErrorDetail agrega la pista conocida para STATUS_DLL_INIT_FAILED (code=3221225794, 0xC0000142) sin salida', () => {
   const detail = buildSyncErrorDetail({ code: 3221225794, stdout: '', stderr: '' })
-  assert.match(detail, /STATUS_DLL_NOT_FOUND/)
+  assert.match(detail, /STATUS_DLL_INIT_FAILED/)
+  assert.match(detail, /0xC0000142/)
   assert.match(detail, /DLL/)
 })
 

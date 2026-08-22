@@ -54,11 +54,12 @@ quedó descartada por evidencia directa**, no asumida:
 3. Agregué logging temporal de diagnóstico a `runPythonEtl()` (removido
    antes de este commit) y confirmé la causa real:
    `child.on('close')` se disparaba con **`code = 3221225794`**
-   (`0xC0000135` en hexadecimal — `STATUS_DLL_NOT_FOUND` de Windows) y
+   (`0xC0000142` en hexadecimal — `STATUS_DLL_INIT_FAILED` de Windows) y
    **cero bytes** en stdout y stderr. El proceso Python nunca llegó a
-   arrancar — Windows no pudo cargar una DLL requerida por el `python`
-   que `spawn()` resolvió en ese proceso concreto — así que no había
-   absolutamente nada que capturar.
+   arrancar — Windows sí encontró y cargó una DLL requerida por el
+   `python` que `spawn()` resolvió en ese proceso concreto, pero su
+   rutina de inicialización falló — así que no había absolutamente nada
+   que capturar.
 4. Confirmé la causa de fondo reiniciando el servidor de desarrollo
    limpio (matar `node`, borrar `.next`, `npm run dev` de nuevo): el
    mismo request que antes fallaba con `code=3221225794` pasó a
@@ -89,7 +90,7 @@ Nueva función pura en `lib/driveSyncTrigger.js` (testeable con
 - Si **ambos** están vacíos pero el proceso terminó con código distinto
   de cero, ya no devuelve `""`: arma un mensaje explícito ("el proceso
   Python terminó con código de salida N sin producir ninguna salida...")
-  y, si el código coincide con `STATUS_DLL_NOT_FOUND` (3221225794, el
+  y, si el código coincide con `STATUS_DLL_INIT_FAILED` (3221225794, el
   caso real observado hoy), agrega una pista concreta sobre la causa y
   cómo se resolvió esta vez.
 
