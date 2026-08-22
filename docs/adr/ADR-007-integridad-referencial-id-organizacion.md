@@ -1,6 +1,6 @@
 # ADR-007 — Integridad referencial de `ID_Organizacion`
 
-- **Estado:** Aceptado (FK) / Pendiente de confirmación (limpieza de datos)
+- **Estado:** Aceptado y aplicado (FK validada + limpieza de datos ejecutada, 2026-08-21)
 - **Fecha:** 2026-08-21
 - **Migraciones:** `supabase/migrations/20260821_225310_fk_id_organizacion_eudr.sql`
   (pendiente de aplicación manual en Supabase Studio, como toda migración
@@ -62,19 +62,20 @@ script versionado en este repo. No cambia la conclusión: en ambos casos
 es dato de prueba/desarrollo con el mismo `ORG_ID` de placeholder, nunca
 datos de producción ni de otro origen desconocido.
 
-## Decisión: FK `NOT VALID` en las 3 tablas EUDR_*, nada en PADRON_*
+## Decisión: FK `NOT VALID` + `VALIDATE CONSTRAINT` en las 3 tablas EUDR_*, nada en PADRON_*
 
-- **`EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES`:** se agrega
-  `FOREIGN KEY ("ID_Organizacion") REFERENCES "ORGANIZACIONES"("ID") NOT
-  VALID`. `NOT VALID` porque las 14 filas huérfanas existen AHORA MISMO —
-  una FK totalmente validada de entrada fallaría al aplicar la migración.
-  `NOT VALID` deja el constraint activo para cualquier INSERT/UPDATE
-  nuevo desde el momento en que se aplica (nunca más va a crecer este
-  tipo de huérfano), sin validar retroactivamente las 14 filas existentes
-  ni bloquear la tabla con un escaneo completo. `VALIDATE CONSTRAINT`
-  (que si exige cero huérfanos) queda como paso separado, condicionado a
-  que se confirme y ejecute la limpieza de esas 14 filas — explícitamente
-  NO incluido en esta migración.
+- **`EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES`:** la migración
+  hace, en una sola transacción: `DELETE` de las filas
+  `"ORG-COOP-NORTE"` (idempotente — no falla si ya no hay filas que
+  borrar), luego `ADD CONSTRAINT ... FOREIGN KEY ("ID_Organizacion")
+  REFERENCES "ORGANIZACIONES"("ID") NOT VALID`, y por último `VALIDATE
+  CONSTRAINT`. `NOT VALID` sigue siendo necesario aunque el `DELETE` vaya
+  primero en el mismo archivo — es la única forma en Postgres de agregar
+  una FK sin que el propio `ADD CONSTRAINT` dispare un escaneo de
+  validación completo en el mismo paso; por eso se separa en dos
+  sentencias. Con el `DELETE` ejecutándose antes, no queda ningún huérfano
+  al momento del `VALIDATE CONSTRAINT`, así que la FK termina totalmente
+  validada — no hay motivo para dejarla `NOT VALID` de forma permanente.
 - **`PADRON_SOCIOS`/`PADRON_PARCELAS` deliberadamente SIN FK**, pese a
   tener 0 huérfanos hoy (lo que técnicamente permitiría una FK
   completamente validada sin fricción). Motivo real, no solo
@@ -89,14 +90,25 @@ datos de producción ni de otro origen desconocido.
   que corresponda tomar unilateralmente desde acá sin involucrar a quien
   mantiene el otro repo.
 
-## Limpieza de las 14 filas huérfanas — PENDIENTE de confirmación explícita
+## Limpieza de las 14 filas huérfanas — ejecutada con confirmación explícita
 
 Esta tarea fue instruida explícitamente a NO borrar nada sin confirmación
 directa del usuario en el chat (`[SOLO SI USUARIO CONFIRMÓ EL BORRADO]`).
-La auditoría de arriba deja el terreno confirmado y seguro para hacerlo
-(único huérfano, origen de test conocido, sin impacto en datos reales) —
-pero el `DELETE` en sí no se ejecutó en esta tarea. Queda pendiente de que
-el usuario lo confirme directamente.
+El usuario confirmó directamente en el chat (2026-08-21) y el `DELETE` se
+ejecutó contra la instancia viva vía REST (Service Role Key) antes de
+aplicar la migración:
+
+| Tabla | Filas antes | Filas devueltas por el DELETE | Filas después |
+|---|---|---|---|
+| `EUDR_MONITOREO` | 6 | 6 | 0 |
+| `EUDR_USO_SUELO` | 4 | 4 | 0 |
+| `EUDR_INSTALACIONES` | 4 | 4 | 0 |
+
+Conteos verificados antes y después con `Content-Range` exacto (Service
+Role Key, filtrando por `ID_Organizacion=eq.ORG-COOP-NORTE`) — las 3
+tablas quedaron en 0 filas huérfanas confirmado. El mismo `DELETE` también
+quedó incluido en la migración SQL (idempotente) para que el archivo sea
+reproducible en cualquier entorno donde todavía existan esas filas.
 
 ## Fix del teardown en `scripts/run_e2e_etl_test.py`
 

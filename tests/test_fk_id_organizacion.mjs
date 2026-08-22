@@ -22,13 +22,31 @@ function read(relPath) {
 
 const MIGRATION_PATH = 'supabase/migrations/20260821_225310_fk_id_organizacion_eudr.sql'
 
-test('la migración agrega la FK NOT VALID en las 3 tablas EUDR_* (huérfanos existentes impiden una FK validada de entrada)', () => {
+test('la migración agrega la FK NOT VALID y luego la valida en las 3 tablas EUDR_* (los huérfanos se borran antes en el mismo archivo)', () => {
   const source = read(MIGRATION_PATH)
   for (const table of ['EUDR_MONITOREO', 'EUDR_USO_SUELO', 'EUDR_INSTALACIONES']) {
-    const re = new RegExp(
-      `ALTER TABLE public\\."${table}"\\s+ADD CONSTRAINT \\w+\\s+FOREIGN KEY \\("ID_Organizacion"\\) REFERENCES public\\."ORGANIZACIONES"\\("ID"\\)\\s+NOT VALID;`
+    const addRe = new RegExp(
+      `ALTER TABLE public\\."${table}"\\s+ADD CONSTRAINT (\\w+)\\s+FOREIGN KEY \\("ID_Organizacion"\\) REFERENCES public\\."ORGANIZACIONES"\\("ID"\\)\\s+NOT VALID;`
     )
-    assert.match(source, re, `${table} debería tener la FK NOT VALID`)
+    const addMatch = source.match(addRe)
+    assert.ok(addMatch, `${table} debería tener la FK NOT VALID`)
+    const validateRe = new RegExp(
+      `ALTER TABLE public\\."${table}"\\s+VALIDATE CONSTRAINT ${addMatch[1]};`
+    )
+    assert.match(source, validateRe, `${table} debería validar la FK ${addMatch[1]} después de agregarla`)
+  }
+})
+
+test('la migración borra las filas huérfanas ORG-COOP-NORTE de las 3 tablas EUDR_* antes de agregar la FK', () => {
+  const source = read(MIGRATION_PATH)
+  for (const table of ['EUDR_MONITOREO', 'EUDR_USO_SUELO', 'EUDR_INSTALACIONES']) {
+    const deleteRe = new RegExp(
+      `DELETE FROM public\\."${table}" WHERE "ID_Organizacion" = 'ORG-COOP-NORTE';`
+    )
+    assert.match(source, deleteRe, `${table} debería borrar las filas ORG-COOP-NORTE`)
+    const deleteIndex = source.search(deleteRe)
+    const addIndex = source.indexOf(`ALTER TABLE public."${table}"\n    ADD CONSTRAINT`)
+    assert.ok(deleteIndex < addIndex, `el DELETE de ${table} debe ir antes del ADD CONSTRAINT`)
   }
 })
 
