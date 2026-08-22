@@ -8,7 +8,13 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveDriveRoot, parseEtlSummary, formatSyncMessage } from '../lib/driveSyncTrigger.js'
+import {
+  resolveDriveRoot,
+  parseEtlSummary,
+  formatSyncMessage,
+  buildSyncErrorDetail,
+  summarizeErrorDetail,
+} from '../lib/driveSyncTrigger.js'
 
 // ---------------------------------------------------------------
 // resolveDriveRoot
@@ -96,4 +102,62 @@ test('formatSyncMessage da un mensaje razonable si summary es null (parseEtlSumm
   const message = formatSyncMessage(null)
   assert.equal(typeof message, 'string')
   assert.ok(message.length > 0)
+})
+
+// ---------------------------------------------------------------
+// buildSyncErrorDetail / summarizeErrorDetail — ver
+// docs/adr/ADR-009-fix-mensaje-error-sync-drive.md (detail vacío en
+// fallos reales: la causa NO era timing/buffering de child.stderr, sino
+// que el proceso Python moría a nivel de SO (Windows STATUS_DLL_NOT_FOUND,
+// code=3221225794) sin llegar a escribir nada — (stderr || stdout) sobre
+// dos strings vacíos daba "" silencioso).
+// ---------------------------------------------------------------
+
+test('buildSyncErrorDetail usa stderr tal cual (recortado a 2000 chars) cuando hay contenido real', () => {
+  const stderr = 'Traceback (most recent call last):\n...\nFileNotFoundError: no se encontro capa'
+  const detail = buildSyncErrorDetail({ code: 1, stdout: '', stderr })
+  assert.equal(detail, stderr)
+})
+
+test('buildSyncErrorDetail cae a stdout si stderr está vacío pero stdout tiene contenido', () => {
+  const detail = buildSyncErrorDetail({ code: 1, stdout: 'algo de stdout util', stderr: '' })
+  assert.equal(detail, 'algo de stdout util')
+})
+
+test('buildSyncErrorDetail NUNCA devuelve cadena vacía cuando code !== 0, aunque stdout/stderr estén vacíos', () => {
+  const detail = buildSyncErrorDetail({ code: 1, stdout: '', stderr: '' })
+  assert.ok(detail.length > 0)
+  assert.match(detail, /código de salida 1/)
+  assert.match(detail, /sin producir ninguna salida/)
+})
+
+test('buildSyncErrorDetail agrega la pista conocida para STATUS_DLL_NOT_FOUND (code=3221225794) sin salida', () => {
+  const detail = buildSyncErrorDetail({ code: 3221225794, stdout: '', stderr: '' })
+  assert.match(detail, /STATUS_DLL_NOT_FOUND/)
+  assert.match(detail, /DLL/)
+})
+
+test('buildSyncErrorDetail no agrega ninguna pista falsa para un código sin entrada conocida', () => {
+  const detail = buildSyncErrorDetail({ code: 42, stdout: '', stderr: '' })
+  assert.match(detail, /código de salida 42/)
+  assert.ok(!/STATUS_/.test(detail), 'no debería inventar una pista para un código no mapeado')
+})
+
+test('summarizeErrorDetail extrae la última línea no vacía (el tipo+mensaje real de la excepción)', () => {
+  const detail =
+    'Traceback (most recent call last):\r\n' +
+    '  File "scripts/etl_drive_to_supabase.py", line 467, in process_layer_rows\r\n' +
+    '    self.supabase.table(table_name).upsert(payload, on_conflict=on_conflict).execute()\r\n' +
+    'postgrest.exceptions.APIError: {\'message\': \'insert or update on table "EUDR_INSTALACIONES" violates foreign key constraint\'}\r\n'
+  assert.equal(
+    summarizeErrorDetail(detail),
+    'postgrest.exceptions.APIError: {\'message\': \'insert or update on table "EUDR_INSTALACIONES" violates foreign key constraint\'}'
+  )
+})
+
+test('summarizeErrorDetail devuelve null para entradas vacías o no-string', () => {
+  assert.equal(summarizeErrorDetail(''), null)
+  assert.equal(summarizeErrorDetail('   \n  \n'), null)
+  assert.equal(summarizeErrorDetail(null), null)
+  assert.equal(summarizeErrorDetail(undefined), null)
 })

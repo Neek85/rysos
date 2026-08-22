@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { formatSyncMessage } from '@/lib/driveSyncTrigger'
+import { formatSyncMessage, summarizeErrorDetail } from '@/lib/driveSyncTrigger'
 
 // Botón "Sincronizar Google Drive" (/dashboard/qc, /dashboard/mapa) — ver
 // specs/drive_sync_trigger.md. Vive en components/gis/ (no bajo
@@ -40,7 +40,12 @@ export default function DriveSyncButton({ onSynced, className = '' }) {
       if (!data.available) {
         setToast({ type: 'info', message: data.message })
       } else if (!data.success) {
-        setToast({ type: 'error', message: data.message || 'No se pudo sincronizar con Google Drive.' })
+        const base = data.message || 'No se pudo sincronizar con Google Drive.'
+        // ver ADR-009: antes esto ignoraba data.detail por completo — el
+        // toast siempre mostraba el mismo mensaje genérico sin importar
+        // la causa real.
+        const detailLine = summarizeErrorDetail(data.detail)
+        setToast({ type: 'error', message: detailLine ? `${base} ${detailLine}` : base })
       } else {
         setToast({ type: 'success', message: formatSyncMessage(data.summary) })
         if (data.summary?.packages_processed > 0) onSynced?.(data.summary)
