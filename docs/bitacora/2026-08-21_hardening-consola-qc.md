@@ -2,7 +2,7 @@
 
 *Para cualquiera que quiera entender qué pasó en este tramo de trabajo sin
 necesidad de leer código. Cubre desde el commit `0d003e8` hasta el
-`f099a75`.*
+`2ac75d6`.*
 
 > **Nota sobre el número de commits:** el pedido original de esta bitácora
 > hablaba de "9 commits". Revisando el historial real, el tramo de
@@ -11,6 +11,15 @@ necesidad de leer código. Cubre desde el commit `0d003e8` hasta el
 > el fix de sincronización de Drive) son en realidad **15 commits**, no
 > 9. Se corrige el número acá para que la bitácora quede exacta; el
 > listado completo está al final.
+
+> **Actualización (mismo 23 de agosto, más tarde):** se agregaron las
+> secciones 6 y 7 (que corrieron el resto del documento un lugar hacia
+> abajo), con el trabajo de 3 commits nuevos (`1ec2c2d`, `5c6d4f9`,
+> `2ac75d6`) que siguieron directamente después de `f099a75`: el vínculo
+> real entre subdivisiones y su parcela madre, la validación de cobertura
+> completa, y un bug crítico encontrado y corregido el mismo día. La
+> sección 8 ("Qué queda pendiente") y la tabla técnica de la sección 9
+> también se actualizaron para reflejar esto.
 
 ---
 
@@ -202,22 +211,111 @@ La causa real resultó ser doble:
 
 ---
 
-## 6. Qué queda pendiente
+## 6. El vínculo real entre una subdivisión y su parcela madre
 
-**a) La "Fase B" de cobertura completa contra deforestación — todavía no
-empezó.** Esta es la etapa que cruzaría cada parcela contra datos
-satelitales reales de pérdida forestal y **sí podría bloquear una
-aprobación automáticamente** (a diferencia de todo lo de este tramo, que
-solo muestra alertas informativas, nunca bloquea nada). No hay fecha
-todavía.
+La solución provisoria descrita en el punto 3 (adivinar "esta subdivisión
+es de esta parcela" mirando dónde cae en el mapa) funcionaba para avisar
+de un falso conflicto de solapamiento, pero no era suficientemente sólida
+para algo más serio: usarla para decidir si una parcela ya está
+completamente clasificada o no, y menos todavía para bloquear una
+aprobación en base a eso. Un cálculo "por ubicación" siempre deja un
+margen de duda; una decisión que bloquea el trabajo de alguien necesita
+un dato real, no una suposición geográfica.
 
-> *Aclaración honesta:* el pedido original de esta bitácora mencionaba
-> que esta fase estaba "frenada en la etapa de investigación de si
-> `PADRON_PARCELAS.totalh` es confiable". Se revisó todo el trabajo real
-> de este tramo y no se encontró ninguna investigación de ese tipo — no
-> parece ser parte de lo que realmente pasó, así que no se incluye como
-> un hecho confirmado. Si hay una investigación real sobre eso que no
-> quedó documentada en este repositorio, vale la pena aclararlo aparte.
+Investigando cómo llegan los datos desde el celular del técnico de campo
+hasta la base de datos, apareció la solución de fondo: el sistema de
+captura (QField) sí guarda, desde el origen, un identificador que conecta
+cada subdivisión con su parcela — pero ese dato se estaba descartando
+sin querer durante el proceso de carga, nunca llegaba a guardarse. Se
+corrigió para que, de ahora en adelante, ese identificador se preserve —
+y a partir de eso, "esta subdivisión pertenece a esta parcela" pasó a ser
+un dato certero, no una suposición basada en el mapa.
+
+Para las subdivisiones que ya estaban cargadas antes de este cambio (y
+que por lo tanto nunca guardaron ese identificador), se recuperó el dato
+para los casos posibles usando, por única vez y con mucho cuidado, la
+misma técnica de "mirar el mapa" de antes — y solo cuando no había
+ninguna duda. Con los pocos datos reales que existen hoy: **2 parcelas
+se pudieron vincular sin ninguna ambigüedad, 1 quedó sin vincular por
+simple falta de datos (no había ninguna subdivisión ahí todavía), y 0
+casos quedaron en duda.** Antes de tocar cualquier dato existente, se
+mostró ese resultado y se esperó una confirmación explícita — mismo
+criterio que se usó durante todo este tramo de trabajo para cualquier
+cambio sobre datos ya cargados.
+
+## 7. Validación de cobertura completa — y un bug crítico encontrado a tiempo
+
+**Por qué importa para EUDR:** una parcela de café puede tener varias
+subdivisiones (una parte en producción, otra en pasto, etc.). Para que
+un reporte de cumplimiento ambiental sea confiable, esas subdivisiones
+tienen que sumar el 100% del terreno real de la parcela — si queda un
+pedazo de tierra sin clasificar, ese reporte está incompleto sin que
+nadie se dé cuenta a simple vista. Por eso se construyó una validación
+que compara el área real del perímetro contra la suma de las
+subdivisiones ya aprobadas, y avisa cuando falta cubrir más del 5% del
+terreno.
+
+**El dato del Padrón no sirve para esto.** Antes de construir la
+validación, se investigó si se podía usar un número que ya existe en el
+sistema del Padrón de productores (`totalh`, el total de hectáreas
+declaradas) en vez de calcular el área real del mapa. Con los pocos
+casos reales disponibles para comprobarlo, el resultado fue contundente:
+en una parcela real (`COOP-JS-003`), el Padrón decía 2.25 hectáreas
+mientras que el área real medida en el mapa es 24.6 hectáreas — casi 11
+veces más. Ese número del Padrón viene de un sistema más viejo (una
+migración desde una herramienta llamada AppSheet) que no tiene un
+proceso claro de mantenimiento ni se actualiza de forma confiable. Por
+eso se decidió no usarlo nunca para decidir si bloquear algo — solo se
+muestra aparte, como información de referencia, con una advertencia
+explícita de que puede no ser confiable.
+
+**El hallazgo más importante de este tramo:** la primera versión de esta
+validación sí bloqueaba el botón "Aprobar" cuando detectaba que faltaba
+cobertura. Al probarla con datos reales en pantalla, apareció un problema
+serio: **ninguna subdivisión, de ninguna parcela, podía aprobarse nunca**
+— siempre aparecía "0% cubierto", sin excepción. La causa, en términos
+simples: el cálculo solo contaba las subdivisiones que YA estaban
+aprobadas — pero la que se está revisando en ese momento, por definición,
+todavía no lo está. Es como pedirle la llave de un candado a algo que
+está justamente adentro del candado, cerrado: la última subdivisión que
+le faltaba a cualquier parcela para completarse nunca podía contarse a sí
+misma antes de aprobarse, así que nunca podía pasar su propio control.
+No era un caso raro — pasaba siempre, con cualquier parcela.
+
+Este problema no lo encontró ninguna prueba automática — se encontró
+mirando la pantalla real, con datos reales, y confirmando el problema con
+capturas concretas. La corrección: la validación de cobertura dejó de
+bloquear el botón "Aprobar" y pasó a ser **puramente informativa** — un
+aviso amarillo, igual que el aviso de "Solapado X%" que ya existía, que
+avisa "cobertura parcial, revisá si falta algo" pero nunca le impide a
+nadie aprobar una subdivisión individual. El cálculo en sí (cuánto se
+cubrió, cuánto falta) sigue funcionando exactamente igual — solo cambió
+qué hace el sistema con ese resultado.
+
+**Pendiente, explícitamente sin decidir:** en algún punto del proceso SÍ
+va a hacer falta exigir que una parcela esté completamente cubierta antes
+de darla por lista — probablemente al momento de exportar el reporte
+oficial de trazabilidad (la exportación DDS que ya existe en el mapa),
+no al aprobar cada subdivisión suelta una por una. Dónde exactamente se
+debe aplicar ese control real todavía no se decidió — queda como una
+tarea futura separada.
+
+## 8. Qué queda pendiente
+
+**a) Dónde debe exigirse la cobertura completa de verdad — no
+decidido.** Como se explica en el punto 7: la validación de cobertura ya
+existe y funciona, pero hoy es solo informativa. Falta decidir en qué
+paso del proceso (probablemente la exportación DDS) se debe convertir en
+un control real que si bloquee, sin que eso choque con el trabajo diario
+de aprobar subdivisiones sueltas.
+
+> *Resuelto de la vez pasada:* la pregunta sobre si `PADRON_PARCELAS.totalh`
+> era una referencia confiable — el pedido original de esta bitácora
+> mencionaba que la "Fase B" estaba "frenada" por esa investigación, algo
+> que en su momento no se encontró documentado. Esa investigación sí se
+> hizo después, como parte de este mismo tramo (ver punto 7): la
+> respuesta es que `totalh` **no** es confiable y no se usa para bloquear
+> nada. Se retira de la lista de pendientes.
 
 **b) Sigue sin confirmarse el origen completo de `ORG-COOP-NORTE`.** Se
 confirmó que el nombre viene de un script de pruebas automáticas y,
@@ -238,7 +336,7 @@ evaluar antes de ese paso.
 
 ---
 
-## 7. Para quien quiera el detalle técnico
+## 9. Para quien quiera el detalle técnico
 
 | Tema | Documento técnico | Commit(s) |
 |---|---|---|
@@ -249,8 +347,10 @@ evaluar antes de ese paso.
 | Etiqueta de organización de prueba + guardarail del script E2E (incidente, parte 2: protección futura) | [ADR-008](../adr/ADR-008-etiqueta-organizacion-prueba-y-guardarail-e2e.md) | `488c993` |
 | Fix del mensaje de error vacío en la sincronización de Google Drive | [ADR-009](../adr/ADR-009-fix-mensaje-error-sync-drive.md) | `7eb744e`, `ce4053f` |
 | Regla de reinicio periódico del servidor de desarrollo (`CLAUDE.md`) | — (sin ADR, cambio de documentación de proceso) | `affdc2a` |
+| Vínculo real entre Uso de Suelo y su Monitoreo padre (reemplaza el heurístico de Fase A para este propósito) | [ADR-010](../adr/ADR-010-vinculo-real-uso-suelo-monitoreo.md) | `1ec2c2d` |
+| Validación de cobertura completa, investigación de `totalh`, y el bug crítico del bloqueo circular (encontrado y corregido) | [ADR-011](../adr/ADR-011-cobertura-completa-uso-suelo.md) | `5c6d4f9`, `2ac75d6` |
 
 **Commits del tramo completo, en orden:** `0d003e8` → `111727b` →
 `a62fce6` → `c56f18f` → `4a910a4` → `b212424` → `a6e817c` → `2391859` →
 `488c993` → `7eb744e` → `ce4053f` → `affdc2a` → `cba6474` → `d2bcebd` →
-`f099a75`.
+`f099a75` → `1ec2c2d` → `5c6d4f9` → `2ac75d6`.
