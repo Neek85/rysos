@@ -25,6 +25,7 @@ const MIGRATION_PATH = 'supabase/migrations/20260823_200000_fn_validar_codigo_pa
 const ROUTE_PATH = 'app/api/qc/validar-codigo-parcela/route.js'
 const DETAIL_EDITOR_PATH = 'app/dashboard/qc/components/QcDetailEditor.jsx'
 const ETL_PATH = 'scripts/etl_drive_to_supabase.py'
+const QC_ACTIONS_PATH = 'lib/eudrQcActions.js'
 
 // ---------------------------------------------------------------
 // lib/qcCodigoParcelaUnico.js — lógica pura
@@ -214,4 +215,50 @@ test('el ADR-014 documenta que 2 de los 3 casos conocidos ya fueron aprobados/re
 test('el ADR-014 documenta que la ingesta NUNCA se bloquea, solo la decisión de QC', () => {
   const source = read('docs/adr/ADR-014-codigo-parcela-unico-por-ubicacion.md')
   assert.match(source, /no\s+bloquear?\s+la\s+ingesta/i)
+})
+
+// ---------------------------------------------------------------
+// lib/eudrQcActions.js — guard server-side (cierre del gap documentado en
+// ADR-014: el bloqueo no debe depender únicamente del botón deshabilitado
+// en el frontend — ver también tests/test_eudr_qc_actions.mjs para la
+// cobertura de comportamiento con mocks).
+// ---------------------------------------------------------------
+
+test('approveRecord y rejectRecord invocan el guard de conflicto de parcela antes de resolveUpdateTarget/el UPDATE', () => {
+  const source = read(QC_ACTIONS_PATH)
+  const approveFn = source.match(/export async function approveRecord\([\s\S]*?\n}/)
+  const rejectFn = source.match(/export async function rejectRecord\([\s\S]*?\n}/)
+  assert.ok(approveFn && rejectFn, 'approveRecord/rejectRecord deberían existir')
+  assert.match(approveFn[0], /await assertSinConflictoDeParcela\(supabase, record\)/)
+  assert.match(rejectFn[0], /await assertSinConflictoDeParcela\(supabase, record\)/)
+  // El guard debe llamarse ANTES del UPDATE real (resolveUpdateTarget/.update(...)),
+  // nunca después de que el dato ya se escribió.
+  const guardIdxApprove = approveFn[0].indexOf('assertSinConflictoDeParcela')
+  const updateIdxApprove = approveFn[0].indexOf('.update(')
+  assert.ok(guardIdxApprove < updateIdxApprove, 'el guard debe correr antes del UPDATE en approveRecord')
+  const guardIdxReject = rejectFn[0].indexOf('assertSinConflictoDeParcela')
+  const updateIdxReject = rejectFn[0].indexOf('.update(')
+  assert.ok(guardIdxReject < updateIdxReject, 'el guard debe correr antes del UPDATE en rejectRecord')
+})
+
+test('el guard solo aplica a EUDR_MONITOREO y usa fn_validar_codigo_parcela_unico + buildConflictoParcelaMensaje (mismo mensaje que el frontend)', () => {
+  const source = read(QC_ACTIONS_PATH)
+  const guardFn = source.match(/async function assertSinConflictoDeParcela\([\s\S]*?\n}/)
+  assert.ok(guardFn, 'assertSinConflictoDeParcela debería existir')
+  assert.match(guardFn[0], /if \(record\.tabla_origen !== 'EUDR_MONITOREO'\) return/)
+  assert.match(guardFn[0], /supabase\.rpc\('fn_validar_codigo_parcela_unico', \{\s*p_monitoreo_id: record\.id_monitoreo,?\s*\}\)/)
+  assert.match(guardFn[0], /if \(error\) throw error/, 'un fallo de la RPC misma debe abortar -- nunca fallar abierto')
+  assert.match(guardFn[0], /throw new EUDRQcError\(buildConflictoParcelaMensaje\(data\)\)/)
+})
+
+test('eudrQcActions.js importa buildConflictoParcelaMensaje desde lib/qcCodigoParcelaUnico (una sola fuente del mensaje, frontend y backend)', () => {
+  const source = read(QC_ACTIONS_PATH)
+  assert.match(source, /import \{ buildConflictoParcelaMensaje \} from '\.\/qcCodigoParcelaUnico\.js'/)
+})
+
+test('el ADR-014 documenta el gap del guard server-side como cerrado, con evidencia de la verificación directa a la Server Action', () => {
+  const source = read('docs/adr/ADR-014-codigo-parcela-unico-por-ubicacion.md')
+  assert.match(source, /Gap cerrado/i)
+  assert.match(source, /assertSinConflictoDeParcela/)
+  assert.match(source, /sin pasar por la UI/i)
 })

@@ -21,11 +21,22 @@ import {
  * Mock encadenable que soporta tanto lectura (`.select().eq()`, resuelve
  * como thenable) como escritura (`.update().match().select()`, también
  * thenable) sobre una tabla en memoria — suficiente para las 3 formas de
- * consulta reales que usa este módulo.
+ * consulta reales que usa este módulo. `.rpc()` (ADR-014: guard server-side
+ * de conflicto de código de parcela) devuelve `{ tiene_conflicto: false }`
+ * por defecto — sin conflicto — para no alterar el comportamiento de los
+ * tests de approveRecord/rejectRecord ya existentes que no configuran
+ * `rpcResponses` explícitamente; `rpcResponses[fnName]` (objeto fijo o
+ * función `(params) => ({data, error})`) lo sobreescribe por test.
  */
-function makeFakeSupabase(tableData) {
+function makeFakeSupabase(tableData, { rpcResponses = {} } = {}) {
   const store = Object.fromEntries(Object.entries(tableData).map(([k, v]) => [k, v.slice()]))
   return {
+    rpc(fnName, params) {
+      const responder = rpcResponses[fnName]
+      if (typeof responder === 'function') return Promise.resolve(responder(params))
+      if (responder) return Promise.resolve(responder)
+      return Promise.resolve({ data: { tiene_conflicto: false }, error: null })
+    },
     from(table) {
       let rows = (store[table] || []).slice()
       let pendingUpdate = null
@@ -281,6 +292,127 @@ test('rejectRecord lanza EUDRQcError si 0 filas fueron afectadas', async () => {
     EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: 'RECHAZADO' }],
   })
   await assert.rejects(() => rejectRecord(supabase, baseRecord(), 'motivo', 'COOP-JS'), EUDRQcError)
+})
+
+// ---------------------------------------------------------------
+// Guard server-side de conflicto de código de parcela (ADR-014, cierre del
+// gap: QcDetailEditor.jsx ya deshabilitaba el botón, pero un llamado
+// directo a la Server Action sin pasar por la UI no estaba protegido).
+// ---------------------------------------------------------------
+
+test('approveRecord aborta SIN escribir nada si fn_validar_codigo_parcela_unico reporta conflicto', async () => {
+  const supabase = makeFakeSupabase(
+    { EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }] },
+    {
+      rpcResponses: {
+        fn_validar_codigo_parcela_unico: {
+          data: {
+            tiene_conflicto: true,
+            ID_Parcela_Fija: 'COOP-JS-001',
+            registros_en_conflicto: [{ id_monitoreo: 'otro-uuid', distancia_m: 1213.49, estado_revision: 'APROBADO' }],
+          },
+          error: null,
+        },
+      },
+    }
+  )
+  await assert.rejects(
+    () => approveRecord(supabase, baseRecord(), 'COOP-JS'),
+    (err) => err instanceof EUDRQcError && err.message.includes('COOP-JS-001') && err.message.includes('1213.49m')
+  )
+})
+
+test('approveRecord NO escribe estado_revision cuando hay conflicto (verificado leyendo la tabla en memoria)', async () => {
+  const monitoreoRows = [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }]
+  const supabase = makeFakeSupabase(
+    { EUDR_MONITOREO: monitoreoRows },
+    { rpcResponses: { fn_validar_codigo_parcela_unico: { data: { tiene_conflicto: true, registros_en_conflicto: [] }, error: null } } }
+  )
+  await assert.rejects(() => approveRecord(supabase, baseRecord(), 'COOP-JS'), EUDRQcError)
+  const { data: rows } = await supabase.from('EUDR_MONITOREO').select().eq('id_monitoreo', 'uuid-1')
+  assert.equal(rows[0].estado_revision, PENDING_STATE, 'el registro no debe haberse tocado')
+})
+
+test('rejectRecord también aborta si hay conflicto de código de parcela', async () => {
+  const supabase = makeFakeSupabase(
+    { EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE, observaciones: '' }] },
+    {
+      rpcResponses: {
+        fn_validar_codigo_parcela_unico: {
+          data: {
+            tiene_conflicto: true,
+            ID_Parcela_Fija: 'COOP-JS-003',
+            registros_en_conflicto: [{ id_monitoreo: 'otro-uuid', distancia_m: 768.53, estado_revision: 'RECHAZADO' }],
+          },
+          error: null,
+        },
+      },
+    }
+  )
+  await assert.rejects(
+    () => rejectRecord(supabase, baseRecord(), 'motivo real', 'COOP-JS'),
+    (err) => err instanceof EUDRQcError && err.message.includes('COOP-JS-003')
+  )
+})
+
+test('approveRecord/rejectRecord proceden normalmente cuando la RPC reporta tiene_conflicto=false', async () => {
+  const supabase = makeFakeSupabase(
+    { EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE, observaciones: '' }] },
+    { rpcResponses: { fn_validar_codigo_parcela_unico: { data: { tiene_conflicto: false }, error: null } } }
+  )
+  await approveRecord(supabase, baseRecord(), 'COOP-JS') // no debe lanzar
+})
+
+test('el guard nunca se invoca para EUDR_USO_SUELO/EUDR_INSTALACIONES (esas tablas no tienen ID_Parcela_Fija propio)', async () => {
+  let rpcCalled = false
+  const supabase = makeFakeSupabase(
+    { EUDR_USO_SUELO: [{ id: 13, ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }] },
+    {
+      rpcResponses: {
+        fn_validar_codigo_parcela_unico: () => {
+          rpcCalled = true
+          return { data: { tiene_conflicto: false }, error: null }
+        },
+      },
+    }
+  )
+  const record = baseRecord({ tabla_origen: 'EUDR_USO_SUELO', id_origen: 13 })
+  await approveRecord(supabase, record, 'COOP-JS')
+  assert.equal(rpcCalled, false, 'fn_validar_codigo_parcela_unico no debe llamarse para EUDR_USO_SUELO')
+})
+
+test('si la RPC misma falla (error de red/función inexistente), la operación se aborta — nunca falla abierto', async () => {
+  const supabase = makeFakeSupabase(
+    { EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }] },
+    { rpcResponses: { fn_validar_codigo_parcela_unico: { data: null, error: new Error('fallo simulado de red') } } }
+  )
+  await assert.rejects(() => approveRecord(supabase, baseRecord(), 'COOP-JS'), /fallo simulado de red/)
+})
+
+test('el guard corre ANTES de la validación multi-tenant del guard PENDIENTE (verificación en vivo, paso 3): mismo mensaje que buildConflictoParcelaMensaje usado por QcDetailEditor.jsx', async () => {
+  const supabase = makeFakeSupabase(
+    { EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }] },
+    {
+      rpcResponses: {
+        fn_validar_codigo_parcela_unico: {
+          data: {
+            tiene_conflicto: true,
+            ID_Parcela_Fija: 'COOP-JS-004',
+            registros_en_conflicto: [{ id_monitoreo: 'otro-uuid', distancia_m: 3532.75, estado_revision: 'APROBADO' }],
+          },
+          error: null,
+        },
+      },
+    }
+  )
+  try {
+    await approveRecord(supabase, baseRecord(), 'COOP-JS')
+    assert.fail('debería haber lanzado')
+  } catch (err) {
+    assert.match(err.message, /No se puede aplicar la decisión/)
+    assert.match(err.message, /COOP-JS-004/)
+    assert.match(err.message, /3532\.75m/)
+  }
 })
 
 // ---------------------------------------------------------------

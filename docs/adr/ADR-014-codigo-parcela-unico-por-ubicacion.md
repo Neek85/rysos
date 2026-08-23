@@ -7,9 +7,11 @@
   solo informativo), `lib/qcCodigoParcelaUnico.js` (nuevo),
   `app/api/qc/validar-codigo-parcela/route.js` (nuevo),
   `app/dashboard/qc/components/QcDetailEditor.jsx` (bloqueo real de
-  Aprobar/Rechazar)
-- **Tests:** `tests/test_qc_codigo_parcela_unico.mjs` (nuevo, 22 tests),
-  `tests/test_etl_drive.py::TestParcelaCodeConflictWarning` (5 tests nuevos)
+  Aprobar/Rechazar), `lib/eudrQcActions.js` (`assertSinConflictoDeParcela`
+  — guard server-side, cierre del gap, ver sección dedicada más abajo)
+- **Tests:** `tests/test_qc_codigo_parcela_unico.mjs` (26 tests),
+  `tests/test_etl_drive.py::TestParcelaCodeConflictWarning` (5 tests),
+  `tests/test_eudr_qc_actions.mjs` (7 tests nuevos del guard server-side)
 
 ## Regla de negocio (confirmada por el usuario, no una inferencia de datos)
 
@@ -153,6 +155,61 @@ Los 3 coinciden exactamente con la salida de la RPC — la distancia mostrada
 en la UI es la distancia real calculada por Postgres, no un valor
 recalculado ni hardcodeado del lado del cliente.
 
+## Gap cerrado: guard server-side dentro de approveRecord/rejectRecord
+
+**Estado: cerrado.** La versión original de este ADR documentaba, a
+propósito, que el bloqueo solo vivía en el frontend (`QcDetailEditor.jsx`
+deshabilitando los botones) — un llamado directo a la Server Action
+(`approveQcRecord`/`rejectQcRecord`, sin pasar por la UI) no estaba
+protegido. Se cerró agregando el mismo chequeo del lado del servidor:
+
+`lib/eudrQcActions.js::assertSinConflictoDeParcela(supabase, record)` —
+llamada al principio de `approveRecord`/`rejectRecord` (después de
+`assertSameOrganization`, antes de `resolveUpdateTarget`/el `UPDATE` real),
+solo para `record.tabla_origen === 'EUDR_MONITOREO'`. Invoca la MISMA RPC
+que ya usa el frontend (`fn_validar_codigo_parcela_unico`) y arma el mensaje
+de error con la MISMA función (`buildConflictoParcelaMensaje`,
+`lib/qcCodigoParcelaUnico.js`) — un solo lugar donde vive el texto del
+mensaje, nunca dos copias que puedan divergir con el tiempo. A diferencia de
+`warn_parcela_code_conflicts` (ETL) y `audit_logs` (ADR-013), que son
+best-effort a propósito (una traza secundaria, no la operación principal),
+acá un fallo de la RPC misma **también aborta** (`if (error) throw error`,
+sin capturar) — esto es la aplicación real de la regla de negocio, no una
+traza; fallar abierto ante un error de red/función inexistente dejaría
+pasar exactamente el conflicto que se supone que bloquea.
+
+### Verificación en vivo (paso 3): llamado directo a la Server Action, sin pasar por la UI
+
+Se invocó la Server Action real (no un mock, no el botón de la UI) contra 2
+de los 3 registros en conflicto conocidos, replicando exactamente lo que
+hace `lib/actions/qcActions.js::approveQcRecord`/`rejectQcRecord` (mismo
+`getSupabaseServerClient()` real, mismas `approveRecord`/`rejectRecord`
+reales — invocado desde un script Node standalone en vez de a través del
+bundler de Next.js, porque el resolutor ESM nativo de Node no entiende los
+alias `@/lib/...` de `jsconfig.json` fuera de Next; el código ejecutado es
+idéntico):
+
+```
+=== COOP-JS-001 (2947810c) via approveQcRecord directo ===
+RECHAZADO como se esperaba:
+   No se puede aplicar la decisión sobre este registro: el código de parcela "COOP-JS-001"
+   también aparece en otra ubicación físicamente distinta — b2f305a0-f549-5d08-9ab1-c00596df9987
+   (1213.49m, APROBADO). Un código de parcela debe corresponder siempre a un único lugar.
+   Resolvé el conflicto manualmente antes de decidir.
+
+=== COOP-JS-003 (6b1c9ec5) via rejectQcRecord directo ===
+RECHAZADO como se esperaba:
+   No se puede aplicar la decisión sobre este registro: el código de parcela "COOP-JS-003"
+   también aparece en otra ubicación físicamente distinta — 10425cbd-3d3e-51c3-b529-3a05c5610282
+   (768.53m, RECHAZADO). Un código de parcela debe corresponder siempre a un único lugar.
+   Resolvé el conflicto manualmente antes de decidir.
+```
+
+Confirmado además, vía REST, que **ninguno de los dos registros se tocó**:
+ambos siguen `estado_revision = 'PENDIENTE'`, y el intento de rechazo no
+dejó ningún rastro en `observaciones` (seguía `''`, vacío) — el guard corre
+y aborta antes de que el `UPDATE` real se ejecute, no después.
+
 ## Fuera de alcance de esta tarea (a propósito)
 
 - **Flujo de resolución humana del conflicto** (renombrar un código, marcar
@@ -166,11 +223,9 @@ recalculado ni hardcodeado del lado del cliente.
 - **Recalibrar el umbral de 100m con datos reales** — ver la limitación
   honesta arriba; queda pendiente hasta que aparezca un caso real que lo
   contradiga en cualquier dirección.
-- **Aplicar la protección también dentro de `approveRecord`/`rejectRecord`**
-  (defensa en profundidad server-side, más allá de deshabilitar el botón en
-  la UI) — el prompt de esta tarea especificó el bloqueo únicamente a nivel
-  de frontend (`QcDetailEditor.jsx`); un llamado directo al Server Action
-  (`approveQcRecord`/`rejectQcRecord`), sin pasar por la UI, no está
-  protegido hoy. Mismo nivel de exposición que el resto de la Consola QC
-  (no hay Auth real en el frontend, la Service Role Key ya bypassa RLS) —
-  documentado como gap conocido, no una omisión accidental.
+- **`updateRecordAttributes`/`updateRecordGeometry` siguen sin el guard** —
+  el prompt de la tarea de cierre pedía específicamente `approveRecord`/
+  `rejectRecord` (las únicas que escriben `estado_revision`); esas otras dos
+  acciones editan atributos/geometría de un registro que sigue `PENDIENTE`,
+  no toman la decisión final, así que quedan fuera del mismo criterio de
+  alcance ya usado para el bloqueo del frontend.
