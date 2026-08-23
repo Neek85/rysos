@@ -28,6 +28,9 @@ def make_mock_supabase() -> MagicMock:
     select_mock = mock_supabase.table.return_value.select.return_value
     select_mock.eq.return_value.execute.return_value.data = []
     select_mock.eq.return_value.eq.return_value.execute.return_value.data = []
+    # ADR-014: simula "sin otros registros con ese codigo de parcela" para
+    # warn_parcela_code_conflicts.
+    select_mock.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = []
     return mock_supabase
 
 

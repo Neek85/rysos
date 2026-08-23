@@ -11,11 +11,12 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from shapely.geometry import mapping
+from shapely.geometry import mapping, shape
 import fiona
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from pyproj import Geod
 from supabase import create_client, Client
 
 EVIDENCIA_BUCKET = "evidencias_eudr"
@@ -28,6 +29,16 @@ INVALID_DATE_TOKENS = {"", "none", "nan", "nat", "null"}
 MONITOREO_TABLE = "EUDR_MONITOREO"
 USO_SUELO_TABLE = "EUDR_USO_SUELO"
 INSTALACIONES_TABLE = "EUDR_INSTALACIONES"
+
+# ADR-014: un ID_Parcela_Fija debe corresponder SIEMPRE a un unico lugar
+# fisico dentro de una organizacion (regla de negocio confirmada, no una
+# inferencia de datos). 100m es PROVISORIO -- documentado en ADR-014 como no
+# calibrado con un ejemplo real de "mismo lugar, ruido GPS normal" (los 3
+# casos reales disponibles al momento de elegir este numero son todos
+# "claramente otro lugar", el mas cercano a 768m). Mismo umbral usado por
+# fn_validar_codigo_parcela_unico (supabase/migrations/20260823_200000_...).
+PARCELA_CONFLICT_THRESHOLD_M = 100
+_GEOD = Geod(ellps="WGS84")
 MONITOREO_LAYER_PREFIX = "EUDR_MONITOREO"
 USO_SUELO_LAYER_PREFIX = "EUDR_USO_SUELO"
 INSTALACIONES_LAYER_PREFIX = "EUDR_INSTALACIONES"
@@ -457,6 +468,49 @@ class DriveZipETLPipeline:
             shutil.move(str(zip_path), str(dest_path))
         return dest_path
 
+    def warn_parcela_code_conflicts(
+        self, table_client, org_id: str, id_parcela_fija, id_monitoreo, geom_geojson
+    ) -> None:
+        """ADR-014: verificacion SOLO informativa -- nunca bloquea la ingesta.
+        Si ID_Parcela_Fija ya existe en la organizacion bajo otro id_monitoreo
+        y la distancia geodesica real entre centroides supera
+        PARCELA_CONFLICT_THRESHOLD_M, imprime una advertencia a stdout. El
+        bloqueo real de la DECISION de QC (Aprobar/Rechazar) vive en
+        fn_validar_codigo_parcela_unico del lado de la Consola QC, no aca --
+        esto es visibilidad para quien opera el ETL, nada mas. Envuelto en
+        try/except: un fallo aca (ej. geometria invalida) nunca debe impedir
+        la ingesta real, mismo criterio best-effort ya aceptado en esta
+        sesion para audit_logs (ver ADR-013).
+        """
+        if not id_parcela_fija or not geom_geojson:
+            return
+        try:
+            new_centroid = shape(geom_geojson).centroid
+            result = (
+                table_client.select("id_monitoreo,geom_inspeccion,estado_revision")
+                .eq("ID_Organizacion", org_id)
+                .eq("ID_Parcela_Fija", id_parcela_fija)
+                .neq("id_monitoreo", id_monitoreo)
+                .execute()
+            )
+            for other in result.data or []:
+                other_geom = other.get("geom_inspeccion")
+                if not other_geom:
+                    continue
+                other_centroid = shape(other_geom).centroid
+                _, _, dist_m = _GEOD.inv(
+                    new_centroid.x, new_centroid.y, other_centroid.x, other_centroid.y
+                )
+                if dist_m > PARCELA_CONFLICT_THRESHOLD_M:
+                    print(
+                        f"  [ADVERTENCIA] Codigo de parcela '{id_parcela_fija}' ({org_id}) en mas "
+                        f"de una ubicacion: {id_monitoreo} esta a {dist_m:.1f}m de "
+                        f"{other.get('id_monitoreo')} (estado={other.get('estado_revision')}) -- "
+                        f"solo informativo, no bloquea la ingesta."
+                    )
+        except Exception as exc:
+            print(f"  [AVISO] No se pudo verificar unicidad de codigo de parcela para {id_monitoreo}: {exc}")
+
     def process_layer_rows(
         self, gdf: gpd.GeoDataFrame, table_name: str, org_id: str, photo_map: dict[str, Path]
     ) -> tuple[list[str], list[str], list[dict]]:
@@ -488,6 +542,16 @@ class DriveZipETLPipeline:
             )
             table_client = self.supabase.table(table_name)
             existing_estado = self.fetch_existing_estado_revision(table_client, probe_payload, on_conflict)
+
+            if table_name == MONITOREO_TABLE:
+                self.warn_parcela_code_conflicts(
+                    table_client,
+                    org_id,
+                    probe_payload.get("ID_Parcela_Fija"),
+                    probe_payload.get("id_monitoreo"),
+                    probe_payload.get("geom_inspeccion"),
+                )
+
             if existing_estado is not None and existing_estado != "PENDIENTE":
                 print(
                     f"  [PROTEGIDO] {table_name} {identifier}: estado_revision="

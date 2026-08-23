@@ -181,22 +181,25 @@ test('la cobertura se busca automáticamente (no detrás de un botón manual) al
 // el propio registro en revisión nunca cuenta en su propia suma hasta
 // DESPUÉS de aprobarse, así que el último registro necesario para
 // completar una parcela nunca podía pasar su propio candado.
-test('el botón Aprobar YA NO se deshabilita por cobertura — solo por busy, igual que cualquier otro registro', () => {
+// A partir de ADR-014, Aprobar/Rechazar SÍ vuelven a poder deshabilitarse —
+// pero por conflicto de código de parcela (regla de negocio absoluta, sin
+// la circularidad que tenía cobertura), nunca por coberturaResult.
+test('el botón Aprobar YA NO se deshabilita por cobertura (sigue sin depender de coberturaResult, ver ADR-014 para el bloqueo real por código de parcela)', () => {
   const source = read(DETAIL_EDITOR_PATH)
   const approveButton = source.match(/onClick=\{onApprove\}[\s\S]*?<\/button>/)
   assert.ok(approveButton, 'el botón Aprobar debería existir')
-  assert.match(approveButton[0], /disabled=\{busy\}/)
+  assert.match(approveButton[0], /disabled=\{busy \|\| conflictoParcela\?\.tiene_conflicto\}/)
   assert.ok(
     !/coberturaResult/.test(approveButton[0]),
     'Aprobar no debe depender de coberturaResult en absoluto — el círculo imposible de ADR-011 ya no debe existir'
   )
 })
 
-test('el botón Rechazar NUNCA se deshabilita por cobertura (solo por busy/motivo vacío)', () => {
+test('el botón Rechazar NUNCA se deshabilita por cobertura (solo por busy/motivo vacío/conflicto de código de parcela, ver ADR-014)', () => {
   const source = read(DETAIL_EDITOR_PATH)
   const rejectButton = source.match(/onClick=\{onReject\}[\s\S]*?<\/button>/)
   assert.ok(rejectButton, 'el botón Rechazar debería existir')
-  assert.match(rejectButton[0], /disabled=\{busy \|\| !motivo\.trim\(\)\}/)
+  assert.match(rejectButton[0], /disabled=\{busy \|\| !motivo\.trim\(\) \|\| conflictoParcela\?\.tiene_conflicto\}/)
   assert.ok(!/coberturaResult/.test(rejectButton[0]), 'Rechazar no debe depender de coberturaResult en absoluto')
 })
 

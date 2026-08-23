@@ -2,11 +2,12 @@ import io
 import json
 import unittest
 import zipfile
+from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from shapely.geometry import Point
+from shapely.geometry import Point, mapping
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -56,6 +57,10 @@ def build_pipeline(drive_root: Path):
         select_mock = mock_supabase.table.return_value.select.return_value
         select_mock.eq.return_value.execute.return_value.data = []
         select_mock.eq.return_value.eq.return_value.execute.return_value.data = []
+        # ADR-014: warn_parcela_code_conflicts consulta
+        # .select().eq(ID_Organizacion).eq(ID_Parcela_Fija).neq(id_monitoreo).execute()
+        # — por defecto simula "sin otros registros con ese codigo" (data=[]).
+        select_mock.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = []
         pipeline = DriveZipETLPipeline("https://fake.supabase.co", "fake-key", str(drive_root))
     return pipeline, mock_supabase
 
@@ -1118,6 +1123,118 @@ class TestUpsertIdempotency(unittest.TestCase):
         self.assertEqual(ids_run1, ids_run2)
         for call in mock_supabase.table.return_value.upsert.call_args_list:
             self.assertEqual(call.kwargs["on_conflict"], "id_monitoreo")
+
+
+class TestParcelaCodeConflictWarning(unittest.TestCase):
+    """ADR-014: un ID_Parcela_Fija debe corresponder a un unico lugar fisico.
+    warn_parcela_code_conflicts es SOLO informativa (nunca bloquea la ingesta) —
+    el bloqueo real de la decision de QC vive en fn_validar_codigo_parcela_unico,
+    del lado de la Consola QC, no en el ETL."""
+
+    def _pipeline(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, mock_supabase = build_pipeline(Path(tmp))
+        return pipeline, mock_supabase
+
+    def _stub_other_records(self, mock_supabase, others: list[dict]):
+        select_mock = mock_supabase.table.return_value.select.return_value
+        select_mock.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = others
+
+    def _monitoreo_gdf(self, lon=-77.0, lat=-12.0):
+        return gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["PARC-001"],
+                "ID_Socio": ["SOC-001"],
+                "fecha_monitoreo": ["2026-08-16"],
+            },
+            geometry=[Point(lon, lat)],
+            crs="EPSG:4326",
+        )
+
+    def test_no_warning_when_no_other_records_share_the_code(self):
+        pipeline, mock_supabase = self._pipeline()
+        self._stub_other_records(mock_supabase, [])
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline.process_layer_rows(self._monitoreo_gdf(), "EUDR_MONITOREO", "ORG-001", {})
+
+        self.assertNotIn("ADVERTENCIA", buf.getvalue())
+        mock_supabase.table.return_value.upsert.assert_called_once()
+
+    def test_warns_when_another_record_with_same_code_is_far_away(self):
+        pipeline, mock_supabase = self._pipeline()
+        # ~0.02 grados de longitud en el ecuador ~= 2.2km — muy por encima
+        # del umbral de 100m.
+        other_geom = mapping(Point(-77.02, -12.0))
+        self._stub_other_records(
+            mock_supabase,
+            [{"id_monitoreo": "otro-uuid", "geom_inspeccion": other_geom, "estado_revision": "APROBADO"}],
+        )
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline.process_layer_rows(self._monitoreo_gdf(), "EUDR_MONITOREO", "ORG-001", {})
+
+        output = buf.getvalue()
+        self.assertIn("ADVERTENCIA", output)
+        self.assertIn("PARC-001", output)
+        self.assertIn("otro-uuid", output)
+        self.assertIn("APROBADO", output)
+        # Solo informativo: la ingesta sigue normalmente, no se omite el upsert.
+        mock_supabase.table.return_value.upsert.assert_called_once()
+
+    def test_no_warning_when_other_record_is_within_threshold(self):
+        pipeline, mock_supabase = self._pipeline()
+        # ~5.5m de diferencia (0.00005 grados) — ruido GPS normal, por
+        # debajo de PARCELA_CONFLICT_THRESHOLD_M (100m).
+        other_geom = mapping(Point(-77.00005, -12.0))
+        self._stub_other_records(
+            mock_supabase,
+            [{"id_monitoreo": "otro-uuid", "geom_inspeccion": other_geom, "estado_revision": "PENDIENTE"}],
+        )
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline.process_layer_rows(self._monitoreo_gdf(), "EUDR_MONITOREO", "ORG-001", {})
+
+        self.assertNotIn("ADVERTENCIA", buf.getvalue())
+        mock_supabase.table.return_value.upsert.assert_called_once()
+
+    def test_never_runs_for_uso_suelo_or_instalaciones(self):
+        pipeline, mock_supabase = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {"id_parcela": ["PARC-001"], "tipo_uso": ["Cafetal"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        # Si esto se llamara para EUDR_USO_SUELO, el .neq() mockeado no
+        # devolvería nada configurado -> MagicMock no iterable -> excepcion.
+        # Que no explote (y que no aparezca ninguna advertencia) confirma
+        # que la funcion nunca se invoca fuera de EUDR_MONITOREO.
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline.process_layer_rows(gdf, "EUDR_USO_SUELO", "ORG-001", {})
+        self.assertNotIn("ADVERTENCIA", buf.getvalue())
+        self.assertNotIn("AVISO", buf.getvalue())
+        mock_supabase.table.return_value.upsert.assert_called_once()
+
+    def test_never_blocks_ingestion_even_if_the_check_itself_raises(self):
+        pipeline, mock_supabase = self._pipeline()
+        select_mock = mock_supabase.table.return_value.select.return_value
+        select_mock.eq.return_value.eq.return_value.neq.return_value.execute.side_effect = RuntimeError(
+            "fallo simulado de red"
+        )
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            # No debe lanzar -- best-effort, mismo criterio que audit_logs (ADR-013).
+            pipeline.process_layer_rows(self._monitoreo_gdf(), "EUDR_MONITOREO", "ORG-001", {})
+
+        self.assertIn("AVISO", buf.getvalue())
+        mock_supabase.table.return_value.upsert.assert_called_once()
 
 
 class TestProtectsAlreadyReviewedRecords(unittest.TestCase):

@@ -5,6 +5,7 @@ import { getSupabaseClient } from '@/lib/supabaseClient'
 import { LAYER_LABELS, EDITABLE_FIELDS } from '@/lib/eudrQcActions'
 import { describeDeforestationBadge } from '@/lib/qcTopologyValidation'
 import { calcularPctCobertura, buildCoberturaAvisoMensaje } from '@/lib/qcCoberturaUsoSuelo'
+import { buildConflictoParcelaMensaje } from '@/lib/qcCodigoParcelaUnico'
 
 // Mismo bucket/TTL que components/gis/MapDashboard.jsx::loadPhoto — el
 // bucket evidencias_eudr es privado, no hay URL pública directa. No existía
@@ -93,6 +94,16 @@ export default function QcDetailEditor({
   const [coberturaResult, setCoberturaResult] = useState(null)
   const [coberturaLoading, setCoberturaLoading] = useState(false)
   const [coberturaError, setCoberturaError] = useState(null)
+  // Código de parcela único por ubicación (ADR-014) — solo aplica a
+  // EUDR_MONITOREO (record.id_origen === record.id_monitoreo para esta
+  // tabla, ver lib/eudrQcActions.js): EUDR_USO_SUELO/EUDR_INSTALACIONES no
+  // tienen ID_Parcela_Fija propio, heredan la parcela de su Monitoreo
+  // padre, así que el conflicto (si existe) ya se refleja al revisar ese
+  // Monitoreo, no acá.
+  const esMonitoreo = record.tabla_origen === 'EUDR_MONITOREO'
+  const [conflictoParcela, setConflictoParcela] = useState(null)
+  const [conflictoLoading, setConflictoLoading] = useState(false)
+  const [conflictoError, setConflictoError] = useState(null)
   // Fuente de verdad para el texto de ayuda de "Ajustar geometría": el
   // tipo real de geometría del registro (record.geom, normalmente ya un
   // objeto GeoJSON — ver el comentario de parseGeometry en
@@ -167,6 +178,37 @@ export default function QcDetailEditor({
       .catch((err) => setCoberturaError(err?.message || 'No se pudo calcular la cobertura de la parcela.'))
       .finally(() => setCoberturaLoading(false))
   }, [esUsoSuelo, record.id_origen])
+
+  // Código de parcela único por ubicación (ver ADR-014): mismo patrón que
+  // el efecto de cobertura arriba — se busca automáticamente al
+  // seleccionar un registro de Monitoreo, no detrás de un botón manual.
+  // A diferencia de cobertura (que pasó a ser puramente informativa tras
+  // el círculo imposible de ADR-011), esto SÍ bloquea Aprobar/Rechazar a
+  // propósito: la regla de negocio ("un código = un único lugar físico")
+  // es absoluta, confirmada por el usuario, no una inferencia de datos —
+  // y a diferencia de cobertura, no hay circularidad posible acá (un
+  // conflicto entre dos registros existentes no depende de que ninguno de
+  // los dos se apruebe primero).
+  useEffect(() => {
+    if (!esMonitoreo) return
+    setConflictoLoading(true)
+    setConflictoError(null)
+    fetch('/api/qc/validar-codigo-parcela', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitoreo_id: record.id_origen }),
+    })
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.error) {
+          setConflictoError(json.error)
+          return
+        }
+        setConflictoParcela(json.result)
+      })
+      .catch((err) => setConflictoError(err?.message || 'No se pudo validar el código de parcela.'))
+      .finally(() => setConflictoLoading(false))
+  }, [esMonitoreo, record.id_origen])
 
   async function handleSaveAttributes() {
     setLocalError(null)
@@ -406,6 +448,23 @@ export default function QcDetailEditor({
         </div>
       )}
 
+      {esMonitoreo && conflictoLoading && (
+        <p className="text-[11px] text-gray-400">Verificando unicidad del código de parcela…</p>
+      )}
+      {esMonitoreo && conflictoError && <p className="text-[11px] text-red-600">{conflictoError}</p>}
+      {/* Bloqueante de verdad (rojo, no ámbar) — a diferencia de los avisos
+          de Fase A/B (Solapado X%, Cobertura parcial), que son puramente
+          informativos, ver ADR-014: la unicidad de código de parcela es
+          una regla de negocio absoluta confirmada por el usuario, no una
+          heurística. Mismo estilo de mensaje que el error ya existente en
+          lib/eudrQcActions.js::resolveUpdateTarget ("No se puede aplicar
+          la decisión..."). */}
+      {esMonitoreo && conflictoParcela?.tiene_conflicto && (
+        <p className="rounded border border-red-200 bg-red-50 p-2 text-xs font-medium text-red-700">
+          ⛔ {buildConflictoParcelaMensaje(conflictoParcela)}
+        </p>
+      )}
+
       {localError && <p className="rounded bg-red-50 p-2 text-xs text-red-600">{localError}</p>}
 
       <textarea
@@ -420,7 +479,7 @@ export default function QcDetailEditor({
         <button
           type="button"
           onClick={onApprove}
-          disabled={busy}
+          disabled={busy || conflictoParcela?.tiene_conflicto}
           className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? 'Procesando…' : '✓ Aprobar'}
@@ -428,7 +487,7 @@ export default function QcDetailEditor({
         <button
           type="button"
           onClick={onReject}
-          disabled={busy || !motivo.trim()}
+          disabled={busy || !motivo.trim() || conflictoParcela?.tiene_conflicto}
           className="flex-1 rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? 'Procesando…' : '✕ Rechazar'}
