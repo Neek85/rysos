@@ -453,6 +453,59 @@ class TestFieldNameFallback(unittest.TestCase):
         self.assertEqual(payload["ID_Socio"], "SOC-010")
         self.assertEqual(payload["observaciones"], "nota original")
 
+    def test_build_monitoreo_payload_preserves_qfield_relation_id_raw_guid(self):
+        """Ver docs/adr/ADR-010-vinculo-real-uso-suelo-monitoreo.md: el
+        GeoPackage trae su propia columna "id_monitoreo" (el GUID interno
+        de QField que EUDR_USO_SUELO/EUDR_INSTALACIONES preservan tal cual
+        en su "id_parcela") -- antes de esta columna, ese valor se
+        descartaba por completo. Debe guardarse SIN transformar (con las
+        llaves incluidas), para que el join contra id_parcela sea exacto.
+        """
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {
+                "id_monitoreo": ["{4166dc2a-4cf0-452b-8eee-d5f68ce05e5c}"],
+                "ID_Parcela_Fija": ["COOP-JS-001"],
+                "fecha_monitoreo": ["2026-08-16"],
+                "tecnico_responsable": ["Ana Gomez"],
+                "precision_gps": [2.1],
+                "evidencia_foto": ["foto_01.jpg"],
+                "cumple_eudr": ["SI"],
+                "observaciones": [""],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        payload = pipeline.build_monitoreo_payload(row, "ORG-001")
+
+        self.assertEqual(payload["qfield_relation_id"], "{4166dc2a-4cf0-452b-8eee-d5f68ce05e5c}")
+        # El id_monitoreo real (usado como PK/upsert target) nunca debe
+        # ser el mismo valor -- se calcula deterministicamente aparte.
+        self.assertNotEqual(payload["id_monitoreo"], payload["qfield_relation_id"])
+
+    def test_build_monitoreo_payload_qfield_relation_id_is_none_when_column_missing(self):
+        pipeline = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["COOP-JS-001"],
+                "fecha_monitoreo": ["2026-08-16"],
+                "tecnico_responsable": ["Ana Gomez"],
+                "precision_gps": [2.1],
+                "evidencia_foto": ["foto_01.jpg"],
+                "cumple_eudr": ["SI"],
+                "observaciones": [""],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        row = gdf.iloc[0]
+
+        payload = pipeline.build_monitoreo_payload(row, "ORG-001")
+
+        self.assertIsNone(payload["qfield_relation_id"])
+
 
 class TestMultiLayerIngestion(unittest.TestCase):
     def _build_multilayer_zip(self, org_dir: Path) -> Path:

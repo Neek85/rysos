@@ -327,6 +327,16 @@ class DriveZipETLPipeline:
             "observaciones": observaciones,
             "geom_inspeccion": geom_json,
             "estado_revision": "PENDIENTE",  # INVARIANTE: nunca omitir
+            # ver docs/adr/ADR-010-vinculo-real-uso-suelo-monitoreo.md: el
+            # GeoPackage trae su propio "id_monitoreo" -- el GUID interno
+            # que QField usa para relacionar este perimetro con sus
+            # subdivisiones de Uso de Suelo/Instalaciones (que lo guardan
+            # tal cual en su columna "id_parcela"). id_monitoreo (arriba)
+            # es un identificador DISTINTO, calculado por este ETL para el
+            # upsert idempotente -- nunca el mismo valor. Antes de esta
+            # columna, el GUID original se descartaba sin guardarse en
+            # ningun lado.
+            "qfield_relation_id": row.get("id_monitoreo"),
             # INVARIANTE: EUDR_MONITOREO NO tiene columna fid (PGRST204 si se envia).
             # fid solo se usa arriba, internamente, como respaldo para derivar
             # id_monitoreo cuando no hay parcela resuelta — nunca como campo del payload.
