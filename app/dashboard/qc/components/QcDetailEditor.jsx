@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import { LAYER_LABELS, EDITABLE_FIELDS } from '@/lib/eudrQcActions'
 import { describeDeforestationBadge } from '@/lib/qcTopologyValidation'
+import { calcularPctCobertura, buildBloqueoMensaje } from '@/lib/qcCoberturaUsoSuelo'
 
 // Mismo bucket/TTL que components/gis/MapDashboard.jsx::loadPhoto — el
 // bucket evidencias_eudr es privado, no hay URL pública directa. No existía
@@ -85,6 +86,13 @@ export default function QcDetailEditor({
   const [localError, setLocalError] = useState(null)
   const [photoUrl, setPhotoUrl] = useState(null)
   const canValidateTopology = record.tabla_origen !== 'EUDR_INSTALACIONES'
+  // Cobertura de la parcela (Fase B, ver ADR-011) — solo aplica a
+  // subdivisiones de Uso de Suelo (es la tabla cuya suma se compara
+  // contra el perímetro de Monitoreo).
+  const esUsoSuelo = record.tabla_origen === 'EUDR_USO_SUELO'
+  const [coberturaResult, setCoberturaResult] = useState(null)
+  const [coberturaLoading, setCoberturaLoading] = useState(false)
+  const [coberturaError, setCoberturaError] = useState(null)
   // Fuente de verdad para el texto de ayuda de "Ajustar geometría": el
   // tipo real de geometría del registro (record.geom, normalmente ya un
   // objeto GeoJSON — ver el comentario de parseGeometry en
@@ -122,6 +130,42 @@ export default function QcDetailEditor({
         if (!error && data?.signedUrl) setPhotoUrl(data.signedUrl)
       })
   }, [record.evidencia_foto])
+
+  // Cobertura de la parcela (ver ADR-011): se busca automáticamente al
+  // seleccionar un registro de Uso de Suelo (no detrás de un botón manual
+  // como "Validar Topología") — el botón Aprobar necesita saber
+  // bloquea_aprobacion ANTES de que el revisor pueda hacer click, no
+  // depender de que alguien acuerde de revisar la cobertura primero.
+  // `key={record.key}` en el padre ya remonta este componente al cambiar
+  // de selección, así que no hace falta un guard de "cancelled" adicional
+  // (mismo criterio que el efecto de la foto, arriba).
+  useEffect(() => {
+    if (!esUsoSuelo) return
+    setCoberturaLoading(true)
+    setCoberturaError(null)
+    fetch('/api/qc/cobertura-uso-suelo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // record.id_origen (no record.registro_id) es el id real de la fila
+      // — mismo campo que usa resolveUpdateTarget (lib/eudrQcActions.js)
+      // y la llamada existente a /api/qc/validate-spatial (page.jsx). Bug
+      // real encontrado en vivo: probando en el navegador, el panel
+      // mostraba "Registro EUDR_USO_SUELO 1 no encontrado" porque
+      // record.registro_id no es el id real de la fila para este origen
+      // de datos (vw_monitoreo_poligonos/vw_monitoreo_puntos).
+      body: JSON.stringify({ uso_suelo_id: record.id_origen }),
+    })
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.error) {
+          setCoberturaError(json.error)
+          return
+        }
+        setCoberturaResult(json.result)
+      })
+      .catch((err) => setCoberturaError(err?.message || 'No se pudo calcular la cobertura de la parcela.'))
+      .finally(() => setCoberturaLoading(false))
+  }, [esUsoSuelo, record.id_origen])
 
   async function handleSaveAttributes() {
     setLocalError(null)
@@ -303,6 +347,57 @@ export default function QcDetailEditor({
         </div>
       )}
 
+      {esUsoSuelo && (
+        <div className="space-y-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
+          <p className="text-xs font-semibold text-gray-500">Cobertura de la parcela</p>
+
+          {coberturaLoading && <p className="text-[11px] text-gray-400">Calculando cobertura…</p>}
+          {coberturaError && <p className="text-[11px] text-red-600">{coberturaError}</p>}
+
+          {coberturaResult && !coberturaResult.vinculo_disponible && (
+            <p className="rounded bg-gray-100 p-2 text-[11px] text-gray-600">ℹ {coberturaResult.mensaje}</p>
+          )}
+
+          {coberturaResult?.vinculo_disponible && (
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                  Área Monitoreo: {coberturaResult.area_monitoreo_ha?.toFixed?.(2)} ha
+                </span>
+                <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                  Subdivisiones aprobadas: {coberturaResult.suma_uso_suelo_aprobado_ha?.toFixed?.(2)} ha
+                </span>
+                <Badge
+                  ok={!coberturaResult.hueco_cobertura}
+                  okLabel={`Cobertura ${calcularPctCobertura(coberturaResult)}%`}
+                  badLabel={`Cobertura ${calcularPctCobertura(coberturaResult)}%`}
+                />
+              </div>
+
+              {/* El mensaje de bloqueo en sí se muestra una sola vez, junto
+                  a los botones Aprobar/Rechazar (ver abajo) — acá solo el
+                  resumen numérico. Sub-sección deliberadamente de menor énfasis (fondo blanco
+                  liso, texto gris, sin badge de color) — totalh nunca
+                  participa en la decisión de bloqueo, ver ADR-011. */}
+              <div className="rounded border border-gray-100 bg-white p-2">
+                <p className="text-[10px] font-medium text-gray-400">
+                  Dato del Padrón — puede no ser confiable, ver ADR-011
+                </p>
+                {typeof coberturaResult.totalh_padron_ha === 'number' ? (
+                  <p className="text-[11px] text-gray-500">
+                    totalh: {coberturaResult.totalh_padron_ha.toFixed(2)} ha
+                    {typeof coberturaResult.divergencia_totalh_pct === 'number' &&
+                      ` (diverge ${coberturaResult.divergencia_totalh_pct}% del área real de Monitoreo)`}
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-gray-400">Sin dato de totalh en el Padrón.</p>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {localError && <p className="rounded bg-red-50 p-2 text-xs text-red-600">{localError}</p>}
 
       <textarea
@@ -313,11 +408,18 @@ export default function QcDetailEditor({
         rows={2}
       />
 
+      {coberturaResult?.bloquea_aprobacion && (
+        <p className="rounded bg-red-50 p-2 text-[11px] text-red-700">
+          🚫 No se puede aprobar: {buildBloqueoMensaje(coberturaResult)}
+        </p>
+      )}
+
       <div className="flex gap-2">
         <button
           type="button"
           onClick={onApprove}
-          disabled={busy}
+          disabled={busy || coberturaResult?.bloquea_aprobacion}
+          title={coberturaResult?.bloquea_aprobacion ? buildBloqueoMensaje(coberturaResult) : undefined}
           className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? 'Procesando…' : '✓ Aprobar'}
