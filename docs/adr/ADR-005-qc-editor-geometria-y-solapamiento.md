@@ -513,3 +513,94 @@ en 2 antes y 0 después, sin nada residual.
 Commit: `fix(qc): excluye contencion esperada dentro de la misma parcela
 del calculo de solapamiento` + `fix(qc): corrige MIN(uuid) inexistente en
 Postgres`, sin push — pendiente de confirmación explícita.
+
+## Fase A — Seguimiento (2026-08-23) — margen de tolerancia para ruido GPS real
+
+El caso real `id=20` (99.64% de contención, `ST_Contains` estricto
+devolvió `false`) demostró que exigir contención al 100% casi nunca
+calza en la práctica — el ruido GPS típico entre dos capturas de campo
+distintas (perímetro de Monitoreo vs. subdivisión de Uso de Suelo, cada
+una tomada con su propio GPS de mano) hace que un caso de contención
+genuina rara vez sea matemáticamente exacto.
+
+### Decisión: umbral de contención con nombre, ambigüedad sin relajar
+
+Se reemplazó `ST_Contains(geom_inspeccion, v_geom)` (contención exacta,
+0% de margen) por un chequeo de porcentaje de área contenida:
+
+```sql
+v_umbral_contencion_pct constant numeric := 0.98;
+...
+AND ST_Area(ST_Intersection(geom_inspeccion, v_geom)::geography)
+    / NULLIF(ST_Area(v_geom::geography), 0) >= v_umbral_contencion_pct;
+```
+
+`v_umbral_contencion_pct` es una constante con nombre (no un número
+mágico inline), declarada `constant` en el `DECLARE` del bloque
+`plpgsql`, documentada in situ y en la cabecera de la migración —
+ajustable en el futuro si aparecen casos reales por debajo del 98%.
+
+**La condición de ambigüedad NO se relajó junto con el umbral**: sigue
+siendo `count(*) = 1` exacto, ahora evaluado sobre el nuevo criterio de
+"≥98% contenido" en vez de "100% contenido". Si dos perímetros (ej.
+parcelas vecinas que se solapan entre sí) superan igual el 98%, la
+ambigüedad sigue resolviéndose hacia "no excluir nada" — mismo
+comportamiento seguro de siempre, verificado en vivo con un fixture
+específico para este caso (ver abajo).
+
+### Verificación en vivo completa (con el margen de tolerancia aplicado)
+
+**(1) `id=20` — el caso que motivó el cambio:**
+
+| | Antes (Fase A original, 100%) | Después (98%) |
+|---|---|---|
+| `solapa` | `true` | **`false`** |
+| `contenido_en_parcela_propia` | `false` | **`true`** |
+
+**(2) Ambigüedad bajo el NUEVO criterio (fixture desechable):** se
+insertaron 2 perímetros `EUDR_MONITOREO` reales (`APROBADO`,
+`ID_Organizacion=ORG-TEST-E2E`, `ID_Parcela_Fija` `FIXTURE-AMBIG-A`/`-B`,
+dos cuadrados grandes superpuestos entre sí) y una subdivisión
+`EUDR_USO_SUELO` sintética pequeña, ubicada completamente dentro de la
+zona de superposición de ambos (contención 100% para los dos). Resultado
+real:
+
+```json
+{"solapa": true, "contenido_en_parcela_propia": false,
+ "registros_solapados": [
+   {"registro_id": "4f384a07-...", "tabla_origen": "EUDR_MONITOREO", "solapamiento_pct": 100.00},
+   {"registro_id": "372960d3-...", "tabla_origen": "EUDR_MONITOREO", "solapamiento_pct": 100.00}
+ ]}
+```
+
+Con 2 candidatos que superan el umbral, `v_contenedor_exclusivo` queda
+`NULL` y NO se excluye nada — ambos perímetros aparecen en
+`registros_solapados`, la alerta se sigue mostrando. Confirma que la
+condición de ambigüedad sigue aplicando sobre el criterio con margen, tal
+como se pidió. Los 3 registros del fixture (1 `EUDR_USO_SUELO` + 2
+`EUDR_MONITOREO`) se borraron por id/id_monitoreo inmediatamente después
+— conteo verificado en 3 antes y 0 después.
+
+**(3) Regresión — sin cambios respecto a Fase A original:**
+
+| Caso | Resultado |
+|---|---|
+| `id=18` | `solapa:false`, `contenido_en_parcela_propia:true` (sin cambio) |
+| `id=19` | `solapa:false`, `contenido_en_parcela_propia:true` (sin cambio) |
+| Hermanas solapadas (fixture recreado, ids 23/24 — los ids 21/22 originales ya no estaban disponibles por ser `id` autoincremental) | `solapa:true`, `solapamiento_max_pct:25.00`, `contenido_en_parcela_propia:false` en ambos (idéntico al resultado de Fase A original) |
+
+Fixture de hermanas borrado por `id` inmediatamente después — conteo
+verificado en 2 antes y 0 después.
+
+### Bug real encontrado y corregido antes de esta verificación
+
+`MIN(id_monitoreo)` (donde `id_monitoreo` es `uuid`) falló en vivo con
+`{"code":"42883","message":"function min(uuid) does not exist"}` —
+Postgres no tiene agregado `MIN`/`MAX` registrado para `uuid`. Los 3
+casos reales (`id=18/19/20`) fallaron por igual con el mismo error, no
+uno específico. Corregido con `(array_agg(id_monitoreo))[1]` (no depende
+de ningún agregado de orden; `count(*) = 1` ya garantiza que es el único
+elemento del array) — ver commit `d2bcebd`.
+
+Commit: `fix(qc): agrega margen de tolerancia al heuristico de contencion
+para ruido GPS real`, sin push — pendiente de confirmación explícita.

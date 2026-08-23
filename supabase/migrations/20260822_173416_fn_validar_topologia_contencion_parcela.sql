@@ -19,12 +19,17 @@
 -- DECISIÓN (confirmada con el usuario): usar un heurístico ESPACIAL en
 -- vez de un join por ID, con una condición de seguridad estricta —
 -- "misma parcela" = el ÚNICO perímetro de EUDR_MONITOREO APROBADO (misma
--- organización) que CONTIENE POR COMPLETO (ST_Contains) a la subdivisión.
--- Si CERO o MÁS DE UNO de esos perímetros la contienen, NO se excluye
--- nada — el comportamiento vuelve a ser el de antes (se sigue marcando
--- como solapamiento); nunca se asume silenciosamente cuál es "la"
--- parcela correcta ante ambigüedad, el error va siempre hacia "seguir
--- mostrando la alerta", nunca hacia "ocultarla de más".
+-- organización) cuya contención de la subdivisión alcanza el umbral
+-- v_umbral_contencion_pct (ver DECLARE — inicialmente ST_Contains
+-- estricto/100%, ajustado a 98% en "Fase A — Seguimiento" tras confirmar
+-- en vivo que el 100% casi nunca calza por ruido GPS real entre
+-- capturas). Si CERO o MÁS DE UNO de esos perímetros superan el umbral,
+-- NO se excluye nada — el comportamiento vuelve a ser el de antes (se
+-- sigue marcando como solapamiento); nunca se asume silenciosamente cuál
+-- es "la" parcela correcta ante ambigüedad, el error va siempre hacia
+-- "seguir mostrando la alerta", nunca hacia "ocultarla de más" — esta
+-- condición de ambigüedad (count(*) = 1 exacto) no se relajó junto con
+-- el umbral de contención.
 --
 -- ESTO ES UN HEURÍSTICO TEMPORAL, NO UNA RELACIÓN REAL DE DATOS: depende
 -- de que las parcelas vecinas no se solapen físicamente entre sí en la
@@ -67,6 +72,16 @@ DECLARE
     v_solapamientos jsonb;
     v_max_solapamiento_pct numeric := 0;
     v_contenedor_exclusivo uuid;
+    -- Margen de tolerancia del heurístico de contención (ver ADR-005,
+    -- sección "Fase A — Seguimiento"): ST_Contains estricto (0% de
+    -- margen) casi nunca calza en la práctica por el ruido GPS típico
+    -- entre dos capturas de campo distintas (perímetro de Monitoreo vs.
+    -- subdivisión de Uso de Suelo) — confirmado en vivo con un caso real
+    -- (99.64% de contención, ST_Contains devolvió false). 0.98 = 98% del
+    -- área de la subdivisión debe caer dentro del perímetro para
+    -- considerarlo "su propia parcela". Ajustable si en el futuro se
+    -- observan casos reales por debajo de este umbral.
+    v_umbral_contencion_pct constant numeric := 0.98;
 BEGIN
     IF p_tabla_origen NOT IN ('EUDR_MONITOREO', 'EUDR_USO_SUELO') THEN
         RAISE EXCEPTION
@@ -99,11 +114,16 @@ BEGIN
     v_es_simple := ST_IsSimple(v_geom);
     v_area_ha := public.fn_calcular_area_ha(v_geom);
 
-    -- Heurístico de contención exclusiva (ver comentario de cabecera):
-    -- solo para EUDR_USO_SUELO, identifica el ÚNICO perímetro de
-    -- Monitoreo APROBADO que contiene por completo esta subdivisión. Si
-    -- hay 0 o >1 candidatos, v_contenedor_exclusivo queda NULL y no se
-    -- excluye nada (lado seguro: sigue marcando como antes).
+    -- Heurístico de contención exclusiva CON MARGEN DE TOLERANCIA (ver
+    -- comentario de cabecera y ADR-005 "Fase A — Seguimiento"): solo para
+    -- EUDR_USO_SUELO, identifica el ÚNICO perímetro de Monitoreo APROBADO
+    -- cuya intersección cubre al menos v_umbral_contencion_pct del área
+    -- de esta subdivisión (en vez de exigir ST_Contains estricto = 100%).
+    -- La condición de ambigüedad NO se relaja: sigue siendo count(*) = 1
+    -- exacto — si DOS perímetros (ej. parcelas vecinas que se solapan
+    -- entre sí) superan igual el umbral, v_contenedor_exclusivo queda
+    -- NULL y no se excluye nada, mismo comportamiento seguro de antes,
+    -- ahora aplicado al criterio con margen.
     v_contenedor_exclusivo := NULL;
     IF p_tabla_origen = 'EUDR_USO_SUELO' THEN
         -- MIN(uuid) no existe en Postgres (uuid no tiene orden por defecto)
@@ -115,7 +135,8 @@ BEGIN
         WHERE "ID_Organizacion" = v_org
           AND estado_revision = 'APROBADO'
           AND ST_Dimension(geom_inspeccion) = 2
-          AND ST_Contains(geom_inspeccion, v_geom);
+          AND ST_Area(ST_Intersection(geom_inspeccion, v_geom)::geography)
+              / NULLIF(ST_Area(v_geom::geography), 0) >= v_umbral_contencion_pct;
     END IF;
 
     -- Solapamiento contra otros polígonos APROBADOS de la MISMA

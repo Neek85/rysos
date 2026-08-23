@@ -121,11 +121,49 @@ test('fn_validar_topologia_eudr (migración instalada) ya filtra por ID_Organiza
 
 const CONTENCION_MIGRATION_PATH = 'supabase/migrations/20260822_173416_fn_validar_topologia_contencion_parcela.sql'
 
-test('la migración de Fase A calcula v_contenedor_exclusivo SOLO para EUDR_USO_SUELO, y solo cuando hay EXACTAMENTE UN Monitoreo aprobado que contiene por completo la subdivisión', () => {
+test('la migración de Fase A calcula v_contenedor_exclusivo SOLO para EUDR_USO_SUELO, y solo cuando hay EXACTAMENTE UN Monitoreo aprobado que supera el umbral de contención', () => {
   const source = read(CONTENCION_MIGRATION_PATH)
   assert.match(source, /IF p_tabla_origen = 'EUDR_USO_SUELO' THEN/)
   assert.match(source, /CASE WHEN count\(\*\) = 1 THEN \(array_agg\(id_monitoreo\)\)\[1\] ELSE NULL END/)
-  assert.match(source, /AND ST_Contains\(geom_inspeccion, v_geom\);/)
+})
+
+// ---------------------------------------------------------------
+// Fase A — Seguimiento: margen de tolerancia (2026-08-23). ST_Contains
+// estricto (0% de margen) casi nunca calzaba en la práctica por ruido
+// GPS real entre dos capturas de campo — confirmado en vivo con id=20
+// (99.64% de contención, ST_Contains devolvió false, la alerta se
+// mantuvo indebidamente). Reemplazado por un chequeo de % de área
+// contenida con una constante con nombre claro (v_umbral_contencion_pct,
+// no un número mágico inline), SIN relajar la condición de ambigüedad
+// (count(*) = 1 exacto sigue aplicando, ahora sobre el nuevo criterio).
+// ---------------------------------------------------------------
+
+test('la migración usa un umbral de contención con NOMBRE (v_umbral_contencion_pct), no un número mágico inline, declarado como constant', () => {
+  const source = read(CONTENCION_MIGRATION_PATH)
+  assert.match(source, /v_umbral_contencion_pct constant numeric := 0\.98;/)
+})
+
+test('el chequeo de contención ahora es % de área contenida (ST_Intersection/ST_Area vía ::geography) comparado contra v_umbral_contencion_pct, no ST_Contains estricto', () => {
+  const source = read(CONTENCION_MIGRATION_PATH)
+  const bloque = source.match(/IF p_tabla_origen = 'EUDR_USO_SUELO' THEN[\s\S]*?END IF;\s*\n\s*\n\s*-- Solapamiento contra otros/)
+  assert.ok(bloque, 'el bloque de cálculo de v_contenedor_exclusivo debería existir')
+  assert.match(
+    bloque[0],
+    /ST_Area\(ST_Intersection\(geom_inspeccion, v_geom\)::geography\)\s*\n\s*\/ NULLIF\(ST_Area\(v_geom::geography\), 0\) >= v_umbral_contencion_pct;/
+  )
+  assert.ok(
+    !/AND ST_Contains\(geom_inspeccion, v_geom\)/.test(bloque[0]),
+    'no debería quedar el ST_Contains estricto original en el bloque de contención'
+  )
+})
+
+test('la condición de ambigüedad (count(*) = 1 exacto) NO se relajó junto con el umbral de contención', () => {
+  const source = read(CONTENCION_MIGRATION_PATH)
+  assert.match(source, /CASE WHEN count\(\*\) = 1 THEN/)
+  assert.ok(
+    !/count\(\*\)\s*(>=|<=|>|<)\s*1/.test(source),
+    'la condición de ambigüedad debe seguir siendo una igualdad exacta a 1, no un umbral relajado'
+  )
 })
 
 test('la migración de Fase A excluye el contenedor exclusivo SOLO de la rama EUDR_MONITOREO de candidatos (regla 1), nunca de la rama EUDR_USO_SUELO (regla 2 sin cambios)', () => {
