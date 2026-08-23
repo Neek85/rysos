@@ -300,7 +300,7 @@ test('rejectRecord lanza EUDRQcError si 0 filas fueron afectadas', async () => {
 // directo a la Server Action sin pasar por la UI no estaba protegido).
 // ---------------------------------------------------------------
 
-test('approveRecord aborta SIN escribir nada si fn_validar_codigo_parcela_unico reporta conflicto', async () => {
+test('approveRecord aborta SIN escribir nada si fn_validar_codigo_parcela_unico reporta conflicto (mensaje en lenguaje claro, sin el UUID del otro registro)', async () => {
   const supabase = makeFakeSupabase(
     { EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }] },
     {
@@ -309,7 +309,15 @@ test('approveRecord aborta SIN escribir nada si fn_validar_codigo_parcela_unico 
           data: {
             tiene_conflicto: true,
             ID_Parcela_Fija: 'COOP-JS-001',
-            registros_en_conflicto: [{ id_monitoreo: 'otro-uuid', distancia_m: 1213.49, estado_revision: 'APROBADO' }],
+            registros_en_conflicto: [
+              {
+                id_monitoreo: 'otro-uuid',
+                distancia_m: 1213.49,
+                estado_revision: 'APROBADO',
+                fecha_monitoreo: '2026-07-06',
+                tecnico_responsable: 'Victor campos',
+              },
+            ],
           },
           error: null,
         },
@@ -318,7 +326,11 @@ test('approveRecord aborta SIN escribir nada si fn_validar_codigo_parcela_unico 
   )
   await assert.rejects(
     () => approveRecord(supabase, baseRecord(), 'COOP-JS'),
-    (err) => err instanceof EUDRQcError && err.message.includes('COOP-JS-001') && err.message.includes('1213.49m')
+    (err) =>
+      err instanceof EUDRQcError &&
+      err.message.includes('COOP-JS-001') &&
+      err.message.includes('1.2 km') &&
+      !err.message.includes('otro-uuid')
   )
 })
 
@@ -342,7 +354,15 @@ test('rejectRecord también aborta si hay conflicto de código de parcela', asyn
           data: {
             tiene_conflicto: true,
             ID_Parcela_Fija: 'COOP-JS-003',
-            registros_en_conflicto: [{ id_monitoreo: 'otro-uuid', distancia_m: 768.53, estado_revision: 'RECHAZADO' }],
+            registros_en_conflicto: [
+              {
+                id_monitoreo: 'otro-uuid',
+                distancia_m: 768.53,
+                estado_revision: 'RECHAZADO',
+                fecha_monitoreo: '2026-08-19',
+                tecnico_responsable: 'Victor campos',
+              },
+            ],
           },
           error: null,
         },
@@ -351,7 +371,7 @@ test('rejectRecord también aborta si hay conflicto de código de parcela', asyn
   )
   await assert.rejects(
     () => rejectRecord(supabase, baseRecord(), 'motivo real', 'COOP-JS'),
-    (err) => err instanceof EUDRQcError && err.message.includes('COOP-JS-003')
+    (err) => err instanceof EUDRQcError && err.message.includes('COOP-JS-003') && err.message.includes('769 m')
   )
 })
 
@@ -389,7 +409,7 @@ test('si la RPC misma falla (error de red/función inexistente), la operación s
   await assert.rejects(() => approveRecord(supabase, baseRecord(), 'COOP-JS'), /fallo simulado de red/)
 })
 
-test('el guard corre ANTES de la validación multi-tenant del guard PENDIENTE (verificación en vivo, paso 3): mismo mensaje que buildConflictoParcelaMensaje usado por QcDetailEditor.jsx', async () => {
+test('el guard usa el mismo mensaje en lenguaje claro que buildConflictoParcelaMensaje (usado también por QcDetailEditor.jsx) — verificación en vivo real en el paso 3 de la tarea original', async () => {
   const supabase = makeFakeSupabase(
     { EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }] },
     {
@@ -398,7 +418,15 @@ test('el guard corre ANTES de la validación multi-tenant del guard PENDIENTE (v
           data: {
             tiene_conflicto: true,
             ID_Parcela_Fija: 'COOP-JS-004',
-            registros_en_conflicto: [{ id_monitoreo: 'otro-uuid', distancia_m: 3532.75, estado_revision: 'APROBADO' }],
+            registros_en_conflicto: [
+              {
+                id_monitoreo: 'otro-uuid',
+                distancia_m: 3532.75,
+                estado_revision: 'APROBADO',
+                fecha_monitoreo: '2026-08-16',
+                tecnico_responsable: 'TECNICO 2',
+              },
+            ],
           },
           error: null,
         },
@@ -409,9 +437,11 @@ test('el guard corre ANTES de la validación multi-tenant del guard PENDIENTE (v
     await approveRecord(supabase, baseRecord(), 'COOP-JS')
     assert.fail('debería haber lanzado')
   } catch (err) {
-    assert.match(err.message, /No se puede aplicar la decisión/)
+    assert.match(err.message, /Un código de parcela debe corresponder siempre a un único lugar físico/)
     assert.match(err.message, /COOP-JS-004/)
-    assert.match(err.message, /3532\.75m/)
+    assert.match(err.message, /3\.5 km/)
+    assert.match(err.message, /revisión manual/)
+    assert.ok(!err.message.includes('otro-uuid'), 'no debe exponer el id_monitoreo del otro registro')
   }
 })
 

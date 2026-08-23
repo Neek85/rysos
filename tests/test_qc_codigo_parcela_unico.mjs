@@ -13,7 +13,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { validateCodigoParcelaRequest, buildConflictoParcelaMensaje } from '../lib/qcCodigoParcelaUnico.js'
+import {
+  validateCodigoParcelaRequest,
+  buildConflictoParcelaMensaje,
+  formatDistanciaLegible,
+} from '../lib/qcCodigoParcelaUnico.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -22,6 +26,8 @@ function read(relPath) {
 }
 
 const MIGRATION_PATH = 'supabase/migrations/20260823_200000_fn_validar_codigo_parcela_unico.sql'
+const MIGRATION_CONTEXTO_PATH =
+  'supabase/migrations/20260823_210000_fn_validar_codigo_parcela_unico_contexto_legible.sql'
 const ROUTE_PATH = 'app/api/qc/validar-codigo-parcela/route.js'
 const DETAIL_EDITOR_PATH = 'app/dashboard/qc/components/QcDetailEditor.jsx'
 const ETL_PATH = 'scripts/etl_drive_to_supabase.py'
@@ -46,19 +52,70 @@ test('buildConflictoParcelaMensaje devuelve null sin conflicto', () => {
   assert.equal(buildConflictoParcelaMensaje(null), null)
 })
 
-test('buildConflictoParcelaMensaje lista cada registro en conflicto con distancia y estado', () => {
+test('formatDistanciaLegible redondea a metros por debajo de 1000m, y a km con 1 decimal por encima', () => {
+  assert.equal(formatDistanciaLegible(768.53), '769 m')
+  assert.equal(formatDistanciaLegible(99.4), '99 m')
+  assert.equal(formatDistanciaLegible(1213.49), '1.2 km')
+  assert.equal(formatDistanciaLegible(3532.75), '3.5 km')
+  assert.equal(formatDistanciaLegible(1000), '1.0 km')
+})
+
+test('buildConflictoParcelaMensaje explica la regla de negocio en lenguaje simple, sin exponer el id_monitoreo (UUID) del otro registro', () => {
   const mensaje = buildConflictoParcelaMensaje({
     tiene_conflicto: true,
     ID_Parcela_Fija: 'COOP-JS-001',
     registros_en_conflicto: [
-      { id_monitoreo: 'uuid-otro', distancia_m: 1213.49, estado_revision: 'APROBADO' },
+      {
+        id_monitoreo: 'b2f305a0-f549-5d08-9ab1-c00596df9987',
+        distancia_m: 1213.49,
+        estado_revision: 'APROBADO',
+        fecha_monitoreo: '2026-07-06',
+        tecnico_responsable: 'Victor campos',
+      },
     ],
   })
-  assert.match(mensaje, /No se puede aplicar la decisión/)
+  // Elemento 1: la regla de negocio en sí.
+  assert.match(mensaje, /Un código de parcela debe corresponder siempre a un único lugar físico/)
+  // Elemento 2: qué se detectó -- código, distancia legible (no "1213.49m" crudo), contexto del otro registro.
   assert.match(mensaje, /COOP-JS-001/)
-  assert.match(mensaje, /uuid-otro/)
-  assert.match(mensaje, /1213\.49m/)
-  assert.match(mensaje, /APROBADO/)
+  assert.match(mensaje, /1\.2 km/)
+  assert.match(mensaje, /2026-07-06/)
+  assert.match(mensaje, /Victor campos/)
+  assert.match(mensaje, /ya fue aprobado anteriormente/)
+  // Elemento 3: qué hacer -- revisión manual, sin prometer un flujo que no existe.
+  assert.match(mensaje, /revisión manual/)
+  assert.match(mensaje, /confirmá cuál de los dos registros tiene el código correcto/)
+  // Nunca el UUID técnico ni el valor crudo de estado_revision.
+  assert.ok(!mensaje.includes('b2f305a0-f549-5d08-9ab1-c00596df9987'), 'no debe exponer el id_monitoreo')
+  assert.ok(!/\bAPROBADO\b/.test(mensaje), 'no debe mostrar el valor crudo de estado_revision')
+  assert.ok(!/1213\.49/.test(mensaje), 'no debe mostrar la distancia cruda sin redondear')
+})
+
+test('buildConflictoParcelaMensaje describe cada estado en lenguaje llano (RECHAZADO, PENDIENTE)', () => {
+  const mensajeRechazado = buildConflictoParcelaMensaje({
+    tiene_conflicto: true,
+    ID_Parcela_Fija: 'COOP-JS-003',
+    registros_en_conflicto: [{ distancia_m: 768.53, estado_revision: 'RECHAZADO', fecha_monitoreo: '2026-08-19', tecnico_responsable: 'Victor campos' }],
+  })
+  assert.match(mensajeRechazado, /ya fue rechazado anteriormente/)
+
+  const mensajePendiente = buildConflictoParcelaMensaje({
+    tiene_conflicto: true,
+    ID_Parcela_Fija: 'COOP-JS-004',
+    registros_en_conflicto: [{ distancia_m: 3532.75, estado_revision: 'PENDIENTE', fecha_monitoreo: '2026-08-23', tecnico_responsable: 'Ismael Diaz' }],
+  })
+  assert.match(mensajePendiente, /todavía está pendiente de revisión/)
+})
+
+test('buildConflictoParcelaMensaje sigue funcionando si el registro en conflicto no tiene fecha/técnico cargados (registros viejos)', () => {
+  const mensaje = buildConflictoParcelaMensaje({
+    tiene_conflicto: true,
+    ID_Parcela_Fija: 'COOP-JS-999',
+    registros_en_conflicto: [{ distancia_m: 500, estado_revision: 'PENDIENTE', fecha_monitoreo: null, tecnico_responsable: null }],
+  })
+  assert.ok(mensaje, 'debería seguir generando un mensaje válido')
+  assert.ok(!/null/.test(mensaje), 'nunca debe mostrar el texto literal "null"')
+  assert.match(mensaje, /500 m/)
 })
 
 test('buildConflictoParcelaMensaje lista múltiples registros en conflicto, no solo el primero', () => {
@@ -66,12 +123,14 @@ test('buildConflictoParcelaMensaje lista múltiples registros en conflicto, no s
     tiene_conflicto: true,
     ID_Parcela_Fija: 'COOP-JS-001',
     registros_en_conflicto: [
-      { id_monitoreo: 'uuid-a', distancia_m: 200, estado_revision: 'PENDIENTE' },
-      { id_monitoreo: 'uuid-b', distancia_m: 500, estado_revision: 'RECHAZADO' },
+      { distancia_m: 200, estado_revision: 'PENDIENTE', fecha_monitoreo: '2026-08-01', tecnico_responsable: 'Ana' },
+      { distancia_m: 500, estado_revision: 'RECHAZADO', fecha_monitoreo: '2026-08-05', tecnico_responsable: 'Beto' },
     ],
   })
-  assert.match(mensaje, /uuid-a/)
-  assert.match(mensaje, /uuid-b/)
+  assert.match(mensaje, /2026-08-01/)
+  assert.match(mensaje, /Ana/)
+  assert.match(mensaje, /2026-08-05/)
+  assert.match(mensaje, /Beto/)
 })
 
 // ---------------------------------------------------------------
@@ -112,6 +171,25 @@ test('la migración devuelve tiene_conflicto=false y sin ID_Parcela_Fija cuando 
   const source = read(MIGRATION_PATH)
   assert.match(source, /IF v_id_parcela_fija IS NULL THEN/)
   assert.match(source, /'tiene_conflicto', false/)
+})
+
+// ---------------------------------------------------------------
+// Migración de contexto legible (20260823_210000): agrega
+// fecha_monitoreo/tecnico_responsable a cada registro en conflicto, para
+// que el mensaje ya no dependa del id_monitoreo crudo.
+// ---------------------------------------------------------------
+
+test('la migración de contexto legible agrega fecha_monitoreo y tecnico_responsable a cada registro en conflicto', () => {
+  const source = read(MIGRATION_CONTEXTO_PATH)
+  assert.match(source, /'fecha_monitoreo', m\.fecha_monitoreo/)
+  assert.match(source, /'tecnico_responsable', m\.tecnico_responsable/)
+})
+
+test('la migración de contexto legible mantiene id_monitoreo en la respuesta (útil para resolver en la base), mismo umbral y misma exclusión', () => {
+  const source = read(MIGRATION_CONTEXTO_PATH)
+  assert.match(source, /'id_monitoreo', m\.id_monitoreo/)
+  assert.match(source, /v_umbral_conflicto_m constant numeric := 100;/)
+  assert.match(source, /m\.id_monitoreo != p_monitoreo_id/)
 })
 
 // ---------------------------------------------------------------

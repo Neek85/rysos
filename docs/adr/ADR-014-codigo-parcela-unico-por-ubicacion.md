@@ -2,16 +2,19 @@
 
 - **Estado:** Aceptado y verificado en vivo
 - **Fecha:** 2026-08-23
-- **Migración:** `supabase/migrations/20260823_200000_fn_validar_codigo_parcela_unico.sql`
+- **Migración:** `supabase/migrations/20260823_200000_fn_validar_codigo_parcela_unico.sql`,
+  extendida por `20260823_210000_fn_validar_codigo_parcela_unico_contexto_legible.sql`
+  (agrega `fecha_monitoreo`/`tecnico_responsable` a cada registro en
+  conflicto, para el mensaje en lenguaje claro — ver sección dedicada)
 - **Código:** `scripts/etl_drive_to_supabase.py` (`warn_parcela_code_conflicts`,
-  solo informativo), `lib/qcCodigoParcelaUnico.js` (nuevo),
-  `app/api/qc/validar-codigo-parcela/route.js` (nuevo),
+  solo informativo), `lib/qcCodigoParcelaUnico.js` (`buildConflictoParcelaMensaje`,
+  `formatDistanciaLegible`), `app/api/qc/validar-codigo-parcela/route.js`,
   `app/dashboard/qc/components/QcDetailEditor.jsx` (bloqueo real de
   Aprobar/Rechazar), `lib/eudrQcActions.js` (`assertSinConflictoDeParcela`
   — guard server-side, cierre del gap, ver sección dedicada más abajo)
-- **Tests:** `tests/test_qc_codigo_parcela_unico.mjs` (26 tests),
+- **Tests:** `tests/test_qc_codigo_parcela_unico.mjs` (32 tests),
   `tests/test_etl_drive.py::TestParcelaCodeConflictWarning` (5 tests),
-  `tests/test_eudr_qc_actions.mjs` (7 tests nuevos del guard server-side)
+  `tests/test_eudr_qc_actions.mjs` (7 tests del guard server-side)
 
 ## Regla de negocio (confirmada por el usuario, no una inferencia de datos)
 
@@ -69,10 +72,9 @@ Dos mecanismos separados, a propósito:
    que `fn_validar_topologia_eudr`/`fn_cobertura_uso_suelo_parcela`) si su
    código tiene conflicto. Si `tiene_conflicto = true`, **Aprobar y
    Rechazar quedan deshabilitados**, con un mensaje rojo (bloqueante, no
-   ámbar/informativo) listando cada registro en conflicto, su distancia y
-   su `estado_revision` — mismo estilo de texto que el error ya existente
-   en `lib/eudrQcActions.js::resolveUpdateTarget` ("No se puede aplicar la
-   decisión...").
+   ámbar/informativo) explicando el conflicto en lenguaje simple — ver la
+   sección "Mensaje en lenguaje claro para el usuario final" más abajo
+   para el texto exacto y por qué cambió de su versión original.
 
 La razón de la asimetría: el dato ya existe (frenar la ingesta no arregla
 nada, solo retrasa que alguien vea el problema), pero **decidir** sobre un
@@ -209,6 +211,69 @@ Confirmado además, vía REST, que **ninguno de los dos registros se tocó**:
 ambos siguen `estado_revision = 'PENDIENTE'`, y el intento de rechazo no
 dejó ningún rastro en `observaciones` (seguía `''`, vacío) — el guard corre
 y aborta antes de que el `UPDATE` real se ejecute, no después.
+
+## Mensaje en lenguaje claro para el usuario final (revisión posterior)
+
+**El mensaje original** (primera versión de esta feature) mostraba el
+`id_monitoreo` (un UUID) y la distancia cruda del otro registro:
+
+> No se puede aplicar la decisión sobre este registro: el código de parcela
+> "COOP-JS-001" también aparece en otra ubicación físicamente distinta —
+> b2f305a0-f549-5d08-9ab1-c00596df9987 (1213.49m, APROBADO). Un código de
+> parcela debe corresponder siempre a un único lugar. Resolvé el conflicto
+> manualmente antes de decidir.
+
+Correcto técnicamente, pero un UUID y una distancia sin redondear no le
+dicen nada a un revisor sin conocimiento técnico. Se reescribió para cubrir
+3 elementos explícitos: la regla de negocio en sí, qué se detectó (con una
+distancia legible y el contexto real del otro registro en vez de su id
+interno), y qué corresponde hacer — sin prometer un flujo de resolución que
+todavía no existe (ver "Fuera de alcance" abajo). Ejemplo real, verificado
+en vivo contra `COOP-JS-001` (`2947810c-...`, en conflicto con
+`b2f305a0-...`, ya `APROBADO`):
+
+> ⛔ Un código de parcela debe corresponder siempre a un único lugar físico.
+> El código "COOP-JS-001" también existe en otra ubicación: a 1.2 km de
+> distancia (capturado el 2026-07-06 por Victor campos) — ya fue aprobado
+> anteriormente. Esto requiere revisión manual — confirmá cuál de los dos
+> registros tiene el código correcto antes de aprobar o rechazar este.
+
+**Cómo se identifica el otro registro sin mostrar su UUID:** en vez del
+`id_monitoreo`, se usa `fecha_monitoreo` + `tecnico_responsable` (datos que
+ya existen en `EUDR_MONITOREO`, cargados por el ETL desde QField, ver
+`scripts/etl_drive_to_supabase.py::build_monitoreo_payload`) — se agregaron
+a la respuesta de `fn_validar_codigo_parcela_unico` en una migración nueva
+(`20260823_210000_fn_validar_codigo_parcela_unico_contexto_legible.sql`,
+`CREATE OR REPLACE` sobre la misma función, mismo umbral y misma lógica de
+detección, solo 2 campos nuevos en el `jsonb_build_object` de cada
+registro en conflicto). El `id_monitoreo` real **sigue** en la respuesta de
+la RPC (útil para quien resuelva el conflicto directamente en la base) —
+solo dejó de usarse para armar el texto que ve el usuario. Si algún
+registro viejo no tuviera esos datos cargados, el mensaje se degrada con
+gracia (omite esa parte, nunca muestra "null" o un hueco raro).
+
+**Distancia legible:** `formatDistanciaLegible()` — metros redondeados por
+debajo de 1000m (`768.53` → `"769 m"`), kilómetros con 1 decimal por
+encima (`1213.49` → `"1.2 km"`, `3532.75` → `"3.5 km"`).
+
+**estado_revision en lenguaje llano:** `"ya fue aprobado anteriormente"` /
+`"ya fue rechazado anteriormente"` / `"todavía está pendiente de
+revisión"` — nunca el valor crudo `APROBADO`/`RECHAZADO`/`PENDIENTE`.
+
+**Verificación en vivo con los 3 casos reales conocidos**, tras aplicar la
+migración de contexto legible:
+
+| Registro abierto | Mensaje mostrado (texto real, capturado del DOM) |
+|---|---|
+| `2947810c` (COOP-JS-001) | "...también existe en otra ubicación: a **1.2 km** de distancia (capturado el 2026-07-06 por Victor campos) — ya fue aprobado anteriormente..." |
+| `6b1c9ec5` (COOP-JS-003) | "...a **769 m** de distancia (capturado el 2026-08-19 por Victor campos) — ya fue rechazado anteriormente..." |
+| `6367110b` (COOP-JS-004) | "...a **3.5 km** de distancia (capturado el 2026-08-16 por TECNICO 2) — ya fue aprobado anteriormente..." |
+
+Los 3 mensajes coinciden con la distancia real ya conocida de la
+investigación previa (768.53m/1213.49m/3532.75m), redondeada, y ninguno
+expone un UUID — confirmado leyendo el DOM real, no solo mirando la
+pantalla. Los botones Aprobar/Rechazar siguen deshabilitados igual que
+antes (el cambio fue puramente de texto, no de lógica de bloqueo).
 
 ## Fuera de alcance de esta tarea (a propósito)
 
