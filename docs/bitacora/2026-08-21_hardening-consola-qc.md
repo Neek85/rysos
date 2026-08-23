@@ -317,16 +317,28 @@ de aprobar subdivisiones sueltas.
 > respuesta es que `totalh` **no** es confiable y no se usa para bloquear
 > nada. Se retira de la lista de pendientes.
 
-**b) Sigue sin confirmarse el origen completo de `ORG-COOP-NORTE`.** Se
-confirmó que el nombre viene de un script de pruebas automáticas y,
-probablemente, de alguna prueba manual adicional — ambas cosas dentro
-de este mismo período de trabajo. Lo que no se pudo confirmar (porque
-está fuera del alcance de lo que se puede ver desde el código) es si
-ese mismo nombre se usó alguna vez, ANTES de esto, como una organización
-de demostración a propósito — por ejemplo en una venta o presentación.
-Vale la pena preguntarle a quien tenga esa historia.
+> *Resuelto (2026-08-23, investigación dedicada):* la pregunta sobre si
+> `ORG-COOP-NORTE` fue alguna vez una organización de demostración usada
+> a propósito (por ejemplo en una venta o presentación) antes de existir
+> el script de pruebas automáticas. Se revisó el historial completo del
+> repositorio, no solo los commits recientes, buscando la primerísima
+> aparición del nombre. **Respuesta: no.** El nombre nace exactamente el
+> 16 de agosto de 2026, en el mismo commit que crea por primera vez el
+> script de pruebas automáticas — el propio documento que pidió crear ese
+> script ya usaba `ORG-COOP-NORTE` como nombre de ejemplo, inventado ahí
+> mismo, sin ninguna referencia a algo anterior. Dos días después (18 de
+> agosto), como ese script ya había corrido de verdad contra la base de
+> datos real, quedó como la única organización con datos reales
+> "aprobados" disponibles en ese momento — y por eso se reutilizó, de
+> forma oportunista, para probar otras funciones sin relación (el
+> generador de PDF de trazabilidad, el chequeo de que no se filtran datos
+> personales), incluso apareciendo mencionado en un informe interno de
+> cierre de esa etapa del proyecto. Ese uso posterior podría dar la
+> impresión de algo "oficial", pero en el fondo siempre fue el mismo dato
+> de prueba, reciclado — nunca una organización real ni una demo
+> preparada a propósito. Se retira de la lista de pendientes.
 
-**c) Evaluar pasar el proyecto de Supabase de un plan gratuito a uno
+**b) Evaluar pasar el proyecto de Supabase de un plan gratuito a uno
 pago con respaldo automático, antes de cargar la primera organización
 real.** Hoy el proyecto corre en un plan sin respaldos automáticos
 configurados — razonable mientras todo el dato es de prueba, pero un
