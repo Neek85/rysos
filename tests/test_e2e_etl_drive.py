@@ -23,6 +23,11 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 def make_mock_supabase() -> MagicMock:
     mock_supabase = MagicMock()
     mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+    # ADR-012: simula "el registro todavia no existe" (data=[]) para el chequeo de
+    # estado_revision previo al upsert — ver el mismo patron en tests/test_etl_drive.py.
+    select_mock = mock_supabase.table.return_value.select.return_value
+    select_mock.eq.return_value.execute.return_value.data = []
+    select_mock.eq.return_value.eq.return_value.execute.return_value.data = []
     return mock_supabase
 
 

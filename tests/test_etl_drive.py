@@ -47,6 +47,15 @@ def build_pipeline(drive_root: Path):
         mock_supabase = MagicMock()
         mock_create_client.return_value = mock_supabase
         mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+        # ADR-012: process_layer_rows consulta primero estado_revision existente via
+        # .select().eq(...).execute().data — por defecto simula "el registro todavia
+        # no existe" (data=[]) para no alterar el comportamiento de los tests previos
+        # a este chequeo. Cubre tanto un solo .eq() (EUDR_MONITOREO, conflict target
+        # "id_monitoreo") como dos encadenados (EUDR_USO_SUELO/INSTALACIONES,
+        # "ID_Organizacion,fid").
+        select_mock = mock_supabase.table.return_value.select.return_value
+        select_mock.eq.return_value.execute.return_value.data = []
+        select_mock.eq.return_value.eq.return_value.execute.return_value.data = []
         pipeline = DriveZipETLPipeline("https://fake.supabase.co", "fake-key", str(drive_root))
     return pipeline, mock_supabase
 
@@ -715,7 +724,7 @@ class TestMultiLayerIngestion(unittest.TestCase):
         )
         row = gdf.iloc[0]
 
-        ids, photos = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+        ids, photos, _skipped = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
 
         self.assertEqual(photos, [])
         insert_calls = pipeline.supabase.table.return_value.upsert.call_args_list
@@ -768,7 +777,7 @@ class TestEvidenciaFotoBasenameMatching(unittest.TestCase):
         )
         self.assertEqual(gdf["evidencia_foto"].dtype.kind, "f")
 
-        ids, photos = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+        ids, photos, _skipped = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
 
         self.assertEqual(photos, [])
         insert_calls = pipeline.supabase.table.return_value.upsert.call_args_list
@@ -796,7 +805,7 @@ class TestEvidenciaFotoBasenameMatching(unittest.TestCase):
             )
             photos_by_name = {"foto_01.jpg": photo_file}
 
-            ids, photos = pipeline.process_layer_rows(
+            ids, photos, _skipped = pipeline.process_layer_rows(
                 gdf, "EUDR_MONITOREO", "ORG-001", photos_by_name
             )
 
@@ -824,7 +833,7 @@ class TestEvidenciaFotoBasenameMatching(unittest.TestCase):
             )
             photos_by_name = {"foto_instalacion.jpg": photo_file}
 
-            ids, photos = pipeline.process_layer_rows(
+            ids, photos, _skipped = pipeline.process_layer_rows(
                 gdf, "EUDR_INSTALACIONES", "ORG-001", photos_by_name
             )
 
@@ -874,7 +883,7 @@ class TestEvidenciaFotoBasenameMatching(unittest.TestCase):
             )
             photo_map = {"foto_simple.jpg": photo_file}
 
-            ids, photos = pipeline.process_layer_rows(
+            ids, photos, _skipped = pipeline.process_layer_rows(
                 gdf, "EUDR_MONITOREO", "ORG-001", photo_map
             )
 
@@ -1087,8 +1096,8 @@ class TestUpsertIdempotency(unittest.TestCase):
             crs="EPSG:4326",
         )
 
-        ids_run1, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
-        ids_run2, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+        ids_run1, _, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+        ids_run2, _, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
 
         self.assertEqual(ids_run1, ids_run2)
 
@@ -1103,12 +1112,166 @@ class TestUpsertIdempotency(unittest.TestCase):
             crs="EPSG:4326",
         )
 
-        ids_run1, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
-        ids_run2, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+        ids_run1, _, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
+        ids_run2, _, _ = pipeline.process_layer_rows(gdf, "EUDR_MONITOREO", "ORG-001", {})
 
         self.assertEqual(ids_run1, ids_run2)
         for call in mock_supabase.table.return_value.upsert.call_args_list:
             self.assertEqual(call.kwargs["on_conflict"], "id_monitoreo")
+
+
+class TestProtectsAlreadyReviewedRecords(unittest.TestCase):
+    """ADR-012: un registro ya APROBADO/RECHAZADO nunca debe ser tocado por una
+    resincronizacion del mismo paquete (o de un paquete posterior del mismo proyecto
+    QField activo) — ni siquiera para reescribirle el mismo valor. Solo un registro
+    que sigue PENDIENTE (o que todavia no existe) se actualiza con normalidad."""
+
+    def _pipeline(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, mock_supabase = build_pipeline(Path(tmp))
+        return pipeline, mock_supabase
+
+    def _stub_existing_estado(self, mock_supabase, estado: str | None):
+        select_mock = mock_supabase.table.return_value.select.return_value
+        data = [{"estado_revision": estado}] if estado is not None else []
+        select_mock.eq.return_value.execute.return_value.data = data
+        select_mock.eq.return_value.eq.return_value.execute.return_value.data = data
+
+    def _monitoreo_gdf(self):
+        return gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["PARC-001"],
+                "ID_Socio": ["SOC-001"],
+                "fecha_monitoreo": ["2026-08-16"],
+            },
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+
+    def _uso_suelo_gdf(self):
+        return gpd.GeoDataFrame(
+            {"id_parcela": ["PARC-001"], "tipo_uso": ["Cafetal"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+
+    def _instalaciones_gdf(self):
+        return gpd.GeoDataFrame(
+            {"id_parcela": ["PARC-001"], "tipo_infra": ["Beneficio Humedo"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+
+    def test_monitoreo_aprobado_is_skipped_entirely(self):
+        pipeline, mock_supabase = self._pipeline()
+        self._stub_existing_estado(mock_supabase, "APROBADO")
+
+        ids, photos, skipped = pipeline.process_layer_rows(
+            self._monitoreo_gdf(), "EUDR_MONITOREO", "ORG-001", {}
+        )
+
+        mock_supabase.table.return_value.upsert.assert_not_called()
+        self.assertEqual(ids, [])
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["table"], "EUDR_MONITOREO")
+        self.assertEqual(skipped[0]["estado_revision"], "APROBADO")
+
+    def test_monitoreo_rechazado_is_skipped_entirely(self):
+        pipeline, mock_supabase = self._pipeline()
+        self._stub_existing_estado(mock_supabase, "RECHAZADO")
+
+        ids, photos, skipped = pipeline.process_layer_rows(
+            self._monitoreo_gdf(), "EUDR_MONITOREO", "ORG-001", {}
+        )
+
+        mock_supabase.table.return_value.upsert.assert_not_called()
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["estado_revision"], "RECHAZADO")
+
+    def test_uso_suelo_aprobado_is_skipped_entirely(self):
+        pipeline, mock_supabase = self._pipeline()
+        self._stub_existing_estado(mock_supabase, "APROBADO")
+
+        ids, photos, skipped = pipeline.process_layer_rows(
+            self._uso_suelo_gdf(), "EUDR_USO_SUELO", "ORG-001", {}
+        )
+
+        mock_supabase.table.return_value.upsert.assert_not_called()
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["table"], "EUDR_USO_SUELO")
+
+    def test_instalaciones_aprobado_is_skipped_entirely(self):
+        pipeline, mock_supabase = self._pipeline()
+        self._stub_existing_estado(mock_supabase, "APROBADO")
+
+        ids, photos, skipped = pipeline.process_layer_rows(
+            self._instalaciones_gdf(), "EUDR_INSTALACIONES", "ORG-001", {}
+        )
+
+        mock_supabase.table.return_value.upsert.assert_not_called()
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["table"], "EUDR_INSTALACIONES")
+
+    def test_monitoreo_pendiente_existing_record_still_updates_normally(self):
+        pipeline, mock_supabase = self._pipeline()
+        self._stub_existing_estado(mock_supabase, "PENDIENTE")
+
+        ids, photos, skipped = pipeline.process_layer_rows(
+            self._monitoreo_gdf(), "EUDR_MONITOREO", "ORG-001", {}
+        )
+
+        mock_supabase.table.return_value.upsert.assert_called_once()
+        self.assertEqual(len(ids), 1)
+        self.assertEqual(skipped, [])
+
+    def test_monitoreo_nonexistent_record_still_inserts_normally(self):
+        pipeline, mock_supabase = self._pipeline()
+        self._stub_existing_estado(mock_supabase, None)
+
+        ids, photos, skipped = pipeline.process_layer_rows(
+            self._monitoreo_gdf(), "EUDR_MONITOREO", "ORG-001", {}
+        )
+
+        mock_supabase.table.return_value.upsert.assert_called_once()
+        self.assertEqual(len(ids), 1)
+        self.assertEqual(skipped, [])
+
+    def test_mixed_batch_skips_reviewed_and_updates_pendiente(self):
+        # Dos filas con distinta parcela -> distinto id_monitoreo -> cada .eq()
+        # devuelve un resultado diferente segun el filtro recibido.
+        pipeline, mock_supabase = self._pipeline()
+        gdf = gpd.GeoDataFrame(
+            {
+                "ID_Parcela_Fija": ["PARC-001", "PARC-002"],
+                "ID_Socio": ["SOC-001", "SOC-002"],
+                "fecha_monitoreo": ["2026-08-16", "2026-08-16"],
+            },
+            geometry=[Point(-77.0, -12.0), Point(-77.1, -12.1)],
+            crs="EPSG:4326",
+        )
+        id_reviewed = pipeline.compute_deterministic_id(
+            "EUDR_MONITOREO", "ORG-001", "PARC-001", "2026-08-16"
+        )
+
+        def fake_eq(field, value):
+            result = MagicMock()
+            estado = "APROBADO" if field == "id_monitoreo" and value == id_reviewed else None
+            data = [{"estado_revision": estado}] if estado is not None else []
+            result.execute.return_value.data = data
+            return result
+
+        mock_supabase.table.return_value.select.return_value.eq.side_effect = fake_eq
+
+        ids, photos, skipped = pipeline.process_layer_rows(
+            gdf, "EUDR_MONITOREO", "ORG-001", {}
+        )
+
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["id"], id_reviewed)
+        self.assertEqual(len(ids), 1)
+        mock_supabase.table.return_value.upsert.assert_called_once()
 
 
 class TestPayloadRestructuring(unittest.TestCase):

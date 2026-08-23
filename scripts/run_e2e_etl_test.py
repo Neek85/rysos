@@ -225,6 +225,10 @@ def main() -> int:
         )
         mock_supabase = MagicMock()
         mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+        # ADR-012: simula "el registro todavia no existe" para el chequeo previo al upsert.
+        select_mock = mock_supabase.table.return_value.select.return_value
+        select_mock.eq.return_value.execute.return_value.data = []
+        select_mock.eq.return_value.eq.return_value.execute.return_value.data = []
 
     print(f"[E2E-DRIVE] Base dir: {DEFAULT_BASE_DIR}")
     outcome = run_e2e(DEFAULT_BASE_DIR, mock_supabase=mock_supabase)

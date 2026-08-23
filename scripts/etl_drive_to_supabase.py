@@ -393,6 +393,21 @@ class DriveZipETLPipeline:
             return self.build_instalaciones_payload(row, org_id, fid=fid, evidencia_foto=evidencia_foto)
         raise ValueError(f"Tabla EUDR no reconocida: {table_name}")
 
+    def fetch_existing_estado_revision(self, table_client, payload: dict, on_conflict: str) -> str | None:
+        # INVARIANTE (ADR-012): antes de cualquier upsert hay que saber si el registro
+        # ya existe y, si existe, si un humano ya lo reviso (APROBADO/RECHAZADO). Se
+        # consulta por los mismos campos que el conflict target real (id_monitoreo, o
+        # ID_Organizacion+fid) para garantizar que "existe" aqui signifique exactamente
+        # lo mismo que "existe" para Postgres al resolver el ON CONFLICT. Recibe el
+        # cliente de tabla ya resuelto (self.supabase.table(table_name)) en vez de
+        # volver a llamar self.supabase.table() — una sola llamada por fila, reutilizada
+        # tambien para el upsert.
+        query = table_client.select("estado_revision")
+        for field in on_conflict.split(","):
+            query = query.eq(field, payload.get(field))
+        rows = query.execute().data or []
+        return rows[0]["estado_revision"] if rows else None
+
     def resolve_upsert_conflict_target(self, table_name: str, payload: dict) -> str:
         # INVARIANTE: el conflict target debe coincidir con una restriccion UNIQUE real
         # en Supabase. EUDR_MONITOREO conflictua sobre su propia Primary Key
@@ -444,13 +459,45 @@ class DriveZipETLPipeline:
 
     def process_layer_rows(
         self, gdf: gpd.GeoDataFrame, table_name: str, org_id: str, photo_map: dict[str, Path]
-    ) -> tuple[list[str], list[str]]:
-        """Hace upsert de cada fila de una capa en su tabla destino; devuelve (ids, fotos_subidas)."""
+    ) -> tuple[list[str], list[str], list[dict]]:
+        """Hace upsert de cada fila de una capa en su tabla destino; devuelve
+        (ids, fotos_subidas, registros_omitidos).
+
+        ADR-012: si un registro ya existe con estado_revision distinto de PENDIENTE
+        (ya fue APROBADO o RECHAZADO por un humano), el upsert se omite POR COMPLETO
+        — ni estado_revision ni ningun otro campo se toca — para que resincronizar un
+        proyecto QField activo no revierta decisiones de revision ya tomadas.
+        """
         inserted_ids = []
         uploaded_photos = []
+        skipped_records = []
 
         for fid, row in gdf.iterrows():
             record_id = str(uuid.uuid4())
+
+            # Payload de sondeo, sin evidencia_foto real: id_monitoreo/ID_Organizacion/fid
+            # no dependen de la foto, asi que alcanza para resolver el identificador y
+            # consultar el estado_revision existente sin gastar una subida de Storage en
+            # un registro que puede terminar omitido por ya estar revisado.
+            probe_payload = self.build_payload_for_table(
+                table_name, row, org_id, fid=fid, record_id=record_id, evidencia_foto=None
+            )
+            on_conflict = self.resolve_upsert_conflict_target(table_name, probe_payload)
+            identifier = probe_payload.get("id_monitoreo") or (
+                f"{probe_payload.get('ID_Organizacion')}/fid={probe_payload.get('fid')}"
+            )
+            table_client = self.supabase.table(table_name)
+            existing_estado = self.fetch_existing_estado_revision(table_client, probe_payload, on_conflict)
+            if existing_estado is not None and existing_estado != "PENDIENTE":
+                print(
+                    f"  [PROTEGIDO] {table_name} {identifier}: estado_revision="
+                    f"'{existing_estado}' (ya revisado) — se omite el upsert, "
+                    f"registro existente queda intacto."
+                )
+                skipped_records.append(
+                    {"table": table_name, "id": identifier, "estado_revision": existing_estado}
+                )
+                continue
 
             storage_path = _UNSET
             if table_name in TABLES_WITH_EVIDENCIA_FOTO:
@@ -472,12 +519,13 @@ class DriveZipETLPipeline:
                 table_name, row, org_id, fid=fid, record_id=record_id, evidencia_foto=storage_path
             )
             # INVARIANTE: upsert (no insert) por clave de negocio/fid — reprocesar el
-            # mismo paquete actualiza los registros existentes en vez de duplicarlos.
-            on_conflict = self.resolve_upsert_conflict_target(table_name, payload)
-            self.supabase.table(table_name).upsert(payload, on_conflict=on_conflict).execute()
+            # mismo paquete actualiza los registros existentes en vez de duplicarlos,
+            # pero solo llega aqui si el registro sigue PENDIENTE o no existia todavia
+            # (ver chequeo de estado_revision arriba — ADR-012).
+            table_client.upsert(payload, on_conflict=on_conflict).execute()
             inserted_ids.append(payload.get("id_monitoreo") or record_id)
 
-        return inserted_ids, uploaded_photos
+        return inserted_ids, uploaded_photos, skipped_records
 
     def process_package(self, zip_path: Path, execute_move: bool = True) -> dict:
         org_id = self.get_org_id_from_path(zip_path)
@@ -499,14 +547,16 @@ class DriveZipETLPipeline:
             inserted_ids = []
             uploaded_photos = []
             records_by_table: dict[str, int] = {}
+            skipped_records: list[dict] = []
 
             for layer_name, table_name in self.classify_layers(geo_path):
                 gdf = self.load_layer(geo_path, layer_name)
-                layer_ids, layer_photos = self.process_layer_rows(
+                layer_ids, layer_photos, layer_skipped = self.process_layer_rows(
                     gdf, table_name, org_id, photo_map
                 )
                 inserted_ids.extend(layer_ids)
                 uploaded_photos.extend(layer_photos)
+                skipped_records.extend(layer_skipped)
                 records_by_table[table_name] = records_by_table.get(table_name, 0) + len(layer_ids)
 
             archive_dest = self.archive_package(zip_path, org_id, execute_move=execute_move)
@@ -516,6 +566,7 @@ class DriveZipETLPipeline:
             "inserted_ids": inserted_ids,
             "uploaded_photos": uploaded_photos,
             "records_by_table": records_by_table,
+            "skipped_records": skipped_records,
             "archive_dest": archive_dest,
         }
 
@@ -533,6 +584,12 @@ class DriveZipETLPipeline:
                 f"Fotos: {len(result['uploaded_photos'])} | "
                 f"Archivado en: {result['archive_dest']}"
             )
+            skipped = result["skipped_records"]
+            if skipped:
+                skipped_detail = ", ".join(
+                    f"{s['table']}:{s['id']}={s['estado_revision']}" for s in skipped
+                )
+                print(f"  -> Omitidos por ya revisados (ADR-012): {len(skipped)} ({skipped_detail})")
             results.append(result)
         return results
 
