@@ -8,6 +8,9 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import {
   fetchPendingRecords,
   fetchComparisonGeometries,
@@ -16,6 +19,12 @@ import {
   EUDRQcError,
   PENDING_STATE,
 } from '../lib/eudrQcActions.js'
+
+const SOURCE_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'lib/eudrQcActions.js'
+)
 
 /**
  * Mock encadenable que soporta tanto lectura (`.select().eq()`, resuelve
@@ -113,7 +122,7 @@ test('fetchPendingRecords etiqueta poligonos/puntos, deriva clasificacion desde 
   assert.equal(record.id_origen, '13')
 })
 
-test('fetchPendingRecords deriva id_origen = id_monitoreo para EUDR_MONITOREO en puntos (gap real: la vista no trae id_origen ahí)', async () => {
+test('fetchPendingRecords resuelve id_origen = id_monitoreo para EUDR_MONITOREO en puntos aunque la fila no lo traiga explícito (fallback defensivo en tagRecords)', async () => {
   const supabase = makeFakeSupabase({
     vw_monitoreo_poligonos: [],
     vw_monitoreo_puntos: [
@@ -134,7 +143,29 @@ test('fetchPendingRecords deriva id_origen = id_monitoreo para EUDR_MONITOREO en
   assert.equal(record.clasificacion, null) // EUDR_MONITOREO nunca tiene clasificación de campo
 })
 
-test('fetchPendingRecords deja id_origen undefined para EUDR_INSTALACIONES en puntos (gap real, hasta aplicar la migración)', async () => {
+test('fetchPendingRecords resuelve id_origen real para EUDR_INSTALACIONES en puntos (ADR-015: PUNTOS_COLUMNS ahora lo pide — antes quedaba undefined pese a que la vista ya lo exponía)', async () => {
+  const supabase = makeFakeSupabase({
+    vw_monitoreo_poligonos: [],
+    vw_monitoreo_puntos: [
+      {
+        tabla_origen: 'EUDR_INSTALACIONES',
+        registro_id: '4',
+        id_origen: '4',
+        id_monitoreo: 'uuid-derivado',
+        ID_Organizacion: 'COOP-JS',
+        ID_Parcela_Fija: 'COOP-JS-002',
+        tipo_infra: 'BENEFICIO',
+        estado_revision: PENDING_STATE,
+      },
+    ],
+    PADRON_PARCELAS: [],
+  })
+
+  const [record] = await fetchPendingRecords(supabase)
+  assert.equal(record.id_origen, '4')
+})
+
+test('fetchPendingRecords deja id_origen undefined para EUDR_INSTALACIONES si la fila realmente no lo trae (defensa en profundidad, no un gap conocido — ver ADR-015)', async () => {
   const supabase = makeFakeSupabase({
     vw_monitoreo_poligonos: [],
     vw_monitoreo_puntos: [
@@ -248,12 +279,15 @@ test('approveRecord lanza EUDRQcError si 0 filas fueron afectadas (registro ya n
   await assert.rejects(() => approveRecord(supabase, baseRecord(), 'COOP-JS'), EUDRQcError)
 })
 
-test('approveRecord rechaza un registro EUDR_INSTALACIONES sin id_origen con un mensaje claro (gap de migración), sin intentar el UPDATE', async () => {
+test('approveRecord rechaza un registro EUDR_INSTALACIONES sin id_origen con un mensaje claro que describe el síntoma, sin culpar a una migración específica (ver ADR-015 -- ese mensaje viejo apuntaba a una causa equivocada), sin intentar el UPDATE', async () => {
   const supabase = makeFakeSupabase({ EUDR_INSTALACIONES: [{ id: 4, ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }] })
   const record = baseRecord({ tabla_origen: 'EUDR_INSTALACIONES', id_origen: undefined })
   await assert.rejects(
     () => approveRecord(supabase, record, 'COOP-JS'),
-    (err) => err instanceof EUDRQcError && err.message.includes('20260819_fix_vw_monitoreo_puntos_id_origen.sql')
+    (err) =>
+      err instanceof EUDRQcError &&
+      err.message.includes('id_origen ausente') &&
+      !err.message.includes('20260819_fix_vw_monitoreo_puntos_id_origen.sql')
   )
 })
 
@@ -505,4 +539,29 @@ test('fetchComparisonGeometries parsea geom si llega como string JSON (mismo cas
     'COOP-JS'
   )
   assert.equal(result[0].geometry.type, 'Point')
+})
+
+// ---------------------------------------------------------------
+// ADR-015: PUNTOS_COLUMNS debe pedir id_origen a PostgREST -- si algún día
+// se vuelve a quitar sin querer, este test de inspección de fuente lo
+// atrapa aunque los mocks de arriba no lo hicieran.
+// ---------------------------------------------------------------
+
+test('PUNTOS_COLUMNS incluye id_origen (regresión real: la vista lo exponía desde el 19 de agosto, pero esta lista nunca lo pedía)', () => {
+  const source = readFileSync(SOURCE_PATH, 'utf8')
+  const match = source.match(/const PUNTOS_COLUMNS =\s*\n((?:\s*'.*?'\s*\+?\s*\n?)+)/)
+  assert.ok(match, 'PUNTOS_COLUMNS debería existir')
+  const columnList = match[1].replace(/[\s'+]/g, '')
+  assert.match(columnList, /(^|,)id_origen(,|$)/)
+})
+
+test('el mensaje de id_origen ausente ya no culpa a una migración específica (ADR-015: esa versión apuntaba a una causa equivocada)', () => {
+  const source = readFileSync(SOURCE_PATH, 'utf8')
+  const throwBlock = source.match(/if \(!record\.id_origen\) \{[\s\S]*?throw new EUDRQcError\(\s*\n[\s\S]*?\)\s*\n\s*\}/)
+  assert.ok(throwBlock, 'el bloque que lanza el error de id_origen ausente debería existir')
+  assert.ok(
+    !throwBlock[0].includes('20260819_fix_vw_monitoreo_puntos_id_origen.sql'),
+    'el TEXTO DEL MENSAJE no debe volver a nombrar esa migración específica (la referencia histórica en comentarios de cabecera sí puede seguir)'
+  )
+  assert.match(throwBlock[0], /id_origen ausente/)
 })

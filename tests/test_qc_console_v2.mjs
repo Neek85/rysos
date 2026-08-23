@@ -196,12 +196,12 @@ test('updateRecordGeometry lanza EUDRQcError si el registro ya no está PENDIENT
   await assert.rejects(() => updateRecordGeometry(supabase, baseRecord(), geometry, 'COOP-JS'), EUDRQcError)
 })
 
-test('updateRecordGeometry respeta el gap real de EUDR_INSTALACIONES sin id_origen (no intenta el UPDATE)', async () => {
+test('updateRecordGeometry rechaza sin id_origen (no intenta el UPDATE) — ver ADR-015: no es un gap de migración, es defensa en profundidad', async () => {
   const supabase = makeFakeSupabase({ EUDR_INSTALACIONES: [{ id: 4, ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }] })
   const record = baseRecord({ tabla_origen: 'EUDR_INSTALACIONES', id_origen: undefined })
   const geometry = { type: 'Point', coordinates: [-77.5, -6.5] }
   await assert.rejects(
     () => updateRecordGeometry(supabase, record, geometry, 'COOP-JS'),
-    (err) => err instanceof EUDRQcError && err.message.includes('20260819_fix_vw_monitoreo_puntos_id_origen.sql')
+    (err) => err instanceof EUDRQcError && err.message.includes('id_origen ausente')
   )
 })
