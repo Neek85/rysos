@@ -2,7 +2,7 @@
 
 *Para cualquiera que quiera entender qué pasó en este tramo de trabajo sin
 necesidad de leer código. Cubre desde el commit `0d003e8` hasta el
-`2ac75d6`.*
+`6611451`.*
 
 > **Nota sobre el número de commits:** el pedido original de esta bitácora
 > hablaba de "9 commits". Revisando el historial real, el tramo de
@@ -20,6 +20,17 @@ necesidad de leer código. Cubre desde el commit `0d003e8` hasta el
 > completa, y un bug crítico encontrado y corregido el mismo día. La
 > sección 8 ("Qué queda pendiente") y la tabla técnica de la sección 9
 > también se actualizaron para reflejar esto.
+
+> **Actualización (mismo 23 de agosto, más tarde todavía):** se agregó la
+> sección 8 ("El incidente de las aprobaciones que se revertían solas — y
+> dos problemas más que destapó"), que corrió "Qué queda pendiente" y la
+> tabla técnica un lugar más hacia abajo (ahora 9 y 10). Cubre 4 commits
+> nuevos (`4de126d`, `a611779`, `9ad7aa2`, `6611451`) que siguieron
+> directamente después de `2ac75d6`: una pregunta simple sobre polígonos
+> duplicados al sincronizar Drive terminó destapando tres problemas reales
+> distintos — aprobaciones que se revertían solas sin dejar rastro, una
+> tabla de auditoría que existía solo en el papel, y códigos de parcela
+> repetidos en lugares físicamente distintos.
 
 ---
 
@@ -300,7 +311,89 @@ no al aprobar cada subdivisión suelta una por una. Dónde exactamente se
 debe aplicar ese control real todavía no se decidió — queda como una
 tarea futura separada.
 
-## 8. Qué queda pendiente
+## 8. El incidente de las aprobaciones que se revertían solas — y dos problemas más que destapó
+
+Este tramo arrancó de una pregunta simple: ¿podía estar generando
+polígonos duplicados la sincronización con Google Drive? Investigarla con
+cuidado, en vez de responderla rápido, destapó tres problemas reales
+distintos, cada uno con su propia causa y su propia corrección.
+
+### 8.1 Aprobaciones y rechazos que se revertían solos, sin dejar ningún rastro
+
+Se confirmó, con evidencia real (no solo una sospecha): 3 registros que un
+revisor humano ya había marcado como "Aprobado" volvieron por su cuenta a
+"Pendiente de revisión" — como si nunca los hubiera revisado nadie, sin
+ningún aviso ni rastro de que había pasado.
+
+**Por qué pasaba, en simple:** cuando un técnico de campo sigue trabajando
+sobre el mismo proyecto en QField (la app que usa para capturar datos en el
+celular) y ese proyecto se vuelve a sincronizar, el sistema no solo trae los
+registros nuevos que agregó — trae **todos** los registros del proyecto de
+nuevo, incluidos los que ya se habían subido y revisado antes. El sistema
+reconoce que un registro "ya existe" (por su parcela y fecha) y lo actualiza
+en vez de duplicarlo — hasta ahí, correcto. El problema es que, al
+actualizarlo, siempre volvía a escribir "Pendiente de revisión" sin
+preguntar primero si un humano ya lo había aprobado o rechazado — pisando
+esa decisión en silencio, sin que nadie se enterara.
+
+**La corrección:** ahora, antes de actualizar cualquier registro durante una
+sincronización, el sistema primero revisa si ese registro ya fue revisado
+por una persona. Si ya tiene una decisión (Aprobado o Rechazado), lo deja
+completamente intacto — ni el estado, ni la geometría, ni ningún otro dato
+se toca — y el registro de la sincronización deja constancia explícita de
+qué se protegió y por qué. Solo los registros que siguen genuinamente
+pendientes (o que son nuevos de verdad) se actualizan con normalidad, como
+siempre.
+
+### 8.2 Una tabla de auditoría que existía en el papel, pero nunca en la base real
+
+El sistema estaba diseñado, desde antes de este tramo, para dejar un
+registro permanente de cada decisión real de la Consola QC (quién aprobó
+qué, cuándo, por qué se rechazó algo) — pensado justamente para casos como
+el del punto anterior, donde sin ese registro es imposible saber qué pasó.
+El código para conectar esa auditoría ya estaba escrito y probado, pero la
+tabla en sí, la que debía guardar esos datos, **nunca se había creado
+realmente** en la base de datos — la documentación decía que sí estaba
+creada, pero no era cierto.
+
+Se aplicó la creación real de esa tabla, y se confirmó en vivo que la
+conexión que ya existía funciona: aprobar o rechazar un registro real desde
+la Consola QC ahora sí deja una fila permanente, con el contexto técnico de
+la decisión (nunca datos personales de nadie). Se probó, además, que esa
+tabla es imborrable de verdad: ni siquiera con el nivel de acceso más alto
+que tiene el propio sistema se puede modificar o borrar una fila ya
+escrita — un intento directo de cambiarla o borrarla fue rechazado por la
+base de datos misma, no solo por una regla del código que alguien podría
+saltarse.
+
+### 8.3 El mismo código de parcela apuntando a dos lugares distintos
+
+Se confirmó, como regla de negocio (no una suposición del sistema): un
+código de parcela tiene que corresponder siempre a un único lugar físico —
+nunca a dos ubicaciones distintas. Investigando cuánto se cumplía esto en
+la práctica, se encontraron 3 casos reales donde no se cumplía: el mismo
+código de parcela aparecía en dos ubicaciones separadas por distancias de
+entre 768 metros y 3.5 kilómetros — demasiado lejos para tratarse del mismo
+lugar capturado dos veces con un GPS de mano.
+
+Se agregó una detección que, al abrir uno de estos registros en conflicto
+en la Consola QC, bloquea los botones de Aprobar y Rechazar hasta que
+alguien resuelva manualmente cuál de los dos registros tiene el código
+equivocado — mostrando en pantalla la distancia real y cuál es el otro
+registro involucrado. Esta protección se armó dos veces, a propósito: una
+vez en la pantalla (el botón directamente no se puede apretar) y otra vez
+del lado del servidor (aunque alguien intentara forzar la acción saltándose
+el botón, por otro camino técnico, el sistema la rechaza igual) — para que
+el bloqueo no dependa únicamente de que ese botón exista.
+
+La distancia usada para decidir "esto es un conflicto real" (100 metros) es
+provisoria: se documentó con honestidad que, entre los datos reales
+disponibles hoy, no hay todavía ningún ejemplo de "mismo lugar, con el
+margen de error normal de un GPS de campo" para calibrar ese número con
+precisión — los 3 casos encontrados son todos, sin duda, "otro lugar". Se
+ajustará ese número si en el futuro aparece un caso real que lo contradiga.
+
+## 9. Qué queda pendiente
 
 **a) Dónde debe exigirse la cobertura completa de verdad — no
 decidido.** Como se explica en el punto 7: la validación de cobertura ya
@@ -308,6 +401,16 @@ existe y funciona, pero hoy es solo informativa. Falta decidir en qué
 paso del proceso (probablemente la exportación DDS) se debe convertir en
 un control real que si bloquee, sin que eso choque con el trabajo diario
 de aprobar subdivisiones sueltas.
+
+**b) Cómo resuelve una persona, en la práctica, un conflicto de código de
+parcela — no construido todavía.** Como se explica en el punto 8.3: hoy,
+cuando el sistema detecta que un código de parcela aparece en dos lugares
+distintos, el registro queda bloqueado (no se puede aprobar ni rechazar)
+pero no existe ningún camino en pantalla para resolver el conflicto —
+alguien tiene que corregirlo a mano, directamente en la base de datos.
+Falta diseñar un flujo real (por ejemplo, renombrar el código equivocado, o
+marcar uno de los dos registros como un error de captura) para que ese
+conflicto se pueda resolver desde la propia Consola QC.
 
 > *Resuelto de la vez pasada:* la pregunta sobre si `PADRON_PARCELAS.totalh`
 > era una referencia confiable — el pedido original de esta bitácora
@@ -348,7 +451,7 @@ evaluar antes de ese paso.
 
 ---
 
-## 9. Para quien quiera el detalle técnico
+## 10. Para quien quiera el detalle técnico
 
 | Tema | Documento técnico | Commit(s) |
 |---|---|---|
@@ -361,8 +464,12 @@ evaluar antes de ese paso.
 | Regla de reinicio periódico del servidor de desarrollo (`CLAUDE.md`) | — (sin ADR, cambio de documentación de proceso) | `affdc2a` |
 | Vínculo real entre Uso de Suelo y su Monitoreo padre (reemplaza el heurístico de Fase A para este propósito) | [ADR-010](../adr/ADR-010-vinculo-real-uso-suelo-monitoreo.md) | `1ec2c2d` |
 | Validación de cobertura completa, investigación de `totalh`, y el bug crítico del bloqueo circular (encontrado y corregido) | [ADR-011](../adr/ADR-011-cobertura-completa-uso-suelo.md) | `5c6d4f9`, `2ac75d6` |
+| El ETL protege registros ya revisados (Aprobado/Rechazado) de resincronizaciones que los revertían en silencio | [ADR-012](../adr/ADR-012-eudr-etl-protege-registros-revisados.md) | `4de126d` |
+| `audit_logs` aplicada de verdad y conectada a Aprobar/Rechazar (corrección de premisa: la conexión ya existía, la tabla no) | [ADR-013](../adr/ADR-013-audit-logs-conectado-a-consola-qc.md) | `a611779` |
+| Un código de parcela debe corresponder a un único lugar físico — detección, bloqueo en pantalla, y guard del lado del servidor | [ADR-014](../adr/ADR-014-codigo-parcela-unico-por-ubicacion.md) | `9ad7aa2`, `6611451` |
 
 **Commits del tramo completo, en orden:** `0d003e8` → `111727b` →
 `a62fce6` → `c56f18f` → `4a910a4` → `b212424` → `a6e817c` → `2391859` →
 `488c993` → `7eb744e` → `ce4053f` → `affdc2a` → `cba6474` → `d2bcebd` →
-`f099a75` → `1ec2c2d` → `5c6d4f9` → `2ac75d6`.
+`f099a75` → `1ec2c2d` → `5c6d4f9` → `2ac75d6` → `4de126d` → `a611779` →
+`9ad7aa2` → `6611451`.
