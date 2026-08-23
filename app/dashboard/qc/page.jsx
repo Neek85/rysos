@@ -233,6 +233,14 @@ export default function QcConsolePage() {
   // ya cubiertos por 8 tests reales tal como están). `detalles` incluye
   // el último resultado de "Ejecutar Test Espacial" para este registro si
   // existe (nunca PII — solo topología/solapamiento/deforestación).
+  //
+  // `origen: 'consola_qc_web'` (ADR-013): no hay sesión de Supabase Auth
+  // en este frontend (anon key sin sesión, ver el gotcha de RLS en
+  // CLAUDE.md), así que no existe un "quién" real (usuario/sesión) para
+  // registrar — este campo deja constancia de que la decisión vino de la
+  // Consola QC WebGIS, a diferencia de scripts/qgis_qc_actions.py (el otro
+  // flujo real que escribe estado_revision, que hoy no inserta en
+  // audit_logs — fuera de alcance de ADR-013).
   async function logQcDecisionAudit(record, accion, organizationId, motivoTexto) {
     if (!organizationId) return
     try {
@@ -245,6 +253,7 @@ export default function QcConsolePage() {
           tabla_origen: record.tabla_origen,
           entidad_id: record.id_origen,
           detalles: {
+            origen: 'consola_qc_web',
             validacion: validationResults[record.key] || null,
             motivo: accion === 'RECHAZADO' ? motivoTexto : null,
           },
