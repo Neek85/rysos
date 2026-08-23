@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import { LAYER_LABELS, EDITABLE_FIELDS } from '@/lib/eudrQcActions'
 import { describeDeforestationBadge } from '@/lib/qcTopologyValidation'
-import { calcularPctCobertura, buildBloqueoMensaje } from '@/lib/qcCoberturaUsoSuelo'
+import { calcularPctCobertura, buildCoberturaAvisoMensaje } from '@/lib/qcCoberturaUsoSuelo'
 
 // Mismo bucket/TTL que components/gis/MapDashboard.jsx::loadPhoto — el
 // bucket evidencias_eudr es privado, no hay URL pública directa. No existía
@@ -133,9 +133,10 @@ export default function QcDetailEditor({
 
   // Cobertura de la parcela (ver ADR-011): se busca automáticamente al
   // seleccionar un registro de Uso de Suelo (no detrás de un botón manual
-  // como "Validar Topología") — el botón Aprobar necesita saber
-  // bloquea_aprobacion ANTES de que el revisor pueda hacer click, no
-  // depender de que alguien acuerde de revisar la cobertura primero.
+  // como "Validar Topología") — para que el dato ya esté disponible apenas
+  // se abre el registro, sin depender de que alguien decida revisarlo por
+  // su cuenta. Es puramente informativo (nunca bloquea "Aprobar" — ver
+  // ADR-011, corrección del círculo imposible original).
   // `key={record.key}` en el padre ya remonta este componente al cambiar
   // de selección, así que no hace falta un guard de "cancelled" adicional
   // (mismo criterio que el efecto de la foto, arriba).
@@ -374,11 +375,18 @@ export default function QcDetailEditor({
                 />
               </div>
 
-              {/* El mensaje de bloqueo en sí se muestra una sola vez, junto
-                  a los botones Aprobar/Rechazar (ver abajo) — acá solo el
-                  resumen numérico. Sub-sección deliberadamente de menor énfasis (fondo blanco
+              {/* Aviso informativo, nunca bloqueante — ver ADR-011 sección
+                  "Corrección: de bloqueante a informativo". Mismo estilo
+                  ámbar que la alerta de "Solapado X%" de Fase A. */}
+              {coberturaResult.hueco_cobertura && (
+                <p className="rounded bg-amber-50 p-2 text-[11px] text-amber-800">
+                  ⚠ {buildCoberturaAvisoMensaje(coberturaResult)}
+                </p>
+              )}
+
+              {/* Sub-sección deliberadamente de menor énfasis (fondo blanco
                   liso, texto gris, sin badge de color) — totalh nunca
-                  participa en la decisión de bloqueo, ver ADR-011. */}
+                  participa en el cálculo de hueco_cobertura, ver ADR-011. */}
               <div className="rounded border border-gray-100 bg-white p-2">
                 <p className="text-[10px] font-medium text-gray-400">
                   Dato del Padrón — puede no ser confiable, ver ADR-011
@@ -408,18 +416,11 @@ export default function QcDetailEditor({
         rows={2}
       />
 
-      {coberturaResult?.bloquea_aprobacion && (
-        <p className="rounded bg-red-50 p-2 text-[11px] text-red-700">
-          🚫 No se puede aprobar: {buildBloqueoMensaje(coberturaResult)}
-        </p>
-      )}
-
       <div className="flex gap-2">
         <button
           type="button"
           onClick={onApprove}
-          disabled={busy || coberturaResult?.bloquea_aprobacion}
-          title={coberturaResult?.bloquea_aprobacion ? buildBloqueoMensaje(coberturaResult) : undefined}
+          disabled={busy}
           className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? 'Procesando…' : '✓ Aprobar'}

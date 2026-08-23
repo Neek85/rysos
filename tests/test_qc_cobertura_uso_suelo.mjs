@@ -1,6 +1,8 @@
-// Fase B — cobertura completa de subdivisiones de Uso de Suelo, con
-// bloqueo de aprobación cuando corresponda — ver
-// docs/adr/ADR-011-cobertura-completa-uso-suelo.md.
+// Fase B — cobertura completa de subdivisiones de Uso de Suelo. YA NO
+// bloquea la aprobación (corregido tras un círculo imposible real
+// confirmado en vivo — ver ADR-011, sección "Corrección: de bloqueante a
+// informativo") — es puramente informativo, mismo patrón que "Solapado
+// X%" de Fase A.
 //
 // La migración/RPC no están aplicadas todavía en la instancia real al
 // momento de escribir estos tests (aplicación manual en Supabase Studio,
@@ -18,7 +20,7 @@ import {
   validateCoberturaRequest,
   buildSinVinculoResult,
   calcularPctCobertura,
-  buildBloqueoMensaje,
+  buildCoberturaAvisoMensaje,
   SIN_VINCULO_MENSAJE,
 } from '../lib/qcCoberturaUsoSuelo.js'
 
@@ -66,21 +68,21 @@ test('calcularPctCobertura devuelve null sin vínculo o sin área válida', () =
   assert.equal(calcularPctCobertura(null), null)
 })
 
-test('buildBloqueoMensaje NUNCA menciona totalh (no participa en la decisión, ver ADR-011)', () => {
-  const mensaje = buildBloqueoMensaje({
-    bloquea_aprobacion: true,
+test('buildCoberturaAvisoMensaje NUNCA menciona totalh (no participa en el cálculo de hueco_cobertura, ver ADR-011)', () => {
+  const mensaje = buildCoberturaAvisoMensaje({
+    hueco_cobertura: true,
     area_monitoreo_ha: 24.6072,
     suma_uso_suelo_aprobado_ha: 15.0443,
     totalh_padron_ha: 2.25,
     divergencia_totalh_pct: 90.86,
   })
   assert.ok(mensaje, 'debería generar un mensaje')
-  assert.ok(!/totalh/i.test(mensaje), 'el mensaje de bloqueo no debe mencionar totalh')
-  assert.match(mensaje, /perímetro de Monitoreo/)
+  assert.ok(!/totalh/i.test(mensaje), 'el aviso de cobertura no debe mencionar totalh')
+  assert.match(mensaje, /Cobertura parcial/)
 })
 
-test('buildBloqueoMensaje devuelve null si no bloquea', () => {
-  assert.equal(buildBloqueoMensaje({ bloquea_aprobacion: false }), null)
+test('buildCoberturaAvisoMensaje devuelve null si no hay hueco', () => {
+  assert.equal(buildCoberturaAvisoMensaje({ hueco_cobertura: false }), null)
 })
 
 // ---------------------------------------------------------------
@@ -173,11 +175,21 @@ test('la cobertura se busca automáticamente (no detrás de un botón manual) al
   )
 })
 
-test('el botón Aprobar se deshabilita cuando bloquea_aprobacion es true', () => {
+// ver ADR-011, sección "Corrección: de bloqueante a informativo" — el
+// bloqueo original creaba un círculo imposible (confirmado en vivo con 3
+// registros/parcelas reales, siempre "Subdivisiones aprobadas: 0.00 ha"):
+// el propio registro en revisión nunca cuenta en su propia suma hasta
+// DESPUÉS de aprobarse, así que el último registro necesario para
+// completar una parcela nunca podía pasar su propio candado.
+test('el botón Aprobar YA NO se deshabilita por cobertura — solo por busy, igual que cualquier otro registro', () => {
   const source = read(DETAIL_EDITOR_PATH)
   const approveButton = source.match(/onClick=\{onApprove\}[\s\S]*?<\/button>/)
   assert.ok(approveButton, 'el botón Aprobar debería existir')
-  assert.match(approveButton[0], /disabled=\{busy \|\| coberturaResult\?\.bloquea_aprobacion\}/)
+  assert.match(approveButton[0], /disabled=\{busy\}/)
+  assert.ok(
+    !/coberturaResult/.test(approveButton[0]),
+    'Aprobar no debe depender de coberturaResult en absoluto — el círculo imposible de ADR-011 ya no debe existir'
+  )
 })
 
 test('el botón Rechazar NUNCA se deshabilita por cobertura (solo por busy/motivo vacío)', () => {
@@ -188,11 +200,14 @@ test('el botón Rechazar NUNCA se deshabilita por cobertura (solo por busy/motiv
   assert.ok(!/coberturaResult/.test(rejectButton[0]), 'Rechazar no debe depender de coberturaResult en absoluto')
 })
 
-test('el mensaje inline de bloqueo (junto a los botones) nunca menciona totalh', () => {
+test('el aviso de cobertura parcial es informativo (ámbar), nunca bloqueante (rojo/"No se puede aprobar")', () => {
   const source = read(DETAIL_EDITOR_PATH)
-  const bloque = source.match(/\{coberturaResult\?\.bloquea_aprobacion && \([\s\S]*?No se puede aprobar[\s\S]*?\)\}/)
-  assert.ok(bloque, 'el bloque de mensaje inline de bloqueo debería existir')
-  assert.ok(!/totalh/i.test(bloque[0]), 'el mensaje inline de bloqueo no debe mencionar totalh')
+  assert.ok(!/No se puede aprobar/.test(source), 'no debería quedar ningún mensaje de bloqueo')
+  assert.ok(!/bloquea_aprobacion/.test(source), 'el frontend ya no debe leer bloquea_aprobacion en absoluto')
+  const bloque = source.match(/\{coberturaResult\.hueco_cobertura && \([\s\S]*?buildCoberturaAvisoMensaje[\s\S]*?\)\}/)
+  assert.ok(bloque, 'el bloque de aviso informativo de cobertura debería existir')
+  assert.match(bloque[0], /bg-amber-50 p-2 text-\[11px\] text-amber-800/, 'mismo estilo ámbar que el aviso de "Solapado X%" de Fase A')
+  assert.ok(!/totalh/i.test(bloque[0]), 'el aviso de cobertura no debe mencionar totalh')
 })
 
 test('la sub-sección de totalh está etiquetada explícitamente como posiblemente no confiable, con referencia a ADR-011', () => {
@@ -216,4 +231,13 @@ test('el ADR-011 documenta los 3 escenarios de verificación en vivo con resulta
   assert.match(source, /"bloquea_aprobacion": true, "area_monitoreo_ha": 24\.6072/)
   assert.match(source, /"bloquea_aprobacion": false, "area_monitoreo_ha": 492\.068/)
   assert.match(source, /"bloquea_aprobacion": true, "area_monitoreo_ha": 491\.7018/)
+})
+
+test('el ADR-011 documenta la corrección: círculo imposible real, decisión de pasar a informativo, y la investigación futura pendiente sobre dónde aplicar el control real', () => {
+  const source = read('docs/adr/ADR-011-cobertura-completa-uso-suelo.md')
+  assert.match(source, /círculo imposible/i)
+  assert.match(source, /informativo/i)
+  assert.match(source, /fn_cobertura_uso_suelo_parcela/)
+  assert.ok(!/DROP FUNCTION|CREATE OR REPLACE FUNCTION/.test(source), 'la RPC no debería haberse tocado — el ADR documenta que sigue igual')
+  assert.match(source, /no\s+decidid[oa]\s+en\s+esta\s+tarea/i)
 })

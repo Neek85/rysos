@@ -1,9 +1,14 @@
 # ADR-011 — Cobertura completa de subdivisiones de Uso de Suelo (Fase B)
 
-- **Estado:** Aceptado y verificado en vivo
-- **Fecha:** 2026-08-23
+- **Estado:** Aceptado, verificado en vivo, y **corregido el mismo día**
+  (ver sección "Corrección: de bloqueante a informativo" al final — el
+  diseño original de bloqueo tenía un círculo imposible real, confirmado
+  en vivo con 3 registros/parcelas reales).
+- **Fecha:** 2026-08-23 (corrección: mismo día)
 - **Migración:** `supabase/migrations/20260823_155621_fn_cobertura_uso_suelo_parcela.sql`
-  (aplicada por el usuario en Supabase Studio)
+  (aplicada por el usuario en Supabase Studio — **sin cambios en la
+  corrección**, sigue devolviendo `hueco_cobertura`/`bloquea_aprobacion`
+  tal cual; solo cambió cómo el frontend los interpreta)
 - **Código:** `app/api/qc/cobertura-uso-suelo/route.js`,
   `lib/qcCoberturaUsoSuelo.js`,
   `app/dashboard/qc/components/QcDetailEditor.jsx`
@@ -11,7 +16,7 @@
   `PADRON_PARCELAS.totalh`, sin ADR propio — resultados resumidos abajo)
 - **Tests:** `tests/test_qc_cobertura_uso_suelo.mjs`
 
-## Reglas de negocio (confirmadas, no reinterpretadas)
+## Reglas de negocio (confirmadas, no reinterpretadas — la RPC no cambió)
 
 1. Para una parcela (identificada por su `EUDR_MONITOREO`):
    - `area_monitoreo_ha`: área real del perímetro (`fn_calcular_area_ha`).
@@ -100,25 +105,29 @@ contra el servidor de desarrollo, y la respuesta fue exactamente:
 `bloquea_aprobacion: false` explícito — nunca `true` por defecto ni por
 ausencia de dato.
 
-## Frontend
+## Frontend (estado actual, tras la corrección de más abajo)
 
-Nueva sección "Cobertura de la parcela" en `QcDetailEditor.jsx`, visible
-solo para registros `EUDR_USO_SUELO`, **buscada automáticamente al
+Sección "Cobertura de la parcela" en `QcDetailEditor.jsx`, visible solo
+para registros `EUDR_USO_SUELO`, **buscada automáticamente al
 seleccionar el registro** (no detrás de un botón manual como "Validar
-Topología") — el botón Aprobar necesita conocer `bloquea_aprobacion`
-antes de que el revisor pueda hacer click, no depender de que alguien
-decida revisar la cobertura primero. Muestra área de Monitoreo, suma de
-subdivisiones aprobadas, badge de % de cobertura, y — en una sub-sección
-visualmente separada (fondo blanco liso, texto gris, sin badge de color,
-menor énfasis que el resto del panel) — el dato de `totalh` con su
-etiqueta "Dato del Padrón — puede no ser confiable, ver ADR-011" y el %
-de divergencia si está disponible.
+Topología") — para que el dato ya esté disponible apenas el revisor abre
+el registro, sin depender de que alguien decida revisar la cobertura
+primero. Muestra área de Monitoreo, suma de subdivisiones aprobadas,
+badge de % de cobertura, y — en una sub-sección visualmente separada
+(fondo blanco liso, texto gris, sin badge de color, menor énfasis que el
+resto del panel) — el dato de `totalh` con su etiqueta "Dato del Padrón —
+puede no ser confiable, ver ADR-011" y el % de divergencia si está
+disponible.
 
-El botón "Aprobar" se deshabilita (`disabled={busy ||
-coberturaResult?.bloquea_aprobacion}`) con un mensaje inline en términos
-de área de Monitoreo — **nunca menciona `totalh`**, porque no participó
-en la decisión. El botón "Rechazar" no depende de `coberturaResult` en
-absoluto — nunca se bloquea por esto.
+Cuando `hueco_cobertura = true`, se muestra un aviso **informativo**
+(fondo ámbar, `bg-amber-50 text-amber-800` — mismo estilo que la alerta
+de "Solapado X%" de Fase A): "Cobertura parcial: X% de la parcela
+clasificado — revisá si faltan subdivisiones por registrar antes de
+considerar esta parcela completa." **Nunca menciona `totalh`**, porque no
+participa en `hueco_cobertura`. El botón "Aprobar" **ya no depende de
+`coberturaResult` en absoluto** (`disabled={busy}`, igual que cualquier
+otro registro) — ver la corrección abajo. El botón "Rechazar" tampoco
+dependió nunca de esto.
 
 ## Bug real encontrado probando en el navegador (no solo con curl)
 
@@ -190,3 +199,88 @@ borraron por `id`/`id_monitoreo` inmediatamente después de cada prueba —
 conteos verificados en 2→0 (Monitoreo), 2→0 y luego 1→0 (Uso de Suelo),
 sin nada residual. Los 2 registros reales usados en el escenario (a)
 quedaron confirmados de vuelta en su estado original (`PENDIENTE`).
+
+## Corrección (mismo día): de bloqueante a informativo
+
+### El hallazgo real: un círculo imposible
+
+Tras dar la tarea original por terminada, el usuario reportó — con
+capturas reales de 3 registros distintos, 2 parcelas distintas
+(`COOP-JS-001` vía `id=18`, `COOP-JS-003` vía `id=19` e `id=20`) — que
+**los 3 mostraban "Subdivisiones aprobadas: 0.00 ha" y quedaban
+bloqueados sin excepción**, sin importar la parcela.
+
+La causa, confirmada analíticamente contra la SQL real de
+`fn_cobertura_uso_suelo_parcela` (sin necesidad de tocar la base para
+verificarlo — la lectura del código ya lo demuestra):
+
+```sql
+SELECT COALESCE(SUM(area_calculada_ha), 0) INTO v_suma_uso_suelo_ha
+FROM public."EUDR_USO_SUELO"
+WHERE id_parcela = v_qfield_relation_id
+  AND "ID_Organizacion" = v_org
+  AND estado_revision = 'APROBADO';
+```
+
+La suma solo cuenta subdivisiones **ya** `APROBADO` — el registro que se
+está revisando en ese momento, por definición, todavía no lo está. Para
+la ÚLTIMA subdivisión que le falta a una parcela para llegar al 95% de
+cobertura, el candado se evalúa siempre **antes** de que esa aprobación
+cuente, así que nunca puede contarse a sí misma — el candado que decide
+si puede aprobarse nunca puede pasar por su propia aprobación. Esto no
+es un caso raro: es estructural, para **cualquier** parcela con
+**cualquier** cantidad de subdivisiones, la última necesaria para
+completar la cobertura queda bloqueada para siempre.
+
+### Decisión: la cobertura pasa a ser informativa, nunca bloqueante
+
+Mismo patrón ya usado y probado para "Solapado X%" en Fase A: informa,
+nunca bloquea. `fn_cobertura_uso_suelo_parcela` **no se tocó** — sigue
+calculando y devolviendo `hueco_cobertura`/`bloquea_aprobacion` tal cual
+(son datos reales y útiles, y es razonable que se reutilicen cuando se
+investigue el punto de control real — ver pendiente abajo). El cambio es
+enteramente del lado del frontend:
+
+- `lib/qcCoberturaUsoSuelo.js`: `buildBloqueoMensaje` (mensaje rojo, "no
+  se puede aprobar") se reemplazó por `buildCoberturaAvisoMensaje`
+  (mensaje ámbar, "Cobertura parcial: X%... revisá si faltan
+  subdivisiones..."), activado por `hueco_cobertura` en vez de
+  `bloquea_aprobacion` (mismo valor hoy, pero la lectura correcta ya es
+  "hay un hueco que informar", no "hay que bloquear").
+- `QcDetailEditor.jsx`: el botón "Aprobar" volvió a `disabled={busy}` —
+  ya no lee `coberturaResult` en absoluto. El mensaje rojo junto a los
+  botones se eliminó; el aviso ámbar ahora vive dentro del propio panel
+  "Cobertura de la parcela", en el mismo lugar donde vive el aviso de
+  "Solapado X%" dentro de "Validación topológica & EUDR".
+
+### Verificación en vivo tras la corrección
+
+Se repitieron los mismos registros reales que las capturas del usuario:
+
+- **`id=18` (COOP-JS-001, 0% de cobertura):** el botón "Aprobar" está
+  habilitado (mismo estilo que cualquier registro sin problemas), y el
+  panel muestra el aviso ámbar "Cobertura parcial: 0% de la parcela
+  clasificado — revisá si faltan subdivisiones por registrar antes de
+  considerar esta parcela completa." — informativo, no bloquea.
+- **`id=19`/`id=20` (COOP-JS-003, 0% de cobertura cada uno antes de
+  aprobar):** mismo resultado — "Aprobar" habilitado, aviso ámbar visible.
+- **Caso contrario (el círculo roto, en la práctica):** se aprobó
+  realmente `id=18` a través del botón "Aprobar" real (no un fixture) —
+  la aprobación se ejecutó sin bloqueo. Se volvió a calcular la cobertura
+  de `COOP-JS-001` (`id_monitoreo = b2f305a0-...`) y el resultado reflejó
+  la aprobación: `suma_uso_suelo_aprobado_ha` pasó de `0` a `0.9455` (el
+  área de `id=18`), `hueco_cobertura` recalculado sobre el nuevo total —
+  confirma que `fn_cobertura_uso_suelo_parcela` sigue funcionando
+  correctamente para el cálculo informativo; solo cambió el efecto del
+  bloqueo, no el cálculo en sí. `id=18` se revirtió a `PENDIENTE`
+  inmediatamente después para dejar el dataset de referencia como estaba.
+
+## Pendiente — fuera de alcance de esta tarea
+
+**Dónde debe aplicarse el control real de "esta parcela debe estar 100%
+cubierta" antes de considerarla lista para exportar/certificar — no
+decidido en esta tarea.** Probablemente ligado a la exportación DDS ya
+visible en `/dashboard/mapa`, pero esa decisión de diseño queda
+explícitamente para una investigación futura separada, no se decide ni
+se toca acá. `hueco_cobertura`/`bloquea_aprobacion` siguen disponibles en
+`fn_cobertura_uso_suelo_parcela` para cuando esa investigación ocurra.
