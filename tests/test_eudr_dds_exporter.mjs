@@ -1,7 +1,9 @@
-// Pruebas del Exportador TRACES UE (lib/eudrDdsExporter.js) — regla de
-// precisión de coordenadas, regla de área/polígono obligatorio, aislamiento
-// multi-tenant, y agrupación por parcela. Ver specs/traces_eudr_dossier_audit.md
-// (antes de esta tarea, este módulo no tenía cobertura de tests directa).
+// Pruebas del Paquete de Trazabilidad EUDR (lib/eudrDdsExporter.js) — regla
+// de precisión de coordenadas, regla de área/polígono obligatorio,
+// integridad de geometría (LineString/anillo abierto/auto-intersección),
+// aislamiento multi-tenant, agrupación por parcela, proyección al esquema
+// oficial de geolocalización UE, y adjunto de cobertura. Ver
+// docs/adr/ADR-017-formato-real-exportacion-trazabilidad.md.
 //
 // Mismo patrón que tests/test_inspecciones_schema.mjs y
 // tests/test_trace_public.mjs: node:test + node:assert nativos.
@@ -12,8 +14,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildTracesPayload,
+  buildOfficialEuGeoJson,
   resolveOrganizationId,
-  exportTracesDDS,
+  resolveMonitoreoIdsForCobertura,
+  attachCoberturaSummary,
+  downloadTraceabilityPackage,
   EUDRValidationError,
   EUDR_REGULATION,
   EUDR_CUTOFF_DATE,
@@ -29,7 +34,8 @@ function polygonRecord(overrides = {}) {
     parcela_codigo: 'COOP-JS-001',
     parcela_nombre: 'Finca Alta',
     area_ha: 5.123456789,
-    productor: 'Juan Pérez',
+    productor: 'JS-00001',
+    productor_nombre: 'Juan Pérez',
     cumple_eudr: 'SI',
     estado_revision: 'APROBADO',
     geom_geojson: JSON.stringify({
@@ -48,7 +54,8 @@ function pointRecord(overrides = {}) {
     parcela_codigo: 'COOP-JS-002',
     parcela_nombre: 'Finca Pequeña',
     area_ha: 1.5,
-    productor: 'María Gómez',
+    productor: 'JS-00002',
+    productor_nombre: 'María Gómez',
     cumple_eudr: 'SI',
     estado_revision: 'APROBADO',
     geom_geojson: JSON.stringify({ type: 'Point', coordinates: [-77.5, -6.5] }),
@@ -149,16 +156,159 @@ test('EXPORT_FORMATS tiene exactamente las 2 modalidades reales (json/geojson) �
   })
 })
 
-test('exportTracesDDS acepta un tercer parámetro format (default "json") en vez de descargar json+geojson siempre', () => {
-  assert.equal(exportTracesDDS.length, 2) // organizationId requerido, format tiene default (no cuenta en .length)
+test('downloadTraceabilityPackage acepta un payload ya construido + format (default "json")', () => {
+  assert.equal(downloadTraceabilityPackage.length, 1) // format tiene default (no cuenta en .length)
 })
 
-test('exportTracesDDS no está disponible en Node plano (usa document/Blob del DOM) — se documenta, no se prueba aquí', () => {
-  // triggerDownload() dentro de exportTracesDDS depende de `document`/`Blob`/
-  // `URL.createObjectURL`, disponibles solo en el navegador. Probarlo
-  // requeriría jsdom (dependencia nueva, fuera de la decisión "cero
-  // dependencias nuevas" ya confirmada en tareas anteriores) — la lógica de
-  // negocio que sí importa (buildTracesPayload) ya está cubierta arriba;
-  // exportTracesDDS es un wrapper delgado sobre esa función + descarga.
-  assert.equal(typeof exportTracesDDS, 'function')
+test('downloadTraceabilityPackage no está disponible en Node plano (usa document/Blob del DOM) — se documenta, no se prueba aquí', () => {
+  // triggerDownload() dentro de downloadTraceabilityPackage depende de
+  // `document`/`Blob`/`URL.createObjectURL`, disponibles solo en el
+  // navegador. Probarlo requeriría jsdom (dependencia nueva, fuera de la
+  // decisión "cero dependencias nuevas" ya confirmada en tareas anteriores)
+  // — la lógica de negocio que sí importa (buildTracesPayload,
+  // buildOfficialEuGeoJson) ya está cubierta arriba/abajo;
+  // downloadTraceabilityPackage es un wrapper delgado sobre esas funciones +
+  // descarga.
+  assert.equal(typeof downloadTraceabilityPackage, 'function')
+})
+
+test('buildTracesPayload ya NO describe el wrapper como "DUE_DILIGENCE_STATEMENT" (ADR-017 — RYZOS no presenta la DDS directamente)', () => {
+  const payload = buildTracesPayload([polygonRecord()], 'ORG-A')
+  assert.notEqual(payload.declaration_type, 'DUE_DILIGENCE_STATEMENT')
+  assert.equal(typeof payload.declaration_type, 'string')
+})
+
+test('buildTracesPayload rechaza una geometría LineString aunque la parcela sea < 4 ha (esquema oficial EUDR nunca la acepta)', () => {
+  const record = pointRecord({
+    area_ha: 1.5,
+    geom_geojson: JSON.stringify({ type: 'LineString', coordinates: [[-77.5, -6.5], [-77.4, -6.4]] }),
+  })
+  assert.throws(() => buildTracesPayload([record], 'ORG-A'), EUDRValidationError)
+})
+
+test('buildTracesPayload rechaza un polígono con el anillo no cerrado', () => {
+  const record = polygonRecord({
+    geom_geojson: JSON.stringify({
+      type: 'Polygon',
+      coordinates: [[[-77.1, -6.1], [-77.2, -6.1], [-77.2, -6.2], [-77.15, -6.15]]],
+    }),
+  })
+  assert.throws(() => buildTracesPayload([record], 'ORG-A'), EUDRValidationError)
+})
+
+test('buildTracesPayload rechaza un polígono con auto-intersección (forma de "corbata")', () => {
+  const record = polygonRecord({
+    area_ha: 5,
+    geom_geojson: JSON.stringify({
+      type: 'Polygon',
+      coordinates: [[[0, 0], [1, 1], [1, 0], [0, 1], [0, 0]]],
+    }),
+  })
+  assert.throws(() => buildTracesPayload([record], 'ORG-A'), EUDRValidationError)
+})
+
+test('buildOfficialEuGeoJson usa el casing oficial exacto: ProducerName/ProducerCountry/ProductionPlace/Area', () => {
+  const payload = buildTracesPayload([polygonRecord()], 'ORG-A')
+  const official = buildOfficialEuGeoJson(payload)
+  const props = official.features[0].properties
+
+  assert.equal(official.type, 'FeatureCollection')
+  assert.equal(props.ProducerName, 'Juan Pérez')
+  assert.equal(props.ProducerCountry, 'PE')
+  assert.equal(props.ProductionPlace, 'Finca Alta')
+  assert.equal(typeof props.Area, 'number')
+  assert.ok(props.Area > 0)
+  assert.deepEqual(Object.keys(props).sort(), ['Area', 'ProducerCountry', 'ProducerName', 'ProductionPlace'])
+})
+
+test('buildOfficialEuGeoJson nunca envía Area como string, ni siquiera si el dato interno es raro', () => {
+  const payload = buildTracesPayload([polygonRecord()], 'ORG-A')
+  payload.geojson.features[0].properties.hectareas = undefined
+  const official = buildOfficialEuGeoJson(payload)
+  assert.equal(official.features[0].properties.Area, 0)
+  assert.notEqual(typeof official.features[0].properties.Area, 'string')
+})
+
+test('buildOfficialEuGeoJson omite ProducerName/ProductionPlace en vez de inventarlos cuando no hay dato', () => {
+  const payload = buildTracesPayload(
+    [
+      polygonRecord({
+        productor: null,
+        productor_nombre: null,
+        parcela_nombre: null,
+        parcela_codigo: null,
+        ID_Parcela_Fija: 'parcela-x',
+      }),
+    ],
+    'ORG-A'
+  )
+  const official = buildOfficialEuGeoJson(payload)
+  const props = official.features[0].properties
+  assert.equal('ProducerName' in props, false)
+  assert.equal('ProductionPlace' in props, false)
+  assert.equal(props.ProducerCountry, 'PE')
+})
+
+test('buildOfficialEuGeoJson usa productor_nombre (nombre real), NUNCA el código crudo de productor', () => {
+  // Regresión del hallazgo de la verificación en vivo de ADR-017 contra
+  // ORG-TEST-E2E: `productor` resuelve a un código interno (ID_Socio, ej.
+  // "JS-00002"), no a un nombre real — usarlo directamente para
+  // ProducerName habría expuesto códigos internos en el archivo oficial.
+  const payload = buildTracesPayload(
+    [polygonRecord({ productor: 'JS-00099', productor_nombre: 'Nombre Real Del Productor' })],
+    'ORG-A'
+  )
+  const official = buildOfficialEuGeoJson(payload)
+  assert.equal(official.features[0].properties.ProducerName, 'Nombre Real Del Productor')
+  assert.notEqual(official.features[0].properties.ProducerName, 'JS-00099')
+})
+
+test('buildOfficialEuGeoJson omite ProducerName cuando productor_nombre es el sentinel "Socio no asignado" de la vista', () => {
+  const payload = buildTracesPayload(
+    [polygonRecord({ productor_nombre: 'Socio no asignado' })],
+    'ORG-A'
+  )
+  const official = buildOfficialEuGeoJson(payload)
+  assert.equal('ProducerName' in official.features[0].properties, false)
+})
+
+test('resolveMonitoreoIdsForCobertura solo incluye parcelas cuyo límite es un perímetro EUDR_MONITOREO con registro_id', () => {
+  const records = [
+    polygonRecord({ ID_Parcela_Fija: 'p1', registro_id: 'uuid-monitoreo-1' }),
+    { ...polygonRecord({ ID_Parcela_Fija: 'p2' }), tabla_origen: 'EUDR_USO_SUELO', registro_id: 'uuid-usosuelo-1' },
+  ]
+  const lookups = resolveMonitoreoIdsForCobertura(records)
+  assert.equal(lookups.length, 1)
+  assert.equal(lookups[0].monitoreoId, 'uuid-monitoreo-1')
+})
+
+test('attachCoberturaSummary agrega cobertura_uso_suelo como campo nuevo, sin tocar organization_id/total_plots/total_hectares/properties de cada Feature', () => {
+  const records = [polygonRecord({ ID_Parcela_Fija: 'p1', registro_id: 'uuid-monitoreo-1' })]
+  const payload = buildTracesPayload(records, 'ORG-A')
+  const featurePropsBefore = JSON.stringify(payload.geojson.features[0].properties)
+
+  const enriched = attachCoberturaSummary(payload, records, {
+    'uuid-monitoreo-1': {
+      ID_Organizacion: 'ORG-A',
+      area_monitoreo_ha: 10,
+      suma_uso_suelo_aprobado_ha: 6,
+      hueco_cobertura: true,
+    },
+  })
+
+  assert.equal(enriched.organization_id, payload.organization_id)
+  assert.equal(enriched.total_plots, payload.total_plots)
+  assert.equal(enriched.total_hectares, payload.total_hectares)
+  assert.equal(JSON.stringify(enriched.geojson.features[0].properties), featurePropsBefore)
+  assert.equal(enriched.cobertura_uso_suelo.length, 1)
+  assert.equal(enriched.cobertura_uso_suelo[0].cobertura_pct, 60)
+  assert.equal(enriched.cobertura_uso_suelo[0].hueco_cobertura, true)
+  assert.ok(enriched.cobertura_uso_suelo[0].aviso.includes('no bloquea'))
+})
+
+test('attachCoberturaSummary marca disponible:false para una parcela sin resultado, sin lanzar', () => {
+  const records = [polygonRecord({ ID_Parcela_Fija: 'p1', registro_id: 'uuid-monitoreo-1' })]
+  const payload = buildTracesPayload(records, 'ORG-A')
+  const enriched = attachCoberturaSummary(payload, records, {})
+  assert.equal(enriched.cobertura_uso_suelo[0].disponible, false)
 })

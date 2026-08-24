@@ -324,15 +324,27 @@ se serializa en la respuesta HTML. Sin gaps encontrados en esta auditoría.
 > o los hashes Python/JS del mismo lote no coincidirán. Ver
 > `specs/trace_public_audit.md` para el detalle completo.
 
-> **Exportador TRACES UE — dónde vive realmente cada pieza (auditado
-> 2026-08-18, `specs/traces_eudr_dossier_audit.md`):** el botón real de
-> descarga DDS (`exportTracesDDS`, JSON + GeoJSON con coordenadas a 6
-> decimales y regla de polígono obligatorio ≥ 4 ha, `lib/eudrDdsExporter.js`)
-> vive en `/dashboard/mapa` (`components/gis/MapDashboard.jsx::handleExportDDS`),
-> **no** en `/dashboard/lotes` — esa ruta es solo una vista de simulación
-> del QR de trazabilidad pública (dice explícitamente "no persiste nada" en
-> su propio código). Ambos consumen `vw_monitoreo_web`, que ya filtra
-> `estado_revision = 'APROBADO'`. **Dossier Comercial PDF (`scripts/generate_dossier_pdf.py`)
+> **Exportador de Paquete de Trazabilidad EUDR — dónde vive realmente cada
+> pieza (auditado 2026-08-18, `specs/traces_eudr_dossier_audit.md`;
+> corregido 2026-08-23, `docs/adr/ADR-017-formato-real-exportacion-trazabilidad.md`):**
+> el botón real de descarga (`downloadTraceabilityPackage`, JSON + GeoJSON
+> con coordenadas a 6 decimales y regla de polígono obligatorio ≥ 4 ha,
+> `lib/eudrDdsExporter.js` — antes `exportTracesDDS`, renombrado en
+> ADR-017) vive en `/dashboard/mapa`
+> (`components/gis/MapDashboard.jsx::handleExportDDS`), **no** en
+> `/dashboard/lotes` — esa ruta es solo una vista de simulación del QR de
+> trazabilidad pública (dice explícitamente "no persiste nada" en su propio
+> código). Ambos consumen `vw_monitoreo_web`, que ya filtra
+> `estado_revision = 'APROBADO'`. **Desde ADR-017, el GeoJSON descargado
+> (format='geojson') ya NO es el mismo objeto que el JSON completo
+> (format='json') proyectado sin más** — es una proyección aparte
+> (`buildOfficialEuGeoJson`) al esquema oficial de geolocalización de la UE
+> (properties `ProducerName`/`ProducerCountry`/`ProductionPlace`/`Area`,
+> geometrías nunca LineString/MultiLineString); el JSON completo sigue
+> siendo la hoja de resumen interna de RYZOS (ya no descrita como "DDS
+> oficial"), y opcionalmente incluye `cobertura_uso_suelo` (Fase B,
+> informativo, resuelto vía el nuevo `/api/gis/dds-cobertura` con Service
+> Role Key — `fn_cobertura_uso_suelo_parcela` no acepta anon key). **Dossier Comercial PDF (`scripts/generate_dossier_pdf.py`)
 > no tiene ningún punto de entrada desde la aplicación web** — es una clase
 > Python pura, probada, sin `if __name__ == "__main__"`, y esta app Next.js
 > no tiene ningún Route Handler (`find app -iname "route.js"` → vacío) que

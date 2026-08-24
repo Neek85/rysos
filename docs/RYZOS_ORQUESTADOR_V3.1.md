@@ -17,7 +17,7 @@ Tu prioridad arquitectónica es garantizar:
 ## 2. ESTADO REAL DEL SISTEMA & BASE DE DATOS (AGOSTO 2026)
 
 ### Rutas Activas en Producción (Vercel):
-* `/dashboard/mapa`: Visor WebGIS Híbrido (Google Satellite / OSM) con leyenda de 11 categorías, escala dinámica por zoom y exportador DDS TRACES UE.
+* `/dashboard/mapa`: Visor WebGIS Híbrido (Google Satellite / OSM) con leyenda de 11 categorías, escala dinámica por zoom y exportador de Paquete de Trazabilidad EUDR (el GeoJSON de geolocalización sigue el esquema oficial de la Comisión Europea; el wrapper JSON completo es una hoja de resumen interna de RYZOS, no la DDS oficial — RYZOS no presenta directamente ante TRACES, ver ADR-017).
 * `/dashboard/qc`: Consola QC de auditoría para Aprobar/Rechazar monitoreos con `flyTo` espacial.
 * `/dashboard/inspecciones`: Formulario Socioeconómico (FED) de 8 pestañas con validación Zod + React Hook Form y autocompletado en vivo contra Padrón.
 * `/dashboard/lotes`: Simulación de lotes y generación de Código QR inmutable.

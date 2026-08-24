@@ -17,3 +17,29 @@ Permitir a los administradores de la organización exportar la Declaración de D
 - [ ] Parcelas >= 4 Ha se exportan como `Polygon`; < 4 Ha aceptan `Point` o `Polygon`.
 - [ ] El campo `deforestation_cutoff_date` en cada Feature es siempre `"2020-12-31"`.
 - [ ] Todos los tests en `tests/test_fase5_reportes.py` pasan correctamente.
+
+## 4. Corrección (2026-08-23, ADR-017 — investigación externa)
+
+El Criterio de Aceptación #1 de arriba ("estructura oficial exigida por
+TRACES EU: `declaration_type`, `regulation`, `organization_id`,
+`total_plots`, `total_hectares`, `geojson`") es **incorrecto** — esa
+afirmación no tenía ninguna fuente externa citada en este repo, y una
+investigación posterior confirmó que no existe tal estándar. La corrección,
+en detalle, en `docs/adr/ADR-017-formato-real-exportacion-trazabilidad.md`;
+resumen:
+
+- Ese wrapper JSON completo (`declaration_type`/`regulation`/
+  `organization_id`/`total_plots`/`total_hectares`) es **una convención
+  interna de RYZOS**, no un estándar externo — funciona como hoja de
+  resumen para el comprador/importador, nada más.
+- El **GeoJSON de geolocalización** (properties `ProducerName`/
+  `ProducerCountry`/`ProductionPlace`/`Area`, geometrías Point/MultiPoint/
+  Polygon/MultiPolygon/GeometryCollection, nunca LineString/MultiLineString)
+  sí sigue el esquema oficial y público de la Comisión Europea (EUDR
+  Information System / TRACES NT) — ese es el archivo que efectivamente
+  debe coincidir con el estándar externo, no el wrapper.
+- RYZOS **no presenta** la DDS directamente ante TRACES — arma el paquete
+  de datos para que el comprador/importador europeo la presente. Por eso
+  `lib/eudrDdsExporter.js` ya no describe su wrapper como
+  `DUE_DILIGENCE_STATEMENT` (ver `RYZOS_TRACEABILITY_PACKAGE_SUMMARY`) ni
+  el botón de `/dashboard/mapa` se llama "Exportar DDS".

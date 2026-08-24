@@ -37,7 +37,8 @@ function samplePayload() {
             id_parcela: 'a1b2c3d4-uuid-real-de-parcela',
             parcela_codigo: 'COOP-JS-001',
             parcela_nombre: 'Finca Alta',
-            productor: 'Juan Pérez',
+            productor: 'JS-00001',
+            productor_nombre: 'Juan Pérez',
             socio_dni: '12345678',
             cumple_eudr: 'SI',
             deforestation_cutoff_date: '2020-12-31',
@@ -51,7 +52,8 @@ function samplePayload() {
             id_parcela: 'e5f6g7h8-uuid-real-de-parcela-2',
             parcela_codigo: 'COOP-JS-002',
             parcela_nombre: 'Finca Baja',
-            productor: 'María Gómez',
+            productor: 'JS-00002',
+            productor_nombre: 'María Gómez',
             conyuge_dni: '87654321',
             cumple_eudr: 'SI',
             deforestation_cutoff_date: '2020-12-31',
@@ -106,11 +108,19 @@ test('generateLotHash no lanza excepción con payload vacío/inválido', async (
   await assert.doesNotReject(() => generateLotHash(undefined))
 })
 
-test('buildPublicSanitizedPayload remueve los 6 campos PII de cada Feature', () => {
+test('buildPublicSanitizedPayload remueve los 7 campos PII de cada Feature (agrega productor_nombre, ADR-017)', () => {
   const payload = samplePayload()
   const sanitized = buildPublicSanitizedPayload(payload, 'abc123')
 
-  const piiFields = ['socio_dni', 'socio_nombre', 'socio_nombre_completo', 'conyuge_dni', 'productor', 'id_parcela']
+  const piiFields = [
+    'socio_dni',
+    'socio_nombre',
+    'socio_nombre_completo',
+    'conyuge_dni',
+    'productor',
+    'productor_nombre',
+    'id_parcela',
+  ]
   for (const feature of sanitized.geojson.features) {
     for (const field of piiFields) {
       assert.equal(
