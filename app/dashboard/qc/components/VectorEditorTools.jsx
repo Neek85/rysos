@@ -17,8 +17,18 @@
 //    creado y traduce sus eventos a callbacks planos.
 // 2. useVectorEditor + VectorEditorPanel (export default) — hook + panel
 //    lateral que consumen lib/gisVectorEditor.js para el flujo de guardado.
+//
+// ADR-019: los campos `padronEntity` de TARGET_TABLE_FIELDS
+// (lib/gisTargetTables.js) — Código de Socio/Código de Parcela — ya no
+// son texto libre. PadronEntityField (más abajo) los reemplaza por un
+// autocompletado real contra PADRON_SOCIOS/PADRON_PARCELAS (mismo
+// lib/padronSearch.js y PadronAutocomplete que ya usa Inspecciones), con
+// una opción "+ Crear socio nuevo" que reutiliza SocioFormModal
+// (components/features/socios/) como overlay — nunca se duplica su
+// validación (sociosActions.js). El rechazo real de un código inventado
+// vive del lado del servidor, en lib/actions/gisActions.js.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { uploadGeoSpatialFeature } from '@/lib/actions/gisActions'
 import {
   TARGET_TABLE_LABELS,
@@ -27,6 +37,33 @@ import {
   GIS_TARGET_TABLES,
 } from '@/lib/gisTargetTables'
 import { evaluateGeometry, isGeometryAllowedForTable } from '@/lib/gisVectorEditor'
+import { getSupabaseClient } from '@/lib/supabaseClient'
+import { searchSocios, searchParcelas } from '@/lib/padronSearch'
+import PadronAutocomplete from '@/components/features/inspecciones/PadronAutocomplete'
+import SocioFormModal from '@/components/features/socios/SocioFormModal'
+
+/**
+ * Valores iniciales de `fieldValues` para una geometría recién finalizada
+ * (ADR-019, instrucción de herencia entre geometrías consecutivas): en
+ * vez de limpiar incondicionalmente a `{}`, precarga (editable, nunca
+ * forzado) el ID_Socio/ID_Parcela_Fija/id_parcela del último registro
+ * guardado con éxito en la misma sesión de trabajo (`identity`, ver
+ * `lastIdentityRef` en useVectorEditor) — útil para el caso real de crear
+ * un perímetro y luego varias subdivisiones del mismo socio/parcela
+ * seguidas. Solo precarga los campos `padronEntity` que existan para la
+ * `targetTable` ACTUAL (ej. EUDR_USO_SUELO no tiene campo de socio, así
+ * que `identity.socio` simplemente no se usa ahí) — el resto de los
+ * campos (`tipo_uso`, `tipo_infra`, etc.) siempre arranca vacío.
+ */
+function buildInitialFieldValues(targetTable, identity) {
+  const fields = TARGET_TABLE_FIELDS[targetTable] || []
+  const next = {}
+  fields.forEach((f) => {
+    if (f.padronEntity === 'socio' && identity.socio) next[f.key] = identity.socio
+    if (f.padronEntity === 'parcela' && identity.parcela) next[f.key] = identity.parcela
+  })
+  return next
+}
 
 // Mapeo botón de geoman -> tipo de geometría que produce, para la
 // restricción reactiva por tabla destino de abajo (useVectorEditor). Solo
@@ -174,13 +211,30 @@ export function useVectorEditor({
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState(null) // { type: 'success' | 'error', message }
 
+  // targetTable cambia en cada render pero el efecto de abajo (que engancha
+  // onFinalize UNA sola vez, dependencia [mapReady]) necesita leer su valor
+  // ACTUAL en el momento en que geoman termina una geometría — no el valor
+  // de cuando se enganchó. Mismo motivo por el que existe lastIdentityRef.
+  const targetTableRef = useRef(targetTable)
+  useEffect(() => {
+    targetTableRef.current = targetTable
+  }, [targetTable])
+
+  // Último ID_Socio/ID_Parcela_Fija/id_parcela guardado con éxito en esta
+  // sesión de trabajo (ADR-019, instrucción de herencia) — un ref, no
+  // estado: nada en la UI renderiza a partir de esto directamente, solo lo
+  // lee onFinalize (vía buildInitialFieldValues) al precargar la próxima
+  // geometría. Mutado directamente en handleSave, sin pasar por setState,
+  // para no forzar un re-render extra por cada guardado.
+  const lastIdentityRef = useRef({ socio: null, parcela: null })
+
   useEffect(() => {
     if (!mapReady || !mapRef.current || !leafletRef.current) return undefined
     return attachVectorEditor(mapRef.current, leafletRef.current, {
       onDraftChange: setDraft,
       onFinalize: (layer) => {
         setDrawnLayer(layer)
-        setFieldValues({})
+        setFieldValues(buildInitialFieldValues(targetTableRef.current, lastIdentityRef.current))
         setResult(null)
       },
       enableGlobalEditControls,
@@ -262,6 +316,15 @@ export function useVectorEditor({
       const pendienteNote =
         targetTable === 'PADRON_PARCELAS' ? '' : ' Queda PENDIENTE de revisión — ya aparece en la lista de esta consola.'
       setResult({ type: 'success', message: `Geometría guardada correctamente.${pendienteNote}` })
+      // Recuerda el socio/parcela de ESTE guardado para precargar la
+      // próxima geometría (ver buildInitialFieldValues) — solo sobreescribe
+      // cuando este guardado sí traía un valor, para no perder la memoria
+      // de la sesión al guardar una tabla que no tiene ese campo (ej.
+      // EUDR_USO_SUELO no tiene ID_Socio).
+      lastIdentityRef.current = {
+        socio: fieldValues.ID_Socio || lastIdentityRef.current.socio,
+        parcela: fieldValues.ID_Parcela_Fija || fieldValues.id_parcela || lastIdentityRef.current.parcela,
+      }
       drawnLayer.remove()
       setDrawnLayer(null)
       setDraft(null)
@@ -277,6 +340,7 @@ export function useVectorEditor({
     targetTable,
     setTargetTable,
     targetTables,
+    organizationId,
     draft,
     drawnLayer,
     fieldValues,
@@ -286,6 +350,79 @@ export function useVectorEditor({
     handleSave,
     handleCancel,
   }
+}
+
+// ---------------------------------------------------------------
+// PadronEntityField — autocompletado real contra PADRON_SOCIOS/
+// PADRON_PARCELAS (ADR-019) para un campo `padronEntity: 'socio' |
+// 'parcela'` de TARGET_TABLE_FIELDS (lib/gisTargetTables.js). Reutiliza
+// PadronAutocomplete (components/features/inspecciones/PadronAutocomplete.jsx)
+// y lib/padronSearch.js sin modificarlos — mismo mecanismo exacto que ya
+// usa TabGeneral.jsx en el formulario de Inspecciones (searchSocios/
+// searchParcelas ya excluyen `activo = false`, ver ADR-016), así que solo
+// puede seleccionarse un socio/parcela que exista y esté activo: no hay
+// forma de escribir el código a mano, `onChange` solo se dispara desde
+// `onSelect` de un resultado real de búsqueda.
+// `scopeParcelaSearchToSocio`: cuando este campo es de tipo 'parcela' Y el
+// mismo fields[] trae un campo 'socio' con valor ya elegido (hoy solo pasa
+// en EUDR_MONITOREO, que tiene ambos), acota la búsqueda de parcelas a las
+// de ESE socio (mismo `searchParcelas(supabase, org, socioId, query)` que
+// ya soporta ese 3er parámetro) — en EUDR_USO_SUELO/EUDR_INSTALACIONES
+// (sin campo de socio) queda `null`, búsqueda sin acotar, igual que hoy.
+function PadronEntityField({ field, value, onChange, organizationId, scopeParcelaSearchToSocio, onCreateSocio }) {
+  const isSocio = field.padronEntity === 'socio'
+
+  async function handleSearch(query) {
+    const supabase = getSupabaseClient()
+    if (!supabase || !organizationId) return []
+    if (isSocio) {
+      const rows = await searchSocios(supabase, organizationId, query)
+      return rows.map((r) => ({ key: r.ID_Socio, ...r }))
+    }
+    const rows = await searchParcelas(supabase, organizationId, scopeParcelaSearchToSocio || null, query)
+    return rows.map((r) => ({ key: r.ID_Parcela_Fija, ...r }))
+  }
+
+  return (
+    <div>
+      <PadronAutocomplete
+        label={`${field.label}${field.required ? ' *' : ''}`}
+        placeholder={isSocio ? 'Nombre, DNI o código de finca…' : 'Código o nombre de parcela…'}
+        disabled={!organizationId}
+        search={handleSearch}
+        renderResult={(r) =>
+          isSocio ? (
+            <>
+              <p className="font-medium text-gray-800">{r.socio_nombre_completo || 'Sin nombre'}</p>
+              <p className="text-xs text-gray-400">
+                {r.socio_dni ? `DNI ${r.socio_dni}` : ''}
+                {r.codigo_finca ? ` · ${r.codigo_finca}` : ''}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="font-medium text-gray-800">{r.parcela_codigo || 'Sin código'}</p>
+              <p className="text-xs text-gray-400">
+                {r.parcela_nombre || ''}
+                {r.totalh ? ` · ${r.totalh} ha` : ''}
+              </p>
+            </>
+          )
+        }
+        onSelect={(r) => onChange(isSocio ? r.ID_Socio : r.ID_Parcela_Fija)}
+      />
+      {value && <p className="mt-1 text-[11px] text-emerald-700">✓ Seleccionado: {value}</p>}
+      {isSocio && (
+        <button
+          type="button"
+          onClick={onCreateSocio}
+          className="mt-1 text-[11px] font-semibold text-green-800 hover:underline"
+        >
+          + Crear socio nuevo
+        </button>
+      )}
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------
@@ -299,6 +436,7 @@ export default function VectorEditorPanel({ editor }) {
     targetTable,
     setTargetTable,
     targetTables,
+    organizationId,
     draft,
     drawnLayer,
     fieldValues,
@@ -310,6 +448,13 @@ export default function VectorEditorPanel({ editor }) {
   } = editor
   const fields = TARGET_TABLE_FIELDS[targetTable]
   const allowedTypes = (TARGET_TABLE_GEOMETRY_TYPES[targetTable] || []).join(' o ')
+  // Overlay de "+ Crear socio nuevo" (ADR-019) — `socioModalFieldKey`
+  // recuerda CUÁL campo abrió el modal (hoy solo EUDR_MONITOREO.ID_Socio
+  // es padronEntity:'socio', pero esto no asume que sea el único) para
+  // saber a qué key de fieldValues escribir el ID_Socio del socio recién
+  // creado que devuelve SocioFormModal.
+  const [socioModalFieldKey, setSocioModalFieldKey] = useState(null)
+  const socioField = fields.find((f) => f.padronEntity === 'socio')
 
   return (
     <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-3 text-xs">
@@ -369,35 +514,49 @@ export default function VectorEditorPanel({ editor }) {
 
       {drawnLayer && (
         <div className="space-y-1.5 border-t border-gray-100 pt-2">
-          {fields.map((f) => (
-            <div key={f.key}>
-              <label className="mb-0.5 block text-[11px] text-gray-500">
-                {f.label}
-                {f.required ? ' *' : ''}
-              </label>
-              {f.options ? (
-                <select
-                  value={fieldValues[f.key] || ''}
-                  onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
-                  className="w-full rounded border border-gray-200 px-2 py-1 text-xs text-gray-700"
-                >
-                  <option value="">Seleccionar…</option>
-                  {f.options.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type="text"
-                  value={fieldValues[f.key] || ''}
-                  onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
-                  className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
-                />
-              )}
-            </div>
-          ))}
+          {fields.map((f) =>
+            f.padronEntity ? (
+              <PadronEntityField
+                key={f.key}
+                field={f}
+                value={fieldValues[f.key] || ''}
+                onChange={(v) => setFieldValues((prev) => ({ ...prev, [f.key]: v }))}
+                organizationId={organizationId}
+                scopeParcelaSearchToSocio={
+                  f.padronEntity === 'parcela' && socioField ? fieldValues[socioField.key] || null : null
+                }
+                onCreateSocio={() => setSocioModalFieldKey(f.key)}
+              />
+            ) : (
+              <div key={f.key}>
+                <label className="mb-0.5 block text-[11px] text-gray-500">
+                  {f.label}
+                  {f.required ? ' *' : ''}
+                </label>
+                {f.options ? (
+                  <select
+                    value={fieldValues[f.key] || ''}
+                    onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                    className="w-full rounded border border-gray-200 px-2 py-1 text-xs text-gray-700"
+                  >
+                    <option value="">Seleccionar…</option>
+                    {f.options.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={fieldValues[f.key] || ''}
+                    onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                    className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
+                  />
+                )}
+              </div>
+            )
+          )}
           <div className="flex justify-end gap-2 pt-1">
             <button
               type="button"
@@ -432,6 +591,27 @@ export default function VectorEditorPanel({ editor }) {
         >
           {result.message}
         </p>
+      )}
+
+      {/* Overlay de "+ Crear socio nuevo" (ADR-019) — SocioFormModal es un
+          `position: fixed` de pantalla completa (ver su propio JSX), así
+          que renderizarlo acá dentro no cambia dónde aparece en pantalla;
+          al ser solo una capa más de React sobre el mismo árbol, dibujar
+          o cancelar mientras está abierto nunca se ve afectado: drawnLayer/
+          draft viven en useVectorEditor, completamente ajenos a este
+          estado local. Reutiliza sociosActions.js sin duplicar ninguna
+          validación (DNI/Código de Finca duplicados, etc.) — decisión
+          confirmada explícitamente para esta tarea. */}
+      {socioModalFieldKey && (
+        <SocioFormModal
+          socio={null}
+          organizationId={organizationId}
+          onClose={() => setSocioModalFieldKey(null)}
+          onSaved={(savedSocio) => {
+            setFieldValues((prev) => ({ ...prev, [socioModalFieldKey]: savedSocio.id }))
+            setSocioModalFieldKey(null)
+          }}
+        />
       )}
     </div>
   )
