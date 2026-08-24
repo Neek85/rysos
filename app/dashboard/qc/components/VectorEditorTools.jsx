@@ -28,6 +28,12 @@ import {
 } from '@/lib/gisTargetTables'
 import { evaluateGeometry, isGeometryAllowedForTable } from '@/lib/gisVectorEditor'
 
+// Mapeo botón de geoman -> tipo de geometría que produce, para la
+// restricción reactiva por tabla destino de abajo (useVectorEditor). Solo
+// estos 2 botones existen en este editor (ver drawMarker/drawPolygon en
+// attachVectorEditor — el resto de drawX está en false a propósito).
+const DRAW_BUTTON_GEOMETRY_TYPES = { drawMarker: 'Point', drawPolygon: 'Polygon' }
+
 // ---------------------------------------------------------------
 // attachVectorEditor — capa imperativa sobre geoman
 // ---------------------------------------------------------------
@@ -141,6 +147,15 @@ export function attachVectorEditor(map, L, { onDraftChange, onFinalize, enableGl
  * nunca `EUDR_INSTALACIONES`/`PADRON_PARCELAS` desde acá); default a
  * `GIS_TARGET_TABLES` completo para no romper otro futuro consumidor que
  * sí necesite las 4. `enableGlobalEditControls`: ver attachVectorEditor.
+ *
+ * `externalDrawDisabled` (default `false`): permite a un llamador externo
+ * (QcConsoleMap.jsx, mientras `editingKey` está activo — ver
+ * docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md) forzar los 2
+ * botones de dibujo a deshabilitado además de las 2 razones internas de
+ * abajo. Único punto que llama `map.pm.Toolbar.setButtonDisabled` en todo
+ * el editor (ver ADR-018) — antes había una segunda llamada duplicada en
+ * QcConsoleMap.jsx que solo conocía la razón "editingKey" y podía
+ * pisar/ser pisada por esta, según el orden de ejecución de efectos.
  */
 export function useVectorEditor({
   mapRef,
@@ -149,6 +164,7 @@ export function useVectorEditor({
   organizationId,
   targetTables = GIS_TARGET_TABLES,
   enableGlobalEditControls = true,
+  externalDrawDisabled = false,
   onSaved,
 }) {
   const [targetTable, setTargetTable] = useState(targetTables[0])
@@ -172,6 +188,39 @@ export function useVectorEditor({
     // mapRef/leafletRef son refs estables — solo re-engancha si mapReady cambia.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady])
+
+  // Restricción reactiva de los botones de dibujo (ADR-018) — combina 3
+  // razones para deshabilitar cada botón, cualquiera alcanza:
+  // 1. `externalDrawDisabled` (ver arriba) — editingKey activo en la
+  //    Consola QC.
+  // 2. `drawnLayer` sin resolver (ni guardado ni cancelado) — cierra de
+  //    raíz el problema de "capas huérfanas": no se puede iniciar una
+  //    geometría nueva mientras la anterior siga pendiente, sin importar
+  //    su tipo.
+  // 3. El tipo de geometría de ESE botón no está en
+  //    TARGET_TABLE_GEOMETRY_TYPES[targetTable] — ya no se puede ni
+  //    empezar a dibujar un Point con "Uso de Suelo" seleccionado (antes
+  //    el error solo aparecía al Guardar, con el marcador ya puesto en el
+  //    mapa).
+  // Corre DESPUÉS del efecto de arriba en cada render (orden de
+  // declaración de hooks) — el toolbar ya existe para cuando esto se
+  // ejecuta la primera vez que mapReady pasa a true.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!mapReady || !map) return
+    const allowedTypes = TARGET_TABLE_GEOMETRY_TYPES[targetTable] || []
+    const hasUnresolvedDraft = !!drawnLayer
+    Object.entries(DRAW_BUTTON_GEOMETRY_TYPES).forEach(([buttonName, geometryType]) => {
+      const shouldDisable = externalDrawDisabled || hasUnresolvedDraft || !allowedTypes.includes(geometryType)
+      try {
+        map.pm.Toolbar.setButtonDisabled(buttonName, shouldDisable)
+      } catch {
+        // El botón todavía no existe (carrera de montaje/desmontaje) — nada que hacer.
+      }
+    })
+    // mapRef es un ref estable — no hace falta como dependencia.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetTable, drawnLayer, externalDrawDisabled, mapReady])
 
   const handleCancel = useCallback(() => {
     drawnLayer?.remove()

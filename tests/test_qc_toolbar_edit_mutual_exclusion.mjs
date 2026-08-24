@@ -48,11 +48,24 @@ test('QcConsoleMap.jsx agrega comparisonGroupRef ANTES que layerGroupRef (orden 
   assert.ok(comparisonIdx < mainIdx, 'comparisonGroupRef debe agregarse antes para quedar visualmente debajo')
 })
 
-test('QcConsoleMap.jsx deshabilita drawPolygon/drawMarker del toolbar mientras editingKey esté activo', () => {
+test('QcConsoleMap.jsx pasa editingKey a useVectorEditor como externalDrawDisabled (ADR-018 centraliza el setButtonDisabled en useVectorEditor)', () => {
   const source = read('components/gis/QcConsoleMap.jsx')
-  assert.match(source, /map\.pm\.Toolbar\.setButtonDisabled\('drawPolygon', isAnyEditing\)/)
-  assert.match(source, /map\.pm\.Toolbar\.setButtonDisabled\('drawMarker', isAnyEditing\)/)
-  assert.match(source, /const isAnyEditing = !!editingKey/)
+  assert.match(source, /externalDrawDisabled: !!editingKey/)
+  // Ya no debería quedar una segunda LLAMADA real a setButtonDisabled acá
+  // (el comentario de arriba sí menciona el nombre en prosa) — el único
+  // punto que la invoca es useVectorEditor (VectorEditorTools.jsx), para
+  // que 2 efectos independientes no se pisen el estado del botón.
+  assert.ok(!/map\.pm\.Toolbar\.setButtonDisabled\(/.test(source))
+})
+
+test('VectorEditorTools.jsx (useVectorEditor) deshabilita drawPolygon/drawMarker combinando externalDrawDisabled, drawnLayer sin resolver y el tipo de geometría permitido por targetTable', () => {
+  const source = read('app/dashboard/qc/components/VectorEditorTools.jsx')
+  assert.match(source, /map\.pm\.Toolbar\.setButtonDisabled\(buttonName, shouldDisable\)/)
+  assert.match(
+    source,
+    /const shouldDisable = externalDrawDisabled \|\| hasUnresolvedDraft \|\| !allowedTypes\.includes\(geometryType\)/
+  )
+  assert.match(source, /const hasUnresolvedDraft = !!drawnLayer/)
 })
 
 test('QcConsoleMap.jsx reporta hacia arriba (onDrawSessionActiveChange) cuando hay un dibujo en curso', () => {

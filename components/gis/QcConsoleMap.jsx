@@ -124,6 +124,11 @@ export default function QcConsoleMap({
     organizationId,
     targetTables: QC_DRAWABLE_TABLES,
     enableGlobalEditControls: false,
+    // Mutua exclusión con el modo "Ajustar Geometría" de abajo (editingKey)
+    // — useVectorEditor (ADR-018) es ahora el único punto que llama
+    // map.pm.Toolbar.setButtonDisabled sobre los botones de dibujo, así
+    // que esta razón se le pasa en vez de deshabilitarlos acá también.
+    externalDrawDisabled: !!editingKey,
     onSaved: onFeatureCreated,
   })
 
@@ -338,34 +343,25 @@ export default function QcConsoleMap({
   // MUTUA EXCLUSIÓN con el toolbar de "crear registro nuevo" (Editor
   // Vectorial, useVectorEditor/attachVectorEditor arriba) — ver
   // docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md, hallazgo real
-  // confirmado en vivo (reproducido con javascript_tool): antes de este
-  // cambio, `attachVectorEditor` engancha el toolbar de dibujo UNA sola
+  // confirmado en vivo (reproducido con javascript_tool): antes del fix de
+  // ADR-005, `attachVectorEditor` enganchaba el toolbar de dibujo UNA sola
   // vez al montar (dependencia `[mapReady]` en useVectorEditor), sin
   // ninguna relación con `editingKey` — mientras un registro existente
   // estaba en modo "Ajustar Geometría", los botones ⬠ Polígono/📍
   // Marcador seguían 100% clickeables, y clickearlos arrancaba una sesión
   // de dibujo de polígono/marcador SUPERPUESTA (el toolbar completo con
   // Finalizar/Eliminar último vértice/Cancelar aparece mientras el
-  // registro original sigue mostrando "Editando…"). Se deshabilitan
-  // visualmente los 2 botones de dibujo (`map.pm.Toolbar.setButtonDisabled`
-  // — agrega la clase CSS `pm-disabled` de geoman, no solo un estado
-  // lógico) mientras `editingKey` esté activo.
+  // registro original sigue mostrando "Editando…"). La deshabilitación de
+  // esos 2 botones (`map.pm.Toolbar.setButtonDisabled` — agrega la clase
+  // CSS `pm-disabled` de geoman, no solo un estado lógico) ya NO se hace
+  // acá: `editingKey` se pasa como `externalDrawDisabled` a
+  // `useVectorEditor` (ver arriba), que desde ADR-018 es el único punto
+  // del editor que llama `setButtonDisabled` — evitaba que 2 efectos
+  // independientes (este, y el nuevo de restricción por tabla destino)
+  // pisaran el estado del botón según el orden de ejecución.
   useEffect(() => {
     const map = mapRef.current
     if (!map || !mapReady) return
-
-    const isAnyEditing = !!editingKey
-    // setButtonDisabled tira si el botón no existe todavía — solo puede
-    // pasar si este efecto corre antes de que useVectorEditor enganche el
-    // toolbar (mapReady ya lo garantiza acá, pero se guarda igual por las
-    // dudas de un desmontaje a mitad de camino).
-    try {
-      map.pm.Toolbar.setButtonDisabled('drawPolygon', isAnyEditing)
-      map.pm.Toolbar.setButtonDisabled('drawMarker', isAnyEditing)
-    } catch {
-      // No-op — el toolbar todavía no existe (condición de carrera al
-      // desmontar), no hay nada que deshabilitar.
-    }
 
     layersByKeyRef.current.forEach((layer, key) => {
       const childLayer = layer.getLayers?.()[0]
