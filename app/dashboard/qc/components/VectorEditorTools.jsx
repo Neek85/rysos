@@ -375,12 +375,27 @@ export default function VectorEditorPanel({ editor }) {
                 {f.label}
                 {f.required ? ' *' : ''}
               </label>
-              <input
-                type="text"
-                value={fieldValues[f.key] || ''}
-                onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
-                className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
-              />
+              {f.options ? (
+                <select
+                  value={fieldValues[f.key] || ''}
+                  onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                  className="w-full rounded border border-gray-200 px-2 py-1 text-xs text-gray-700"
+                >
+                  <option value="">Seleccionar…</option>
+                  {f.options.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={fieldValues[f.key] || ''}
+                  onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                  className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
+                />
+              )}
             </div>
           ))}
           <div className="flex justify-end gap-2 pt-1">

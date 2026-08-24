@@ -11,6 +11,7 @@ import {
   EUDRValidationError,
   EXPORT_FORMATS,
 } from '@/lib/eudrDdsExporter'
+import { LAND_USE_STYLES } from '@/lib/gisLandUseStyles'
 
 const EVIDENCIA_BUCKET = 'evidencias_eudr'
 const SIGNED_URL_TTL_SECONDS = 3600
@@ -48,16 +49,10 @@ function normalizeKey(value) {
     .trim()
 }
 
-// Las 7 subdivisiones de uso de suelo (EUDR_USO_SUELO, siempre poligono).
-const LAND_USE_STYLES = [
-  { key: 'produccion', label: 'Producción', color: '#16a34a', fillColor: '#22c55e', fillOpacity: 0.35, icon: '🟢' },
-  { key: 'crecimiento', label: 'Crecimiento', color: '#65a30d', fillColor: '#84cc16', fillOpacity: 0.35, icon: '🌱' },
-  { key: 'pan llevar', label: 'Pan Llevar', color: '#d97706', fillColor: '#f59e0b', fillOpacity: 0.35, icon: '🟧' },
-  { key: 'inverna pasto', label: 'Inverna/Pasto', color: '#ca8a04', fillColor: '#eab308', fillOpacity: 0.35, icon: '🌾' },
-  { key: 'rastrojo purma', label: 'Rastrojo/Purma', color: '#92400e', fillColor: '#b45309', fillOpacity: 0.35, icon: '🍂' },
-  { key: 'bosque', label: 'Bosque', color: '#14532d', fillColor: '#15803d', fillOpacity: 0.45, icon: '🌲' },
-  { key: 'otras areas', label: 'Otras áreas', color: '#6b7280', fillColor: '#9ca3af', fillOpacity: 0.3, icon: '🔘' },
-]
+// Las 7 subdivisiones de uso de suelo (EUDR_USO_SUELO, siempre poligono)
+// -- LAND_USE_STYLES ahora vive en lib/gisLandUseStyles.js (ADR-019),
+// unica fuente compartida con el <select> de "Tipo de Uso" del Editor
+// Vectorial (lib/gisTargetTables.js / VectorEditorTools.jsx).
 const DEFAULT_LAND_USE_STYLE = {
   label: 'Sin clasificar',
   color: '#64748b',
