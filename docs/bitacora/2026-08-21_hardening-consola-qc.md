@@ -2,7 +2,7 @@
 
 *Para cualquiera que quiera entender qué pasó en este tramo de trabajo sin
 necesidad de leer código. Cubre desde el commit `0d003e8` hasta el
-`6611451`.*
+`a7fd9f6`.*
 
 > **Nota sobre el número de commits:** el pedido original de esta bitácora
 > hablaba de "9 commits". Revisando el historial real, el tramo de
@@ -31,6 +31,17 @@ necesidad de leer código. Cubre desde el commit `0d003e8` hasta el
 > distintos — aprobaciones que se revertían solas sin dejar rastro, una
 > tabla de auditoría que existía solo en el papel, y códigos de parcela
 > repetidos en lugares físicamente distintos.
+
+> **Actualización (mismo 23 de agosto, cierre de la sesión):** se agregó
+> la sección 9 ("El error que apuntaba a la causa equivocada, y un repaso
+> del padrón de socios"), que corrió "Qué queda pendiente" y la tabla
+> técnica un lugar más hacia abajo (ahora 10 y 11). Cubre 3 commits nuevos
+> (`5ad2aa3`, `e938d0d`, `a7fd9f6`) que siguieron directamente después de
+> `79a2e30`: un mensaje de conflicto de código de parcela reescrito en
+> lenguaje simple, un bug real (sin relación con lo que el propio mensaje
+> de error decía) que impedía aprobar registros de Instalaciones, y un
+> repaso completo de cómo funciona hoy la baja de socios y qué haría falta
+> para transferir una parcela entre organizaciones.
 
 ---
 
@@ -393,7 +404,96 @@ margen de error normal de un GPS de campo" para calibrar ese número con
 precisión — los 3 casos encontrados son todos, sin duda, "otro lugar". Se
 ajustará ese número si en el futuro aparece un caso real que lo contradiga.
 
-## 9. Qué queda pendiente
+## 9. El error que apuntaba a la causa equivocada, y un repaso del padrón de socios
+
+Antes de cerrar la sesión se hicieron dos cosas más, sin relación directa
+entre sí: se hizo más claro el mensaje que ve un revisor cuando dos
+registros comparten el mismo código de parcela (el número de distancia
+crudo, tipo "1213.49m", pasó a mostrarse como "1.2 km", y el otro registro
+en conflicto se identifica por su fecha de captura y su técnico
+responsable en vez de un código interno sin significado para nadie no
+técnico); y se investigó — y se corrigió parte de — un error que llevaba
+cuatro días mostrando un mensaje equivocado.
+
+### 9.1 El mensaje de error que apuntaba a la causa equivocada
+
+El 19 de agosto se había corregido un problema real: los registros de
+"Instalaciones" (por ejemplo, una construcción o beneficio dentro de una
+parcela) no se podían aprobar ni rechazar en la Consola QC, porque le
+faltaba a la base de datos un dato interno necesario para identificar cuál
+fila actualizar. Ese día se aplicó la corrección — y quedó anotado en el
+código que, en ese momento, no había ningún registro real de Instalaciones
+esperando revisión, así que el problema, aunque corregido, no tenía forma
+de mostrarse todavía.
+
+Cuatro días después, alguien vio en pantalla, en vivo, el mensaje "falta
+aplicar esa corrección" — a pesar de que ya estaba aplicada desde el 19.
+En vez de darlo por resuelto con "ya está aplicada, entonces no hay nada
+que investigar", se siguió la contradicción: la corrección del 19 de
+agosto sí había arreglado la base de datos, pero **una pieza completamente
+distinta del sistema — la parte que le pide los datos a la base desde la
+pantalla — nunca había empezado a pedir el dato nuevo**. Es decir, el dato
+ya estaba disponible desde el 19 de agosto, pero nadie se lo pedía, así
+que nunca llegaba a la pantalla. El problema original (no poder aprobar
+Instalaciones) nunca se había solucionado de verdad — solo se volvió
+visible recién cuando llegaron, ese mismo día, los primeros registros
+reales de Instalaciones esperando revisión (durante el trabajo descrito en
+el punto 8.1) — y para entonces, el mensaje de error, escrito cuatro días
+antes, ya apuntaba a una causa que ya no era cierta.
+
+**La corrección:** se hizo que esa pieza del sistema pida el dato que
+faltaba (un cambio de una sola línea), y se reescribió el mensaje de error
+para que ya no le eche la culpa a una corrección puntual — ahora describe
+lo que realmente pasa, sin asumir por qué, para que la próxima persona que
+lo vea no pierda tiempo persiguiendo una pista equivocada. Se probó en
+vivo, con un registro real: antes de este cambio, era imposible aprobar un
+registro de Instalaciones desde la pantalla — después, funcionó
+normalmente con el botón real.
+
+### 9.2 Repaso del padrón: baja de socios y transferencia de parcelas entre organizaciones
+
+Se pidió revisar cómo está preparado el sistema para dos situaciones: que
+un socio deje una cooperativa (sin borrar su historial), y que una parcela
+pase de una organización a otra conservando lo ya trabajado bajo la
+organización original.
+
+**La primera parte ya estaba resuelta, de una etapa anterior de este mismo
+proyecto** — no hizo falta construirla de nuevo. Dar de baja a un socio (o
+una parcela) nunca borra el registro: solo lo marca como inactivo, y deja
+de aparecer en las pantallas de trabajo diario, pero el historial completo
+sigue existiendo tal cual. El propio código ya explica por qué se decidió
+así: el historial de monitoreo de campo de un socio tiene que sobrevivir
+aunque el socio se dé de baja del padrón administrativo — es una exigencia
+de cumplimiento EUDR, no solo una preferencia de diseño (ver el recuadro
+regulatorio más abajo). Lo único que hacía falta corregir era chico: el
+buscador que usa el formulario de Inspecciones para encontrar un socio o
+una parcela por nombre o código todavía mostraba socios/parcelas ya dados
+de baja como si estuvieran activos — se corrigió para que ya no aparezcan
+ahí, sin tocar ningún dato ya guardado.
+
+**La segunda parte reveló un problema más grande, que queda como tarea
+pendiente de diseño, no como un arreglo rápido.** Hoy, el código de una
+parcela (por ejemplo "COOP-JS-001") tiene que ser único en **todo el
+sistema**, no solo dentro de una organización — la base de datos lo
+impide directamente, con la misma regla que evita que dos personas tengan
+el mismo número de documento en la tabla de socios. Eso significa que hoy
+es **imposible** mover una parcela de una organización a otra manteniendo
+el mismo código — la base de datos rechazaría el intento antes de que
+llegara a guardarse nada. Antes de construir esa transferencia hace falta
+decidir cómo resolver esa limitación (por ejemplo, si el código puede
+cambiar al transferirse, o si hay que rediseñar cómo se identifican las
+parcelas en la base) — se deja documentado como el tema grande pendiente
+de esta sesión, sin apurar una solución.
+
+> **Nota de contexto regulatorio (no es un consejo legal):** el reglamento
+> europeo EUDR exige conservar la documentación de diligencia debida y
+> trazabilidad durante al menos 5 años desde que un producto se coloca en
+> el mercado. Es, en parte, el motivo por el que la baja de un socio nunca
+> borra nada — un historial de monitoreo que en algún momento pudo
+> respaldar un lote real de café no se puede perder solo porque el
+> productor dejó la cooperativa después.
+
+## 10. Qué queda pendiente
 
 **a) Dónde debe exigirse la cobertura completa de verdad — no
 decidido.** Como se explica en el punto 7: la validación de cobertura ya
@@ -411,6 +511,15 @@ alguien tiene que corregirlo a mano, directamente en la base de datos.
 Falta diseñar un flujo real (por ejemplo, renombrar el código equivocado, o
 marcar uno de los dos registros como un error de captura) para que ese
 conflicto se pueda resolver desde la propia Consola QC.
+
+**c) Rediseñar cómo se identifican las parcelas y los socios en el
+padrón, para poder transferir una parcela entre organizaciones — no
+decidido.** Como se explica en el punto 9.2: hoy el código de una parcela
+(y el código de un socio) tiene que ser único en todo el sistema, no por
+organización, así que es imposible hoy transferir una parcela a otra
+organización manteniendo el mismo código. Es el tema grande pendiente de
+esta sesión — necesita una decisión de diseño (no solo código) antes de
+poder estimarse.
 
 > *Resuelto de la vez pasada:* la pregunta sobre si `PADRON_PARCELAS.totalh`
 > era una referencia confiable — el pedido original de esta bitácora
@@ -441,7 +550,7 @@ conflicto se pueda resolver desde la propia Consola QC.
 > de prueba, reciclado — nunca una organización real ni una demo
 > preparada a propósito. Se retira de la lista de pendientes.
 
-**b) Evaluar pasar el proyecto de Supabase de un plan gratuito a uno
+**d) Evaluar pasar el proyecto de Supabase de un plan gratuito a uno
 pago con respaldo automático, antes de cargar la primera organización
 real.** Hoy el proyecto corre en un plan sin respaldos automáticos
 configurados — razonable mientras todo el dato es de prueba, pero un
@@ -451,7 +560,7 @@ evaluar antes de ese paso.
 
 ---
 
-## 10. Para quien quiera el detalle técnico
+## 11. Para quien quiera el detalle técnico
 
 | Tema | Documento técnico | Commit(s) |
 |---|---|---|
@@ -466,10 +575,12 @@ evaluar antes de ese paso.
 | Validación de cobertura completa, investigación de `totalh`, y el bug crítico del bloqueo circular (encontrado y corregido) | [ADR-011](../adr/ADR-011-cobertura-completa-uso-suelo.md) | `5c6d4f9`, `2ac75d6` |
 | El ETL protege registros ya revisados (Aprobado/Rechazado) de resincronizaciones que los revertían en silencio | [ADR-012](../adr/ADR-012-eudr-etl-protege-registros-revisados.md) | `4de126d` |
 | `audit_logs` aplicada de verdad y conectada a Aprobar/Rechazar (corrección de premisa: la conexión ya existía, la tabla no) | [ADR-013](../adr/ADR-013-audit-logs-conectado-a-consola-qc.md) | `a611779` |
-| Un código de parcela debe corresponder a un único lugar físico — detección, bloqueo en pantalla, y guard del lado del servidor | [ADR-014](../adr/ADR-014-codigo-parcela-unico-por-ubicacion.md) | `9ad7aa2`, `6611451` |
+| Un código de parcela debe corresponder a un único lugar físico — detección, bloqueo en pantalla, guard del lado del servidor, y mensaje en lenguaje claro | [ADR-014](../adr/ADR-014-codigo-parcela-unico-por-ubicacion.md) | `9ad7aa2`, `6611451`, `5ad2aa3` |
+| `PUNTOS_COLUMNS` nunca pedía `id_origen` — el mensaje de error culpaba a una migración ya aplicada; Instalaciones ya se puede aprobar/rechazar | [ADR-015](../adr/ADR-015-fix-puntos-columns-id-origen.md) | `e938d0d` |
+| Autocompletado de Inspecciones excluye socios/parcelas dados de baja; repaso de baja lógica y bloqueo de transferencia entre organizaciones | [ADR-016](../adr/ADR-016-padron-autocompletado-excluye-inactivos.md) | `a7fd9f6` |
 
 **Commits del tramo completo, en orden:** `0d003e8` → `111727b` →
 `a62fce6` → `c56f18f` → `4a910a4` → `b212424` → `a6e817c` → `2391859` →
 `488c993` → `7eb744e` → `ce4053f` → `affdc2a` → `cba6474` → `d2bcebd` →
 `f099a75` → `1ec2c2d` → `5c6d4f9` → `2ac75d6` → `4de126d` → `a611779` →
-`9ad7aa2` → `6611451`.
+`9ad7aa2` → `6611451` → `5ad2aa3` → `e938d0d` → `a7fd9f6`.
