@@ -90,6 +90,14 @@ datos de producción ni de otro origen desconocido.
   que corresponda tomar unilateralmente desde acá sin involucrar a quien
   mantiene el otro repo.
 
+  > **Corrección de premisa (2026-08-25, ver
+  > [ADR-023](ADR-023-backend-inspecciones-ya-no-comparte-base.md)):**
+  > `backend-inspecciones` ya no comparte base de datos en vivo con este
+  > proyecto — el riesgo de coordinación cross-repositorio citado arriba
+  > ya no aplica. Esto **no** agrega automáticamente la FK: sigue siendo
+  > una decisión aparte, a tomar explícitamente si se retoma este tema,
+  > no una consecuencia directa de esta corrección.
+
 ## Limpieza de las 14 filas huérfanas — ejecutada con confirmación explícita
 
 Esta tarea fue instruida explícitamente a NO borrar nada sin confirmación

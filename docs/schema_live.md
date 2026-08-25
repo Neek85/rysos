@@ -69,6 +69,20 @@ repo (Supabase Studio / otra herramienta). Las columnas listadas son solo las
 referenciadas por las migraciones y vistas de este repo; puede haber columnas
 adicionales no documentadas aquí.
 
+> **Actualización (2026-08-25, ADR-023):** `PADRON_SOCIOS`/`PADRON_PARCELAS`
+> dejaron de estar en esta situación — ver
+> `supabase/migrations/20260825183000_baseline_padron_socios_parcelas.sql`
+> (`CREATE TABLE IF NOT EXISTS`, adopción de documentación, sin cambio de
+> comportamiento). Quedan en esta sección solo `ORGANIZACIONES` y las 3
+> tablas `EUDR_*` del núcleo GIS, que siguen sin `CREATE TABLE` versionado.
+> Esa misma tarea confirmó, vía introspección OpenAPI de PostgREST, dos
+> columnas fuera de lo documentado más abajo (no corregidas en el prosa de
+> esta sección todavía, ver el archivo de migración para el detalle
+> completo): `PADRON_SOCIOS.normas_internas_17` (`text`, sin ningún uso
+> conocido en el repo) y `PADRON_PARCELAS.hbp`/`otros_cultivo` son `text`
+> en la instancia real, no `numeric` como el resto de las columnas de
+> hectáreas.
+
 ### `public."ORGANIZACIONES"`
 - Columnas reales confirmadas en vivo con Service Role Key (2026-08-21 —
   `anon` no tiene política `SELECT` acá, solo `authenticated`, así que no

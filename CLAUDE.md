@@ -126,9 +126,9 @@ see the RLS gotcha above) — writes go through Next.js Server Actions
 multi-tenant isolation is enforced explicitly in that file
 (`assertMatchesExistingOrg`, `assertParcelaMatchesOrg`,
 `assertSocioExists`) rather than by a policy. Deactivating a record
-(`activo = false`, never a physical `DELETE` — the padrón is shared live
-with another repo and IDs may be referenced from `INSPECCIONES`/
-`EUDR_MONITOREO` without a real FK) cascades from socio to that socio's
+(`activo = false`, never a physical `DELETE` — IDs may be referenced from
+`INSPECCIONES`/`EUDR_MONITOREO` without a real FK, see ADR-007) cascades
+from socio to that socio's
 parcelas (`deactivateSocio`) but deliberately stops there — it does not
 touch `EUDR_MONITOREO` or any EUDR/WebGIS view, so monitoring history
 survives a producer leaving the padrón. CSV bulk import

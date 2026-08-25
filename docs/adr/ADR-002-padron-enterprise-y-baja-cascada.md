@@ -79,6 +79,17 @@ reales:
 
 ## Baja lógica vs. eliminación física — por qué (y por qué la cascada no rompe el historial EUDR)
 
+> **Corrección de premisa (2026-08-25, ver
+> [ADR-023](ADR-023-backend-inspecciones-ya-no-comparte-base.md)):**
+> `backend-inspecciones` ya no comparte base de datos en vivo con este
+> proyecto — el párrafo siguiente cita esa razón (compartido con otro
+> repositorio) como parte de la justificación. Esa parte específica ya no
+> aplica; la otra parte de la misma razón (`ID_Socio`/`ID_Parcela_Fija`
+> referenciados desde `INSPECCIONES`/`EUDR_MONITOREO`, ambos **de este
+> mismo repo**, sin FK real) sigue intacta y es, por sí sola, suficiente
+> para sostener esta decisión. No se reescribe el párrafo original para
+> mantener el registro histórico de por qué se decidió en su momento.
+
 `PADRON_SOCIOS`/`PADRON_PARCELAS` son el padrón maestro, compartido en vivo
 con otro repositorio (`backend-inspecciones`, mismo Postgres — ver
 `docs/audits/auditoria_backend_inspecciones.md`), y sus IDs (`ID_Socio`,
