@@ -224,7 +224,14 @@ test('el botón Aprobar se deshabilita cuando hay conflicto de código de parcel
   const source = read(DETAIL_EDITOR_PATH)
   const approveButton = source.match(/onClick=\{onApprove\}[\s\S]*?<\/button>/)
   assert.ok(approveButton, 'el botón Aprobar debería existir')
-  assert.match(approveButton[0], /disabled=\{busy \|\| conflictoParcela\?\.tiene_conflicto\}/)
+  // ADR-020 agrega una razón más para deshabilitar Aprobar
+  // (orgMismatch?.tieneConflicto) en el mismo atributo `disabled` — se
+  // verifica que conflictoParcela siga siendo una de las razones, sin
+  // fijar el string completo (que ahora también incluye la nueva).
+  const disabledAttr = approveButton[0].match(/disabled=\{[^}]*\}/)
+  assert.ok(disabledAttr, 'el botón Aprobar debería tener un atributo disabled')
+  assert.match(disabledAttr[0], /busy/)
+  assert.match(disabledAttr[0], /conflictoParcela\?\.tiene_conflicto/)
 })
 
 test('el botón Rechazar también se deshabilita cuando hay conflicto de código de parcela', () => {

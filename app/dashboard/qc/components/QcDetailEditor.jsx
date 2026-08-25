@@ -104,6 +104,16 @@ export default function QcDetailEditor({
   const [conflictoParcela, setConflictoParcela] = useState(null)
   const [conflictoLoading, setConflictoLoading] = useState(false)
   const [conflictoError, setConflictoError] = useState(null)
+  // Organización real del socio/parcela referenciado (ADR-020) — a
+  // diferencia del bloque de arriba, corre para las 3 tablas EUDR_* (no
+  // solo Monitoreo): EUDR_USO_SUELO/EUDR_INSTALACIONES también tienen
+  // ID_Parcela_Fija (aliasing de id_parcela, ver POLIGONOS_COLUMNS/
+  // PUNTOS_COLUMNS en lib/eudrQcActions.js) y son igual de vulnerables al
+  // mismo gap (confirmado en la investigación: el ETL de Drive nunca
+  // valida organización para ninguna de las 3).
+  const [orgMismatch, setOrgMismatch] = useState(null)
+  const [orgMismatchLoading, setOrgMismatchLoading] = useState(false)
+  const [orgMismatchError, setOrgMismatchError] = useState(null)
   // Fuente de verdad para el texto de ayuda de "Ajustar geometría": el
   // tipo real de geometría del registro (record.geom, normalmente ya un
   // objeto GeoJSON — ver el comentario de parseGeometry en
@@ -209,6 +219,38 @@ export default function QcDetailEditor({
       .catch((err) => setConflictoError(err?.message || 'No se pudo validar el código de parcela.'))
       .finally(() => setConflictoLoading(false))
   }, [esMonitoreo, record.id_origen])
+
+  // Organización real del socio/parcela referenciado (ver ADR-020): mismo
+  // patrón que el efecto de arriba (busca automáticamente al seleccionar un
+  // registro, no detrás de un botón manual), pero SOLO bloquea Aprobar —
+  // decisión explícita, a diferencia del conflicto de código de parcela de
+  // arriba (que bloquea ambos): nunca hay que cerrar la salida de descartar
+  // un registro problemático, ver render de los botones más abajo.
+  useEffect(() => {
+    setOrgMismatchLoading(true)
+    setOrgMismatchError(null)
+    fetch('/api/qc/validar-organizacion-socio-parcela', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ID_Organizacion: record.ID_Organizacion,
+        ID_Parcela_Fija: record.ID_Parcela_Fija,
+        tabla_origen: record.tabla_origen,
+        id_monitoreo: record.id_monitoreo,
+        fecha_monitoreo: record.fecha_monitoreo,
+      }),
+    })
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.error) {
+          setOrgMismatchError(json.error)
+          return
+        }
+        setOrgMismatch(json.result)
+      })
+      .catch((err) => setOrgMismatchError(err?.message || 'No se pudo validar la organización del socio/parcela.'))
+      .finally(() => setOrgMismatchLoading(false))
+  }, [record.id_origen, record.ID_Organizacion, record.ID_Parcela_Fija, record.tabla_origen, record.id_monitoreo])
 
   async function handleSaveAttributes() {
     setLocalError(null)
@@ -465,6 +507,19 @@ export default function QcDetailEditor({
         </p>
       )}
 
+      {orgMismatchLoading && (
+        <p className="text-[11px] text-gray-400">Verificando organización del socio/parcela…</p>
+      )}
+      {orgMismatchError && <p className="text-[11px] text-red-600">{orgMismatchError}</p>}
+      {/* Mismo estilo bloqueante (rojo) que el conflicto de código de
+          parcela arriba (ADR-014) — ver ADR-020: a diferencia de ese, solo
+          deshabilita Aprobar (más abajo), nunca Rechazar. */}
+      {orgMismatch?.tieneConflicto && (
+        <p className="rounded border border-red-200 bg-red-50 p-2 text-xs font-medium text-red-700">
+          ⛔ {orgMismatch.mensaje}
+        </p>
+      )}
+
       {localError && <p className="rounded bg-red-50 p-2 text-xs text-red-600">{localError}</p>}
 
       <textarea
@@ -479,7 +534,7 @@ export default function QcDetailEditor({
         <button
           type="button"
           onClick={onApprove}
-          disabled={busy || conflictoParcela?.tiene_conflicto}
+          disabled={busy || conflictoParcela?.tiene_conflicto || orgMismatch?.tieneConflicto}
           className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? 'Procesando…' : '✓ Aprobar'}

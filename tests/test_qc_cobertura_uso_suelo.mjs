@@ -188,7 +188,13 @@ test('el botón Aprobar YA NO se deshabilita por cobertura (sigue sin depender d
   const source = read(DETAIL_EDITOR_PATH)
   const approveButton = source.match(/onClick=\{onApprove\}[\s\S]*?<\/button>/)
   assert.ok(approveButton, 'el botón Aprobar debería existir')
-  assert.match(approveButton[0], /disabled=\{busy \|\| conflictoParcela\?\.tiene_conflicto\}/)
+  // ADR-020 agrega otra razón (orgMismatch?.tieneConflicto) al mismo
+  // atributo disabled — se verifica que siga incluyendo busy/conflictoParcela
+  // sin fijar el string completo, que ahora también trae la nueva razón.
+  const disabledAttr = approveButton[0].match(/disabled=\{[^}]*\}/)
+  assert.ok(disabledAttr, 'el botón Aprobar debería tener un atributo disabled')
+  assert.match(disabledAttr[0], /busy/)
+  assert.match(disabledAttr[0], /conflictoParcela\?\.tiene_conflicto/)
   assert.ok(
     !/coberturaResult/.test(approveButton[0]),
     'Aprobar no debe depender de coberturaResult en absoluto — el círculo imposible de ADR-011 ya no debe existir'

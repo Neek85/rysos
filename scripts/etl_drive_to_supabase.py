@@ -511,6 +511,59 @@ class DriveZipETLPipeline:
         except Exception as exc:
             print(f"  [AVISO] No se pudo verificar unicidad de codigo de parcela para {id_monitoreo}: {exc}")
 
+    def warn_socio_org_mismatch(self, org_id: str, socio_id, parcela_id, identifier: str) -> None:
+        """ADR-020: verificacion SOLO informativa -- nunca bloquea la ingesta,
+        mismo criterio best-effort que warn_parcela_code_conflicts (ADR-014)
+        arriba y el ya aceptado para audit_logs (ADR-013). Este ETL resuelve
+        ID_Socio/ID_Parcela_Fija/id_parcela directo de las columnas de QField
+        (self.resolve_field_with_fallback en build_monitoreo_payload/
+        build_uso_suelo_payload/build_instalaciones_payload) sin cruzarlos
+        nunca contra PADRON_SOCIOS/PADRON_PARCELAS -- si el codigo referenciado
+        SI existe en el padron pero bajo una ID_Organizacion distinta de
+        org_id (la organizacion real, resuelta de la carpeta de Drive
+        RYZOS_CLIENTES/{ID_Organizacion}/, ver get_org_id_from_path), el
+        registro terminaria guardado bajo una organizacion con datos reales
+        de otra (gap real encontrado en ORG-TEST-E2E, ver ADR-020). El
+        bloqueo real de la DECISION de QC (Aprobar) vive en
+        assertSocioParcelaMismaOrganizacion, lib/eudrQcActions.js -- no aca,
+        mismo reparto de responsabilidades que el conflicto de codigo de
+        parcela arriba. Envuelto en try/except: un fallo aca (ej. columna
+        inexistente en un padron viejo) nunca debe impedir la ingesta real.
+        """
+        try:
+            if socio_id:
+                result = (
+                    self.supabase.table("PADRON_SOCIOS")
+                    .select("ID_Organizacion")
+                    .eq("ID_Socio", socio_id)
+                    .execute()
+                )
+                for socio in result.data or []:
+                    socio_org = socio.get("ID_Organizacion")
+                    if socio_org and socio_org != org_id:
+                        print(
+                            f"  [ADVERTENCIA] {identifier}: ID_Socio '{socio_id}' pertenece a "
+                            f"la organizacion '{socio_org}', no a '{org_id}' -- "
+                            f"solo informativo, no bloquea la ingesta."
+                        )
+            if parcela_id:
+                result = (
+                    self.supabase.table("PADRON_PARCELAS")
+                    .select("ID_Organizacion")
+                    .eq("ID_Parcela_Fija", parcela_id)
+                    .execute()
+                )
+                for parcela in result.data or []:
+                    parcela_org = parcela.get("ID_Organizacion")
+                    if parcela_org and parcela_org != org_id:
+                        print(
+                            f"  [ADVERTENCIA] {identifier}: ID_Parcela_Fija '{parcela_id}' pertenece a "
+                            f"la organizacion '{parcela_org}', no a '{org_id}' -- "
+                            f"solo informativo, no bloquea la ingesta."
+                        )
+        except Exception as exc:
+            print(f"  [AVISO] No se pudo verificar organizacion de socio/parcela para {identifier}: {exc}")
+
     def process_layer_rows(
         self, gdf: gpd.GeoDataFrame, table_name: str, org_id: str, photo_map: dict[str, Path]
     ) -> tuple[list[str], list[str], list[dict]]:
@@ -551,6 +604,17 @@ class DriveZipETLPipeline:
                     probe_payload.get("id_monitoreo"),
                     probe_payload.get("geom_inspeccion"),
                 )
+
+            # ADR-020: a diferencia de warn_parcela_code_conflicts arriba, esta
+            # corre para las 3 tablas EUDR_* -- EUDR_USO_SUELO/EUDR_INSTALACIONES
+            # no tienen ID_Socio, pero si id_parcela (build_uso_suelo_payload/
+            # build_instalaciones_payload), tambien sujeto al mismo gap.
+            self.warn_socio_org_mismatch(
+                org_id,
+                probe_payload.get("ID_Socio"),
+                probe_payload.get("ID_Parcela_Fija") or probe_payload.get("id_parcela"),
+                identifier,
+            )
 
             if existing_estado is not None and existing_estado != "PENDIENTE":
                 print(

@@ -86,6 +86,13 @@ function makeFakeSupabase(tableData, { rpcResponses = {} } = {}) {
         then(resolve, reject) {
           Promise.resolve({ data: rows, error: null }).then(resolve, reject)
         },
+        // ADR-020: checkSocioParcelaOrganizacion es la primera función de
+        // este archivo en usar .maybeSingle() (gisActions.js, ADR-019, ya
+        // lo usaba con su propio mock separado) — real Supabase devuelve la
+        // primera fila o null, nunca un array.
+        maybeSingle() {
+          return Promise.resolve({ data: rows[0] ?? null, error: null })
+        },
       }
       return builder
     },
@@ -477,6 +484,98 @@ test('el guard usa el mismo mensaje en lenguaje claro que buildConflictoParcelaM
     assert.match(err.message, /revisión manual/)
     assert.ok(!err.message.includes('otro-uuid'), 'no debe exponer el id_monitoreo del otro registro')
   }
+})
+
+// ---------------------------------------------------------------
+// checkSocioParcelaOrganizacion / assertSocioParcelaMismaOrganizacion (ADR-020)
+// ---------------------------------------------------------------
+
+test('approveRecord procede normalmente cuando ID_Parcela_Fija pertenece a la misma organización', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }],
+    PADRON_PARCELAS: [{ ID_Parcela_Fija: 'COOP-JS-001', ID_Organizacion: 'COOP-JS' }],
+  })
+  const record = baseRecord({ ID_Parcela_Fija: 'COOP-JS-001' })
+  await approveRecord(supabase, record, 'COOP-JS') // no debe lanzar
+})
+
+test('approveRecord aborta si ID_Parcela_Fija pertenece a otra organización real (gap real encontrado en ORG-TEST-E2E, ver ADR-020) — mensaje en lenguaje simple, sin UUID crudo', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'ORG-TEST-E2E', estado_revision: PENDING_STATE }],
+    PADRON_PARCELAS: [{ ID_Parcela_Fija: 'COOP-JS-001', ID_Organizacion: 'COOP-JS' }],
+  })
+  const record = baseRecord({
+    ID_Organizacion: 'ORG-TEST-E2E',
+    ID_Parcela_Fija: 'COOP-JS-001',
+    fecha_monitoreo: '2026-08-23',
+  })
+  await assert.rejects(
+    () => approveRecord(supabase, record, 'ORG-TEST-E2E'),
+    (err) =>
+      err instanceof EUDRQcError &&
+      err.message.includes('COOP-JS-001') &&
+      err.message.includes('COOP-JS') &&
+      err.message.includes('ORG-TEST-E2E') &&
+      err.message.includes('2026-08-23') &&
+      !err.message.includes('uuid-1')
+  )
+})
+
+test('approveRecord NO escribe estado_revision cuando hay mismatch de organización de parcela (verificado leyendo la tabla en memoria)', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'ORG-TEST-E2E', estado_revision: PENDING_STATE }],
+    PADRON_PARCELAS: [{ ID_Parcela_Fija: 'COOP-JS-001', ID_Organizacion: 'COOP-JS' }],
+  })
+  const record = baseRecord({ ID_Organizacion: 'ORG-TEST-E2E', ID_Parcela_Fija: 'COOP-JS-001' })
+  await assert.rejects(() => approveRecord(supabase, record, 'ORG-TEST-E2E'), EUDRQcError)
+  const row = (await supabase.from('EUDR_MONITOREO').select().eq('id_monitoreo', 'uuid-1')).data[0]
+  assert.equal(row.estado_revision, PENDING_STATE)
+})
+
+test('approveRecord aborta si ID_Socio (resuelto fresco desde la tabla base) pertenece a otra organización real', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [
+      { id_monitoreo: 'uuid-1', ID_Organizacion: 'ORG-TEST-E2E', ID_Socio: 'JS-00001', estado_revision: PENDING_STATE },
+    ],
+    PADRON_SOCIOS: [{ ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS' }],
+  })
+  const record = baseRecord({ ID_Organizacion: 'ORG-TEST-E2E' })
+  await assert.rejects(
+    () => approveRecord(supabase, record, 'ORG-TEST-E2E'),
+    (err) => err instanceof EUDRQcError && err.message.includes('JS-00001') && err.message.includes('COOP-JS')
+  )
+})
+
+test('rejectRecord SÍ procede normalmente pese al mismatch de organización — decisión explícita ADR-020, nunca cerrar la salida de descartar un registro problemático (a diferencia del conflicto de código de parcela, que sí bloquea ambos)', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'ORG-TEST-E2E', estado_revision: PENDING_STATE, observaciones: '' }],
+    PADRON_PARCELAS: [{ ID_Parcela_Fija: 'COOP-JS-001', ID_Organizacion: 'COOP-JS' }],
+  })
+  const record = baseRecord({ ID_Organizacion: 'ORG-TEST-E2E', ID_Parcela_Fija: 'COOP-JS-001' })
+  await rejectRecord(supabase, record, 'motivo real', 'ORG-TEST-E2E') // no debe lanzar
+})
+
+test('el chequeo de organización no explota ni reporta conflicto cuando ID_Parcela_Fija/ID_Socio no existen en el padrón (código inventado — fuera de alcance de esta verificación, ya cubierto por otras)', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }],
+    PADRON_PARCELAS: [],
+  })
+  const record = baseRecord({ ID_Parcela_Fija: 'CODIGO-INVENTADO' })
+  await approveRecord(supabase, record, 'COOP-JS') // no debe lanzar
+})
+
+test('el chequeo de organización corre para EUDR_USO_SUELO/EUDR_INSTALACIONES (a diferencia del guard de código de parcela — ID_Parcela_Fija ahí también viene de PADRON_PARCELAS)', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_USO_SUELO: [{ id: 13, ID_Organizacion: 'ORG-TEST-E2E', estado_revision: PENDING_STATE }],
+    PADRON_PARCELAS: [{ ID_Parcela_Fija: 'COOP-JS-001', ID_Organizacion: 'COOP-JS' }],
+  })
+  const record = baseRecord({
+    tabla_origen: 'EUDR_USO_SUELO',
+    id_origen: 13,
+    ID_Organizacion: 'ORG-TEST-E2E',
+    ID_Parcela_Fija: 'COOP-JS-001',
+  })
+  await assert.rejects(() => approveRecord(supabase, record, 'ORG-TEST-E2E'), EUDRQcError)
 })
 
 // ---------------------------------------------------------------

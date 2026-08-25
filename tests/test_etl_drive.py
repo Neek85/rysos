@@ -34,6 +34,15 @@ GEOJSON_ORG001 = {
 }
 
 
+# ADR-020: warn_socio_org_mismatch tambien llama self.supabase.table(...)
+# (para PADRON_SOCIOS/PADRON_PARCELAS), asi que mock_supabase.table.call_args_list
+# ya no contiene SOLO los 3 nombres de tabla EUDR_* en el mismo orden que los
+# upserts reales -- los tests que reconstruyen payload_by_table via
+# zip(table_calls, insert_payloads) filtran por este set para no romper esa
+# alineacion 1:1 (mismo criterio ya usado antes de ADR-020, solo mas explicito).
+EUDR_TABLES = ("EUDR_MONITOREO", "EUDR_USO_SUELO", "EUDR_INSTALACIONES")
+
+
 def make_package_zip(zip_path: Path, geojson: dict, photo_name: str | None = "foto_01.jpg") -> None:
     with zipfile.ZipFile(zip_path, "w") as zf:
         zf.writestr("inspeccion.geojson", json.dumps(geojson))
@@ -609,7 +618,7 @@ class TestMultiLayerIngestion(unittest.TestCase):
             )
             self.assertEqual(len(result["inserted_ids"]), 3)
 
-            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
+            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list if c.args[0] in EUDR_TABLES]
             self.assertEqual(
                 set(table_calls), {"EUDR_MONITOREO", "EUDR_USO_SUELO", "EUDR_INSTALACIONES"}
             )
@@ -644,7 +653,7 @@ class TestMultiLayerIngestion(unittest.TestCase):
             pipeline, mock_supabase = build_pipeline(drive_root)
             pipeline.process_package(zip_path, execute_move=True)
 
-            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
+            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list if c.args[0] in EUDR_TABLES]
             insert_payloads = [
                 c.args[0] for c in mock_supabase.table.return_value.upsert.call_args_list
             ]
@@ -673,7 +682,7 @@ class TestMultiLayerIngestion(unittest.TestCase):
             pipeline, mock_supabase = build_pipeline(drive_root)
             pipeline.process_package(zip_path, execute_move=True)
 
-            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
+            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list if c.args[0] in EUDR_TABLES]
             insert_payloads = [
                 c.args[0] for c in mock_supabase.table.return_value.upsert.call_args_list
             ]
@@ -698,7 +707,7 @@ class TestMultiLayerIngestion(unittest.TestCase):
             pipeline, mock_supabase = build_pipeline(drive_root)
             pipeline.process_package(zip_path, execute_move=True)
 
-            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list]
+            table_calls = [c.args[0] for c in mock_supabase.table.call_args_list if c.args[0] in EUDR_TABLES]
             insert_payloads = [
                 c.args[0] for c in mock_supabase.table.return_value.upsert.call_args_list
             ]
@@ -1235,6 +1244,138 @@ class TestParcelaCodeConflictWarning(unittest.TestCase):
 
         self.assertIn("AVISO", buf.getvalue())
         mock_supabase.table.return_value.upsert.assert_called_once()
+
+
+class TestSocioOrgMismatchWarning(unittest.TestCase):
+    """ADR-020: warn_socio_org_mismatch es SOLO informativa (nunca bloquea la
+    ingesta) -- el bloqueo real de la decision de QC vive en
+    assertSocioParcelaMismaOrganizacion, lib/eudrQcActions.js, no en el ETL.
+    Se prueba llamando la funcion directo (no via process_layer_rows): usa el
+    mismo chain de mock de un solo .eq() que fetch_existing_estado_revision
+    para EUDR_MONITOREO (on_conflict de una sola columna), asi que probarla
+    end-to-end pisaria esa configuracion sin necesidad -- llamarla aislada
+    evita esa colision sin cambiar el comportamiento real que se prueba."""
+
+    def _pipeline(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline, mock_supabase = build_pipeline(Path(tmp))
+        return pipeline, mock_supabase
+
+    def test_no_warning_when_socio_belongs_to_the_same_org(self):
+        pipeline, mock_supabase = self._pipeline()
+        select_mock = mock_supabase.table.return_value.select.return_value
+        select_mock.eq.return_value.execute.return_value.data = [{"ID_Organizacion": "ORG-001"}]
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline.warn_socio_org_mismatch("ORG-001", "SOC-001", None, "test-id")
+
+        self.assertNotIn("ADVERTENCIA", buf.getvalue())
+
+    def test_warns_when_socio_belongs_to_a_different_org(self):
+        pipeline, mock_supabase = self._pipeline()
+        select_mock = mock_supabase.table.return_value.select.return_value
+        select_mock.eq.return_value.execute.return_value.data = [{"ID_Organizacion": "COOP-JS"}]
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline.warn_socio_org_mismatch("ORG-TEST-E2E", "JS-00001", None, "registro-123")
+
+        output = buf.getvalue()
+        self.assertIn("ADVERTENCIA", output)
+        self.assertIn("registro-123", output)
+        self.assertIn("JS-00001", output)
+        self.assertIn("COOP-JS", output)
+        self.assertIn("ORG-TEST-E2E", output)
+        self.assertIn("no bloquea la ingesta", output)
+
+    def test_warns_when_parcela_belongs_to_a_different_org(self):
+        pipeline, mock_supabase = self._pipeline()
+        select_mock = mock_supabase.table.return_value.select.return_value
+        select_mock.eq.return_value.execute.return_value.data = [{"ID_Organizacion": "COOP-ND"}]
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline.warn_socio_org_mismatch("ORG-TEST-E2E", None, "COOP-ND-004", "registro-456")
+
+        output = buf.getvalue()
+        self.assertIn("ADVERTENCIA", output)
+        self.assertIn("COOP-ND-004", output)
+        self.assertIn("COOP-ND", output)
+
+    def test_no_warning_when_socio_or_parcela_do_not_exist_in_the_padron_yet(self):
+        # ID_Socio/ID_Parcela_Fija de texto libre que no existen en el padron
+        # (ej. un codigo mal tipeado) -- fuera de alcance de esta advertencia,
+        # ya cubierto por otras verificaciones (ADR-019 del lado del Editor
+        # Vectorial/Cargar Capa Espacial); este ETL nunca los rechaza.
+        pipeline, mock_supabase = self._pipeline()
+        select_mock = mock_supabase.table.return_value.select.return_value
+        select_mock.eq.return_value.execute.return_value.data = []
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline.warn_socio_org_mismatch("ORG-001", "SOC-INEXISTENTE", "PARC-INEXISTENTE", "test-id")
+
+        self.assertNotIn("ADVERTENCIA", buf.getvalue())
+
+    def test_no_query_at_all_when_socio_id_and_parcela_id_are_both_empty(self):
+        pipeline, mock_supabase = self._pipeline()
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            pipeline.warn_socio_org_mismatch("ORG-001", None, None, "test-id")
+
+        self.assertNotIn("ADVERTENCIA", buf.getvalue())
+        mock_supabase.table.assert_not_called()
+
+    def test_never_raises_even_if_the_check_itself_fails(self):
+        pipeline, mock_supabase = self._pipeline()
+        select_mock = mock_supabase.table.return_value.select.return_value
+        select_mock.eq.return_value.execute.side_effect = RuntimeError("fallo simulado de red")
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            # No debe lanzar -- best-effort, mismo criterio que audit_logs (ADR-013)
+            # y warn_parcela_code_conflicts (ADR-014).
+            pipeline.warn_socio_org_mismatch("ORG-001", "SOC-001", "PARC-001", "test-id")
+
+        self.assertIn("AVISO", buf.getvalue())
+
+    def test_wired_into_process_layer_rows_for_the_3_tablas_eudr(self):
+        # Confirma que el punto de llamada dentro de process_layer_rows existe
+        # para las 3 tablas (no solo EUDR_MONITOREO, a diferencia de
+        # warn_parcela_code_conflicts) -- parcheando la funcion misma para no
+        # depender de la forma real del mock de Supabase.
+        pipeline, mock_supabase = self._pipeline()
+
+        monitoreo_gdf = gpd.GeoDataFrame(
+            {"ID_Parcela_Fija": ["PARC-001"], "ID_Socio": ["SOC-001"], "fecha_monitoreo": ["2026-08-16"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        uso_suelo_gdf = gpd.GeoDataFrame(
+            {"id_parcela": ["PARC-001"], "tipo_uso": ["Cafetal"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+        instalaciones_gdf = gpd.GeoDataFrame(
+            {"id_parcela": ["PARC-001"], "tipo_infra": ["Beneficio Humedo"]},
+            geometry=[Point(-77.0, -12.0)],
+            crs="EPSG:4326",
+        )
+
+        with patch.object(pipeline, "warn_socio_org_mismatch") as mock_warn:
+            pipeline.process_layer_rows(monitoreo_gdf, "EUDR_MONITOREO", "ORG-001", {})
+            pipeline.process_layer_rows(uso_suelo_gdf, "EUDR_USO_SUELO", "ORG-001", {})
+            pipeline.process_layer_rows(instalaciones_gdf, "EUDR_INSTALACIONES", "ORG-001", {})
+
+        self.assertEqual(mock_warn.call_count, 3)
+        monitoreo_call, uso_suelo_call, instalaciones_call = mock_warn.call_args_list
+        self.assertEqual(monitoreo_call.args[:3], ("ORG-001", "SOC-001", "PARC-001"))
+        self.assertEqual(uso_suelo_call.args[:3], ("ORG-001", None, "PARC-001"))
+        self.assertEqual(instalaciones_call.args[:3], ("ORG-001", None, "PARC-001"))
 
 
 class TestProtectsAlreadyReviewedRecords(unittest.TestCase):
