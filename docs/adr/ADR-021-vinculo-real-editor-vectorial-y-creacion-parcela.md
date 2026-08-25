@@ -207,6 +207,74 @@ de prueba en `ORG-TEST-E2E`, borrados por completo al final:
 | `EUDR_USO_SUELO` (todas las orgs) | 6 | 5 |
 | Rastros de `TEST-ADR021-*` (`PADRON_SOCIOS`/`PADRON_PARCELAS`/`EUDR_MONITOREO`) | — | 0 |
 
+### Corrección de la verificación: geometría de prueba a escala imposible, re-verificado a escala real
+
+El usuario detectó, antes de confirmar el push, que `area_monitoreo_ha`
+había salido en `263997.2019` (263,997 ha) — un número físicamente
+imposible para una parcela de café dibujada a mano. Investigado antes de
+seguir:
+
+**Causa real, confirmada, no un bug de código:** el mapa de la Consola QC
+arranca en `zoom 8` y hace `fitBounds` sobre los 13 registros PENDIENTE
+visibles (`components/gis/QcConsoleMap.jsx`) — sin ningún piso mínimo de
+zoom. Dibujé el polígono de prueba con clicks sintéticos de ~60-120px de
+delta **sin seleccionar antes ningún registro real** (que sí dispara
+`flyTo(..., zoom>=16)`), así que el mapa seguía en ese zoom bajísimo. A
+zoom 8, cada píxel cubre ~611m — un triángulo de ~120×120px cubre del
+orden de 73×73km, que da exactamente el orden de magnitud del número
+observado (confirmado por cálculo, no solo por sospecha). `fn_calcular_area_ha`
+y `fn_cobertura_uso_suelo_parcela` no se tocaron en esta tarea y ya tenían
+cobertura de test previa (ADR-005/ADR-011) — el número reflejaba
+fielmente el polígono real que se guardó, solo que ese polígono era
+absurdo.
+
+**Re-verificación completa con geometría a escala real** (mismo flujo
+completo — socio nuevo, parcela nueva, perímetro, subdivisión — repetido
+de punta a punta, esta vez seleccionando primero un registro real para
+llevar el mapa a un zoom real de campo antes de dibujar con clicks de
+pocos píxeles):
+
+| | Perímetro (Monitoreo) | Subdivisión (Uso de Suelo) |
+|---|---|---|
+| Área estimada en pantalla (cliente) | 4.6127 ha | 2.5934 ha |
+| `area_calculada_ha` real (servidor, `fn_calcular_area_ha`) | 4.5929 ha | 2.5822 ha |
+
+Coherente con el margen ya documentado entre el cálculo del navegador y
+el del servidor (ADR-005, distintas fórmulas de superficie sobre un
+globo). Vínculo, otra vez, exacto:
+
+```
+EUDR_MONITOREO.qfield_relation_id = "4c0f4ed7-b6ac-4eb4-8d4f-0c36a74e2909"
+EUDR_USO_SUELO.id_parcela        = "4c0f4ed7-b6ac-4eb4-8d4f-0c36a74e2909"
+```
+
+`fn_cobertura_uso_suelo_parcela` sobre este perímetro, con la subdivisión
+ya `APROBADO`:
+
+```json
+{
+  "area_monitoreo_ha": 4.5929,
+  "totalh_padron_ha": 4.6,
+  "divergencia_totalh_pct": 0.15,
+  "suma_uso_suelo_aprobado_ha": 2.5822,
+  "hueco_cobertura": true,
+  "bloquea_aprobacion": true
+}
+```
+
+Todo coherente: `totalh_padron_ha` (el valor cargado a mano en
+`ParcelaFormModal`, `4.6`) casi coincide con el área real medida
+(`4.5929`, divergencia `0.15%` — a diferencia del caso real de ADR-011
+donde `totalh` subestimaba por 10x, acá coinciden porque cargué un valor
+realista a propósito); `suma_uso_suelo_aprobado_ha` es exactamente el
+área de la única subdivisión (dibujé una sola, cubriendo ~56% del
+perímetro) — `hueco_cobertura: true` es el resultado CORRECTO, no un
+error: falta clasificar el resto de la parcela, tal como debería
+detectarse. Limpieza de esta segunda ronda (mismo patrón, conteo
+antes/después): `EUDR_MONITOREO` PENDIENTE `14 → 13`, `EUDR_USO_SUELO`
+`6 → 5`, cero rastros de `TEST-ADR021B-*` — ambos vuelven exactos a los
+mismos 13/5 de siempre.
+
 ## Verificación no visual
 
 - `npm run build`: compiló sin errores.
