@@ -60,9 +60,28 @@ test('QcConsoleMap.jsx importa y usa el Editor Vectorial (useVectorEditor + Vect
   assert.match(source, /VectorEditorPanel/)
 })
 
-test('el Editor Vectorial de QC solo ofrece EUDR_MONITOREO/EUDR_USO_SUELO como destino, nunca EUDR_INSTALACIONES/PADRON_PARCELAS', () => {
+test('el Editor Vectorial de QC ofrece EUDR_MONITOREO/EUDR_USO_SUELO/EUDR_INSTALACIONES como destino (ADR-022), nunca PADRON_PARCELAS', () => {
   const source = read('components/gis/QcConsoleMap.jsx')
-  assert.match(source, /QC_DRAWABLE_TABLES\s*=\s*\[\s*'EUDR_MONITOREO'\s*,\s*'EUDR_USO_SUELO'\s*\]/)
+  // Array exacto de 3 elementos -- por construcción, PADRON_PARCELAS no
+  // puede estar presente sin romper este match.
+  assert.match(
+    source,
+    /QC_DRAWABLE_TABLES\s*=\s*\[\s*'EUDR_MONITOREO'\s*,\s*'EUDR_USO_SUELO'\s*,\s*'EUDR_INSTALACIONES'\s*\]/
+  )
+})
+
+test('ADR-022: backend (lib/gisTargetTables.js) ya soportaba EUDR_INSTALACIONES sin cambios -- solo se tocó el array de QcConsoleMap.jsx', async () => {
+  const { TARGET_TABLE_FIELDS, TARGET_TABLE_GEOMETRY_TYPES } = await import('../lib/gisTargetTables.js')
+  assert.deepEqual(
+    TARGET_TABLE_FIELDS.EUDR_INSTALACIONES.map((f) => f.key),
+    ['id_parcela', 'tipo_infra']
+  )
+  assert.deepEqual(TARGET_TABLE_GEOMETRY_TYPES.EUDR_INSTALACIONES, ['Point'])
+  // gisActions.js (server actions) tampoco se tocó -- la rama de escritura
+  // de EUDR_INSTALACIONES ya validaba contra el padrón real desde antes
+  // (ADR-019), confirmada en vivo en esta tarea contra ORG-TEST-E2E.
+  const gisActionsSource = read('lib/actions/gisActions.js')
+  assert.match(gisActionsSource, /assertParcelaActivaOSinValor\(supabase, fieldOverrides\.id_parcela, organizationId\)/)
 })
 
 test('QcConsoleMap.jsx deshabilita los controles globales de Editar/Arrastrar/Eliminar de geoman (evita chocar con editingKey)', () => {

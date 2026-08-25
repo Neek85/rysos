@@ -6,11 +6,14 @@ import VectorEditorPanel, { useVectorEditor } from '@/app/dashboard/qc/component
 import { fetchParcelasVecinas } from '@/lib/actions/qcActions'
 
 // Tablas destino que la Consola QC puede crear desde cero con el Editor
-// Vectorial — deliberadamente NO las 4 de GIS_TARGET_TABLES:
-// EUDR_INSTALACIONES/PADRON_PARCELAS quedan fuera a propósito
-// (specs/ui_reorganization_geoman.md pide explícitamente solo
-// EUDR_MONITOREO/EUDR_USO_SUELO desde acá).
-const QC_DRAWABLE_TABLES = ['EUDR_MONITOREO', 'EUDR_USO_SUELO']
+// Vectorial — deliberadamente NO las 4 de GIS_TARGET_TABLES: PADRON_PARCELAS
+// queda fuera (eso lo consume el Ingestor de Capas Espaciales,
+// CargaEspacialModal.jsx, no este editor). EUDR_INSTALACIONES SÍ se ofrece
+// (ADR-022) — su exclusión original (specs/ui_reorganization_geoman.md) fue
+// una omisión de scope de esa tarea puntual, no una decisión de negocio: el
+// backend (lib/actions/gisActions.js, lib/gisTargetTables.js) ya soportaba
+// campos/validación/restricción de geometría para esta tabla desde antes.
+const QC_DRAWABLE_TABLES = ['EUDR_MONITOREO', 'EUDR_USO_SUELO', 'EUDR_INSTALACIONES']
 
 // Estilo por tabla_origen — deliberadamente distinto de los 11 colores de
 // MapDashboard.jsx (uso de suelo/infraestructura): esta es una vista de
