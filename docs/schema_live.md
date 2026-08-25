@@ -82,6 +82,15 @@ adicionales no documentadas aquí.
 > conocido en el repo) y `PADRON_PARCELAS.hbp`/`otros_cultivo` son `text`
 > en la instancia real, no `numeric` como el resto de las columnas de
 > hectáreas.
+>
+> **Actualización (2026-08-25, ADR-024):** la discrepancia de
+> `hbp`/`otros_cultivo` anotada arriba tiene migración lista —
+> `supabase/migrations/20260825142426_normaliza_tipo_hbp_otros_cultivo.sql`
+> (`ALTER COLUMN ... TYPE numeric`, pendiente de aplicación manual). Una
+> vez aplicada, ambas columnas pasan a `numeric`, igual que
+> `hcp`/`hcc`/`ho`/`hip`/`hrp` en la misma tabla — la línea de la sección
+> "`public."PADRON_PARCELAS"`" más abajo que las lista junto al resto de
+> columnas de hectáreas queda correcta recién en ese momento.
 
 ### `public."ORGANIZACIONES"`
 - Columnas reales confirmadas en vivo con Service Role Key (2026-08-21 —
