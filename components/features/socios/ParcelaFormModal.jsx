@@ -143,7 +143,7 @@ export default function ParcelaFormModal({ socio, organizationId, onClose, onPar
     }
     setLoading(true)
     try {
-      const rows = await fetchParcelasBySocio(supabase, socio.ID_Socio)
+      const rows = await fetchParcelasBySocio(supabase, socio.ID_Socio, organizationId)
       setParcelas(rows)
     } catch (err) {
       setError(err?.message || 'Error al cargar parcelas.')

@@ -35,17 +35,18 @@ export default function SociosPage() {
   const [deactivating, setDeactivating] = useState(false)
   const [showImport, setShowImport] = useState(false)
 
-  // FIX (2026-08-18, "Violación multi-tenant" falso positivo al editar
-  // parcelas): esta tabla no filtra por ID_Organizacion (fetchSocios no
-  // lo hace, ver lib/sociosSearch.js) — la página puede mostrar socios de
-  // más de una organización a la vez. `organizationId` acá es solo una
-  // heurística de "mejor esfuerzo" para el caso de ALTA de un socio nuevo
-  // (no hay ningún registro existente del que tomar el valor real). Para
-  // EDITAR un socio o gestionar las parcelas de uno ya existente, SIEMPRE
-  // se debe usar `<registro>.ID_Organizacion` real (ver más abajo,
-  // `editingSocio.ID_Organizacion` / `parcelasSocio.ID_Organizacion`) —
-  // nunca esta heurística de página, que puede apuntar a una organización
-  // distinta a la del registro que realmente se está editando.
+  // HOTFIX (2026-08-25, "Multi-Tenant Estricto" -- ver lib/sociosSearch.js):
+  // fetchSocios ahora filtra por ID_Organizacion en la propia query (probe
+  // de organización + fetch scopeado, mismo patrón que
+  // components/gis/MapDashboard.jsx) -- `rows` ya viene de una única
+  // organización, así que `resolveActiveOrganizationId(rows)` deja de ser
+  // una heurística sobre datos mezclados y pasa a ser una lectura directa
+  // de esa organización. Se sigue usando (en vez de leer `rows[0]` a mano)
+  // solo por consistencia con el resto del módulo. Para EDITAR un socio o
+  // gestionar las parcelas de uno ya existente, se sigue prefiriendo
+  // `<registro>.ID_Organizacion` real (`editingSocio.ID_Organizacion` /
+  // `parcelasSocio.ID_Organizacion`, ver más abajo) — mismo criterio de
+  // siempre, no depender de esta variable de página para escrituras.
   const organizationId = resolveActiveOrganizationId(rows)
 
   async function load() {
