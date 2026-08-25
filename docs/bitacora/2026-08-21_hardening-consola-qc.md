@@ -43,6 +43,23 @@ necesidad de leer código. Cubre desde el commit `0d003e8` hasta el
 > repaso completo de cómo funciona hoy la baja de socios y qué haría falta
 > para transferir una parcela entre organizaciones.
 
+> **Actualización (24 de agosto de 2026):** se agregó la sección 10 ("El
+> Editor Vectorial: cuatro problemas de uso diario, y un hallazgo que
+> apareció probándolo"), que corrió "Qué queda pendiente" y la tabla
+> técnica un lugar más hacia abajo (ahora 11 y 12). Cubre 4 commits nuevos
+> (`70ff8a7`, `0bcae00`, `3ecf718`, `5c13874`) que siguieron después de
+> `a66218a` (el commit que escribió esta misma bitácora): cuatro problemas
+> reales de uso diario del Editor Vectorial (crear registros nuevos
+> dibujando sobre el mapa), encontrados usando la herramienta, no
+> inventados — y, en el medio de probar la corrección del último, un
+> hallazgo real de datos mezclados entre organizaciones que se corrigió
+> con el mismo patrón de dos capas ya usado para el conflicto de código de
+> parcela (punto 8.3). Queda fuera de este rango un commit más
+> (`d0ae441`, sobre el formato del paquete de exportación de trazabilidad
+> EUDR) — es de un tema completamente distinto (no toca la Consola QC ni
+> el Editor Vectorial) y ya tiene su propia documentación aparte, así que
+> no se incluye acá.
+
 ---
 
 ## 1. Qué problemas reales se encontraron y corrigieron en la Consola QC
@@ -493,7 +510,128 @@ de esta sesión, sin apurar una solución.
 > respaldar un lote real de café no se puede perder solo porque el
 > productor dejó la cooperativa después.
 
-## 10. Qué queda pendiente
+## 10. El Editor Vectorial: cuatro problemas de uso diario, y un hallazgo que apareció probándolo
+
+El Editor Vectorial es la parte de la Consola QC que permite crear un
+registro nuevo dibujando directamente sobre el mapa satelital (un
+perímetro, o una subdivisión de uso de suelo) — en vez de esperar a que
+llegue por sincronización desde el celular del técnico de campo. En este
+tramo el usuario reportó cuatro problemas reales, encontrados usando la
+herramienta día a día, no en una revisión de código:
+
+1. Se podían dibujar varios marcadores (puntos) seguidos, sin ninguna
+   forma de borrar los que sobraban.
+2. La barra de dibujo no tenía en cuenta qué tabla estaba seleccionada —
+   se podía dibujar un punto aunque la tabla elegida solo aceptara
+   polígonos (o al revés), y el error recién aparecía al final, al
+   intentar guardar.
+3. El campo "Tipo de Uso" (por ejemplo, "Producción", "Bosque", "Pan
+   Llevar") era un cuadro de texto libre — cualquiera podía escribir
+   cualquier cosa, con errores de tipeo o mayúsculas/minúsculas distintas
+   cada vez.
+4. Los campos "Código de Socio" y "Código de Parcela" también eran texto
+   libre — se podía guardar un registro con un código inventado, sin que
+   el sistema verificara que ese socio o esa parcela existieran de
+   verdad.
+
+### 10.1 Los primeros dos: la barra de dibujo ahora reacciona a lo que está pasando
+
+Antes, la barra de herramientas de dibujo (los botones de "marcador" y
+"polígono" sobre el mapa) se configuraba una sola vez al abrir la
+pantalla y no volvía a cambiar. Se corrigió para que reaccione en tiempo
+real a dos cosas: qué tabla está seleccionada (si esa tabla solo acepta
+polígonos, el botón de marcador queda deshabilitado directamente, antes
+de tocar el mapa) y si ya hay un dibujo sin guardar en curso (mientras
+haya un borrador pendiente, ambos botones quedan bloqueados — no se
+puede empezar un dibujo nuevo hasta guardar o cancelar el actual). Esto
+cierra de raíz el problema de los marcadores sobrantes: ya no hay forma
+de que aparezcan, porque nunca se puede iniciar un segundo dibujo
+mientras el primero siga sin resolver.
+
+### 10.2 "Tipo de Uso" pasó a ser una lista, no un cuadro de texto
+
+Se reemplazó el cuadro de texto libre por una lista desplegable con las 7
+categorías reales que ya se usan en el mapa principal para colorear las
+subdivisiones (Producción, Crecimiento, Pan Llevar, Inverna/Pasto,
+Rastrojo/Purma, Bosque, Otras áreas) — tomadas de un único lugar del
+código para que el mapa y este formulario nunca puedan mostrar una lista
+distinta de la otra.
+
+### 10.3 Los códigos de socio y parcela ahora se buscan, no se escriben
+
+Este fue el cambio más grande del tramo. "Código de Socio" y "Código de
+Parcela" dejaron de ser cuadros de texto: ahora son buscadores reales,
+el mismo tipo de buscador que ya existe en la pantalla de Inspecciones —
+se escribe un nombre, un DNI o un código, aparecen coincidencias reales
+del padrón de productores, y solo se puede elegir una de esas
+coincidencias. Ya no es posible guardar un registro con un código
+inventado, porque ya no hay forma de escribirlo a mano.
+
+Para el caso de un socio genuinamente nuevo (que todavía no existe en el
+padrón), se agregó un botón "+ Crear socio nuevo" que abre el mismo
+formulario que ya existe en la pantalla de Productores y Parcelas, como
+una ventana superpuesta — sin perder el dibujo que se estaba haciendo en
+el mapa detrás. Ese formulario aplica exactamente las mismas reglas que
+ya existían ahí (por ejemplo, que no se repita un DNI dentro de la misma
+organización): no se escribió ninguna regla nueva, se reutilizó la que ya
+estaba probada, para que las dos pantallas nunca puedan quedar
+desincronizadas.
+
+También se agregó algo pensado para el trabajo real de campo: si un
+técnico dibuja primero el perímetro de una parcela (eligiendo su socio y
+su código) y después dibuja, seguido, varias subdivisiones de esa misma
+parcela, ya no hace falta volver a buscar el mismo socio y la misma
+parcela cada vez — el sistema los precarga automáticamente del último
+guardado exitoso, dejándolos igual de editables por si hiciera falta
+cambiarlos.
+
+### 10.4 El hallazgo: datos de una organización apareciendo mezclados con los de otra
+
+Mientras se probaba todo lo anterior con datos reales, usando los
+botones "Cargar Capa Espacial" y "Sincronizar Google Drive", aparecieron
+9 registros nuevos en la organización de pruebas. Revisándolos con
+cuidado antes de dar por buena la prueba, se encontró algo que no tenía
+que ver con datos de prueba en sí: **7 de esos 9 registros
+referenciaban un socio o una parcela que sí existen de verdad — pero
+pertenecen a otra organización real** (dos cooperativas reales del
+sistema, no organizaciones inventadas). Es decir, un registro guardado
+bajo la organización de pruebas, pero "hablando de" el socio de otra
+organización distinta.
+
+Investigando la causa, se confirmó que ninguna de las dos partes del
+sistema que pudo haber creado estos registros avisaba de esto:
+
+- El sincronizador de Google Drive nunca comparaba el socio o la parcela
+  que trae el archivo de campo contra la organización real a la que
+  pertenecen — solo confiaba en el nombre de la carpeta de Drive de
+  donde vino el archivo.
+- Tampoco lo detectaba la propia Consola QC al momento de aprobar un
+  registro: la verificación que ya existía ahí solo confirmaba que el
+  registro perteneciera a la organización que se estaba mirando en
+  pantalla en ese momento — nunca verificaba si el socio o la parcela
+  mencionados adentro del registro eran realmente de esa organización.
+
+**La corrección siguió el mismo patrón de dos capas que ya se había
+usado antes para el problema del código de parcela repetido (punto
+8.3):** el sincronizador de Google Drive ahora avisa con un mensaje claro
+en su registro de actividad cuando detecta este tipo de mezcla, pero
+nunca bloquea la carga — sigue trayendo los datos igual, porque frenar
+una sincronización completa por un dato sospechoso sería peor que
+avisar y dejar que alguien lo revise. La Consola QC, en cambio, sí
+bloquea de verdad: si un revisor intenta aprobar un registro con esta
+mezcla, el botón "Aprobar" aparece deshabilitado con el motivo explicado
+en pantalla — pero el botón "Rechazar" queda siempre disponible, a
+propósito, para que nunca quede cerrada la salida de simplemente
+descartar un registro problemático.
+
+Se verificó todo esto en vivo, contra los 9 registros reales del
+hallazgo (sin borrarlos ni modificarlos — quedan ahí, como evidencia, y
+ahora protegidos por el nuevo bloqueo si alguien intentara aprobarlos) y
+corriendo el sincronizador real una vez más contra un paquete de prueba
+aparte, desechable, para confirmar el aviso en el registro de actividad
+y que la carga efectivamente no se frena.
+
+## 11. Qué queda pendiente
 
 **a) Dónde debe exigirse la cobertura completa de verdad — no
 decidido.** Como se explica en el punto 7: la validación de cobertura ya
@@ -558,9 +696,19 @@ riesgo real una vez que haya datos de un cliente real cargados. No se
 había planteado antes en este proyecto; queda como recomendación a
 evaluar antes de ese paso.
 
+**e) Por qué "Instalaciones" no aparece como tabla destino en el Editor
+Vectorial — duda menor, sin resolver.** El Editor Vectorial (punto 10)
+solo ofrece hoy dos tablas destino para dibujar un registro nuevo:
+Monitoreo y Uso de Suelo. Instalaciones (por ejemplo, una construcción o
+un beneficio dentro de una parcela) no aparece como opción, y no quedó
+confirmado en este tramo si es una decisión de diseño tomada a propósito
+en algún momento anterior, o simplemente algo que nunca se agregó. No es
+urgente — Instalaciones se puede seguir cargando por otras vías — pero
+queda como pregunta abierta para confirmar más adelante.
+
 ---
 
-## 11. Para quien quiera el detalle técnico
+## 12. Para quien quiera el detalle técnico
 
 | Tema | Documento técnico | Commit(s) |
 |---|---|---|
@@ -578,9 +726,14 @@ evaluar antes de ese paso.
 | Un código de parcela debe corresponder a un único lugar físico — detección, bloqueo en pantalla, guard del lado del servidor, y mensaje en lenguaje claro | [ADR-014](../adr/ADR-014-codigo-parcela-unico-por-ubicacion.md) | `9ad7aa2`, `6611451`, `5ad2aa3` |
 | `PUNTOS_COLUMNS` nunca pedía `id_origen` — el mensaje de error culpaba a una migración ya aplicada; Instalaciones ya se puede aprobar/rechazar | [ADR-015](../adr/ADR-015-fix-puntos-columns-id-origen.md) | `e938d0d` |
 | Autocompletado de Inspecciones excluye socios/parcelas dados de baja; repaso de baja lógica y bloqueo de transferencia entre organizaciones | [ADR-016](../adr/ADR-016-padron-autocompletado-excluye-inactivos.md) | `a7fd9f6` |
+| Editor Vectorial: la barra de dibujo reacciona a la tabla destino y se bloquea con un dibujo sin guardar (cierra el problema de marcadores sobrantes) | [ADR-018](../adr/ADR-018-editor-vectorial-restriccion-por-tabla.md) | `70ff8a7` |
+| "Tipo de Uso" pasa de texto libre a lista desplegable con las 7 categorías reales, misma fuente que el mapa principal | — (sin ADR propio, ver commit) | `0bcae00` |
+| Editor Vectorial: "Código de Socio"/"Código de Parcela" ahora buscan y validan contra el padrón real; "+ Crear socio nuevo" reutiliza el formulario de Productores y Parcelas; herencia de socio/parcela entre geometrías consecutivas | [ADR-019](../adr/ADR-019-editor-vectorial-validacion-padron-y-creacion-socio.md) | `3ecf718` |
+| Hallazgo: registros con socio/parcela de otra organización (Sincronizar Google Drive nunca lo validaba). Aviso informativo en el sincronizador (nunca bloquea la carga) + bloqueo real de "Aprobar" en la Consola QC (Rechazar sigue siempre disponible) | [ADR-020](../adr/ADR-020-validacion-organizacion-socio-parcela.md) | `5c13874` |
 
 **Commits del tramo completo, en orden:** `0d003e8` → `111727b` →
 `a62fce6` → `c56f18f` → `4a910a4` → `b212424` → `a6e817c` → `2391859` →
 `488c993` → `7eb744e` → `ce4053f` → `affdc2a` → `cba6474` → `d2bcebd` →
 `f099a75` → `1ec2c2d` → `5c6d4f9` → `2ac75d6` → `4de126d` → `a611779` →
-`9ad7aa2` → `6611451` → `5ad2aa3` → `e938d0d` → `a7fd9f6`.
+`9ad7aa2` → `6611451` → `5ad2aa3` → `e938d0d` → `a7fd9f6` → `70ff8a7` →
+`0bcae00` → `3ecf718` → `5c13874`.
