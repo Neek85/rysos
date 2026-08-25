@@ -60,6 +60,23 @@ necesidad de leer código. Cubre desde el commit `0d003e8` hasta el
 > el Editor Vectorial) y ya tiene su propia documentación aparte, así que
 > no se incluye acá.
 
+> **Actualización (25 de agosto de 2026):** se agregó la sección 11 ("El
+> Editor Vectorial, de punta a punta: el vínculo de cobertura, la parcela
+> nueva, e Instalaciones"), que corrió "Qué queda pendiente" y la tabla
+> técnica un lugar más hacia abajo (ahora 12 y 13). Cubre 3 commits nuevos
+> (`1e0f09d`, `9088eb1`, `d8cbb2e`) que siguieron directamente después de
+> `d777f99` (el commit que escribió la sección anterior): mientras se
+> probaba de punta a punta la creación de socios y parcelas nuevas desde
+> el mapa, apareció un bug real que dejaba invisible, en silencio, toda
+> subdivisión de Uso de Suelo creada así para el cálculo de cobertura de
+> Fase B — corregido extendiendo el mismo mecanismo ya usado para los
+> datos de campo. En el camino, un número de verificación físicamente
+> imposible (29,371 hectáreas) resultó ser un error de metodología de
+> prueba, no un bug de código — se cuenta acá cómo se detectó y cómo se
+> confirmó. También se agregó la posibilidad de crear una parcela nueva
+> directamente desde el Editor Vectorial, y se cerró la duda pendiente
+> sobre por qué "Instalaciones" no aparecía como tabla destino.
+
 ---
 
 ## 1. Qué problemas reales se encontraron y corrigieron en la Consola QC
@@ -631,7 +648,129 @@ corriendo el sincronizador real una vez más contra un paquete de prueba
 aparte, desechable, para confirmar el aviso en el registro de actividad
 y que la carga efectivamente no se frena.
 
-## 11. Qué queda pendiente
+## 11. El Editor Vectorial, de punta a punta: el vínculo de cobertura, la parcela nueva, e Instalaciones
+
+Con los cuatro problemas del punto 10 ya corregidos, se probó el Editor
+Vectorial de punta a punta, con el flujo real de un técnico en el campo:
+crear un socio nuevo, crear su parcela, dibujar el perímetro, y dibujar
+adentro una subdivisión de Uso de Suelo — todo desde el mapa, sin volver a
+ninguna otra pantalla. Esa prueba de punta a punta destapó un bug serio que
+ninguna prueba anterior había podido ver, porque ninguna prueba anterior
+había completado el flujo entero.
+
+### 11.1 El hallazgo: las subdivisiones creadas desde el mapa quedaban invisibles para el cálculo de cobertura
+
+La validación de cobertura completa (punto 7 de esta bitácora) depende de
+un vínculo real entre cada subdivisión de Uso de Suelo y su parcela madre —
+un identificador técnico interno que normalmente llega desde el celular del
+técnico de campo (QField) y que el punto 6 de esta bitácora ya se había
+encargado de preservar durante la carga de datos por sincronización.
+
+Lo que no se había probado hasta ahora es qué pasaba con ese mismo vínculo
+cuando el dato **no** viene de una sincronización, sino que se crea a mano
+desde el Editor Vectorial. La respuesta, confirmada con datos reales: no
+pasaba nada — el Editor Vectorial nunca generaba ese identificador técnico
+al crear un perímetro nuevo, y al crear una subdivisión guardaba el código
+de parcela que el usuario elige en pantalla (algo legible, como
+"COOP-JS-001") en el mismo campo donde el sistema espera encontrar el
+identificador técnico interno — dos cosas distintas, con el mismo nombre de
+campo. El resultado: cualquier subdivisión de Uso de Suelo dibujada a mano
+desde el mapa quedaba, en silencio, completamente invisible para el cálculo
+de cobertura de Fase B — como si nunca se hubiera clasificado nada, sin
+ningún error ni aviso en pantalla.
+
+**La corrección** extiende exactamente el mismo mecanismo que ya se usaba
+para los datos que llegan por sincronización (punto 6), para que ambos
+caminos — el dato que llega del campo real y el dato que se dibuja a mano
+en el mapa — terminen hablando el mismo idioma: al crear un perímetro nuevo
+desde el Editor Vectorial, el sistema le genera su propio identificador
+técnico; al crear una subdivisión adentro, el sistema resuelve ese
+identificador del perímetro real (nunca el código legible que ve el
+usuario) y es ESO lo que guarda. Como en todo este tramo de trabajo, si en
+algún momento hay ambigüedad (por ejemplo, más de un perímetro con el mismo
+código de parcela — un caso real, ver punto 8.3), el sistema no asume nada:
+la subdivisión se guarda igual, solo queda "sin vínculo" hasta que alguien
+lo resuelva a mano, nunca bloquea el guardado por esto.
+
+### 11.2 El número imposible que casi pasa desapercibido — y cómo se confirmó que no era un bug de código
+
+Durante la primera verificación de la corrección anterior, el resultado
+mostró que un perímetro de prueba, dibujado a mano, medía **263,997
+hectáreas** — más grande que cualquier parcela real vista en toda esta
+sesión de trabajo, por varios órdenes de magnitud. Antes de dar la
+verificación por buena, se paró a confirmar de dónde salía ese número.
+
+La causa real: el mapa de la Consola QC arranca alejado (para mostrar de
+un vistazo todos los registros pendientes de revisión) y el polígono de
+prueba se había dibujado justo así, sin acercar el mapa primero — cada
+click, sin darse cuenta, quedó representando una distancia real de cientos
+de metros en vez de unos pocos metros. No fue un cálculo de código
+incorrecto: fue, literalmente, un polígono descomunal dibujado sin querer
+durante la prueba misma, medido correctamente por un sistema que hizo bien
+su trabajo. Se confirmó haciendo la cuenta a mano (cuánto mide cada
+píxel de pantalla a ese nivel de zoom, multiplicado por el tamaño del
+polígono dibujado) y el resultado coincidió, en el mismo orden de
+magnitud, con el número imposible observado.
+
+Se repitió la prueba completa desde cero, con cuidado, acercando el mapa
+a un nivel realista antes de dibujar: el mismo perímetro de prueba, esta
+vez, midió 4.59 hectáreas — y la subdivisión adentro, 2.58 hectáreas.
+Números coherentes con una parcela de café real. El cálculo de cobertura,
+corrido sobre estos datos ya coherentes, dio un resultado correcto:
+detectó bien que la subdivisión dibujada cubría poco más de la mitad del
+perímetro, y avisó correctamente que faltaba clasificar el resto — el
+comportamiento esperado, no un error.
+
+### 11.3 "+ Crear parcela nueva" — el mismo patrón que ya funcionó para crear un socio
+
+El punto 10.3 de esta bitácora ya había agregado un botón "+ Crear socio
+nuevo" al Editor Vectorial, para cuando un socio genuinamente nuevo
+todavía no existe en el padrón. Faltaba el mismo botón para el otro campo:
+"+ Crear parcela nueva". Se agregó siguiendo exactamente el mismo patrón
+que ya había funcionado bien — abre, como una ventana superpuesta sin
+perder el dibujo en curso, el mismo formulario de gestión de parcelas que
+ya existe en la pantalla de Productores y Parcelas, con el mismo
+correlativo automático que esa pantalla ya calculaba. No se escribió
+ninguna lógica nueva de validación ni de numeración: se reutilizó tal cual
+la que ya estaba probada.
+
+El botón solo aparece habilitado cuando el formulario ya tiene un socio
+elegido (la numeración automática de una parcela nueva depende de saber de
+qué socio es) — sin eso, se muestra deshabilitado con el motivo explicado
+en pantalla. Al guardar la parcela nueva, el Editor Vectorial la deja
+seleccionada automáticamente, igual que ya pasaba con "+ Crear socio
+nuevo" — sin que el usuario tenga que volver a buscarla.
+
+### 11.4 Se cerró la duda pendiente sobre "Instalaciones"
+
+El punto 11(e) de la sección anterior de esta bitácora dejaba anotada una
+duda menor: por qué "Instalaciones" (por ejemplo, una construcción o un
+beneficio dentro de una parcela) no aparecía como opción de tabla destino
+en el Editor Vectorial, junto a Monitoreo y Uso de Suelo. Se investigó a
+fondo antes de tocar nada: revisando el historial completo del código y
+toda la documentación del proyecto, no apareció ninguna razón de negocio
+para excluirla — nunca estuvo, desde el día en que el Editor Vectorial se
+mudó a la Consola QC, simplemente porque la tarea que lo movió pidió
+puntualmente solo esas dos tablas, sin que nadie volviera después a
+revisar si esa limitación seguía teniendo sentido.
+
+Mejor todavía: el resto del sistema (los campos del formulario, la
+restricción de que Instalaciones solo acepta un punto en el mapa —nunca un
+polígono—, y la validación real contra el padrón) ya estaba completamente
+listo para esta tabla desde una tarea anterior, sin que nadie lo hubiera
+conectado. Agregarla terminó siendo un cambio de una sola línea, verificado
+en vivo creando un registro real de prueba y confirmando que todo lo demás
+ya funcionaba tal cual estaba.
+
+**Nota de seguimiento, para más adelante:** "Instalaciones" quedó, a
+propósito, fuera del arreglo del vínculo de cobertura descrito en el punto
+11.1 — hoy no existe ningún cálculo de cobertura que use ese vínculo para
+Instalaciones (a diferencia de Uso de Suelo), así que no hacía falta
+tocarlo todavía. Si en el futuro se construye una validación de cobertura
+equivalente para Instalaciones, hay que revisar en ese momento si el mismo
+arreglo del punto 11.1 debe aplicarse también ahí.
+
+## 12. Qué queda pendiente
 
 **a) Dónde debe exigirse la cobertura completa de verdad — no
 decidido.** Como se explica en el punto 7: la validación de cobertura ya
@@ -696,19 +835,20 @@ riesgo real una vez que haya datos de un cliente real cargados. No se
 había planteado antes en este proyecto; queda como recomendación a
 evaluar antes de ese paso.
 
-**e) Por qué "Instalaciones" no aparece como tabla destino en el Editor
-Vectorial — duda menor, sin resolver.** El Editor Vectorial (punto 10)
-solo ofrece hoy dos tablas destino para dibujar un registro nuevo:
-Monitoreo y Uso de Suelo. Instalaciones (por ejemplo, una construcción o
-un beneficio dentro de una parcela) no aparece como opción, y no quedó
-confirmado en este tramo si es una decisión de diseño tomada a propósito
-en algún momento anterior, o simplemente algo que nunca se agregó. No es
-urgente — Instalaciones se puede seguir cargando por otras vías — pero
-queda como pregunta abierta para confirmar más adelante.
+> *Resuelto (25 de agosto de 2026):* la duda sobre por qué "Instalaciones"
+> no aparecía como tabla destino en el Editor Vectorial. Se investigó a
+> fondo (ver punto 11.4): no era ninguna decisión de diseño, era el
+> alcance acotado de la tarea que movió el Editor Vectorial a la Consola
+> QC, nunca revisado después. Ya se agregó como tercera opción, junto a
+> Monitoreo y Uso de Suelo. Se retira de la lista de pendientes — queda
+> anotado como seguimiento futuro (no urgente) que si algún día se
+> construye una validación de cobertura para Instalaciones (como la que
+> ya existe para Uso de Suelo, punto 7), hay que revisar si también le
+> hace falta el arreglo del vínculo técnico del punto 11.1.
 
 ---
 
-## 12. Para quien quiera el detalle técnico
+## 13. Para quien quiera el detalle técnico
 
 | Tema | Documento técnico | Commit(s) |
 |---|---|---|
@@ -730,10 +870,18 @@ queda como pregunta abierta para confirmar más adelante.
 | "Tipo de Uso" pasa de texto libre a lista desplegable con las 7 categorías reales, misma fuente que el mapa principal | — (sin ADR propio, ver commit) | `0bcae00` |
 | Editor Vectorial: "Código de Socio"/"Código de Parcela" ahora buscan y validan contra el padrón real; "+ Crear socio nuevo" reutiliza el formulario de Productores y Parcelas; herencia de socio/parcela entre geometrías consecutivas | [ADR-019](../adr/ADR-019-editor-vectorial-validacion-padron-y-creacion-socio.md) | `3ecf718` |
 | Hallazgo: registros con socio/parcela de otra organización (Sincronizar Google Drive nunca lo validaba). Aviso informativo en el sincronizador (nunca bloquea la carga) + bloqueo real de "Aprobar" en la Consola QC (Rechazar sigue siempre disponible) | [ADR-020](../adr/ADR-020-validacion-organizacion-socio-parcela.md) | `5c13874` |
+| Vínculo técnico real de cobertura extendido al Editor Vectorial (antes solo cubría datos de sincronización); botón "+ Crear parcela nueva"; corrección documentada de un número de verificación imposible por error de metodología de prueba | [ADR-021](../adr/ADR-021-vinculo-real-editor-vectorial-y-creacion-parcela.md) | `1e0f09d`, `9088eb1` |
+| "Instalaciones" agregada como tabla destino del Editor Vectorial — omisión de scope de una tarea anterior, backend ya listo desde antes | [ADR-022](../adr/ADR-022-instalaciones-en-editor-vectorial-qc.md) | `d8cbb2e` |
 
 **Commits del tramo completo, en orden:** `0d003e8` → `111727b` →
 `a62fce6` → `c56f18f` → `4a910a4` → `b212424` → `a6e817c` → `2391859` →
 `488c993` → `7eb744e` → `ce4053f` → `affdc2a` → `cba6474` → `d2bcebd` →
 `f099a75` → `1ec2c2d` → `5c6d4f9` → `2ac75d6` → `4de126d` → `a611779` →
 `9ad7aa2` → `6611451` → `5ad2aa3` → `e938d0d` → `a7fd9f6` → `70ff8a7` →
-`0bcae00` → `3ecf718` → `5c13874`.
+`0bcae00` → `3ecf718` → `5c13874` → `1e0f09d` → `d8cbb2e`.
+
+*(`9088eb1`, entre `1e0f09d` y `d8cbb2e`, es la corrección de
+documentación del número imposible del punto 11.2 — un commit de solo
+texto, igual que `d777f99` y `a66218a`; se deja fuera de esta lista por el
+mismo criterio ya usado para esos dos, aunque sí está mencionado en la
+nota de actualización al principio de este documento.)*
