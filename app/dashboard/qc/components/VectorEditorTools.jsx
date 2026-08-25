@@ -27,6 +27,16 @@
 // (components/features/socios/) como overlay — nunca se duplica su
 // validación (sociosActions.js). El rechazo real de un código inventado
 // vive del lado del servidor, en lib/actions/gisActions.js.
+//
+// ADR-021: mismo patrón para "+ Crear parcela nueva" (reutiliza
+// ParcelaFormModal), solo disponible cuando ya hay un socio elegido en el
+// mismo formulario — ver PadronEntityField/onCreateParcela más abajo.
+// El valor técnico real que se guarda en EUDR_USO_SUELO.id_parcela
+// (vínculo con su Monitoreo padre para fn_cobertura_uso_suelo_parcela,
+// ADR-010) se resuelve enteramente del lado del servidor
+// (lib/actions/gisActions.js::resolveQfieldRelationId) — este archivo
+// nunca maneja ese identificador técnico directamente, solo el código
+// legible de PADRON_PARCELAS de siempre.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { uploadGeoSpatialFeature } from '@/lib/actions/gisActions'
@@ -41,6 +51,7 @@ import { getSupabaseClient } from '@/lib/supabaseClient'
 import { searchSocios, searchParcelas } from '@/lib/padronSearch'
 import PadronAutocomplete from '@/components/features/inspecciones/PadronAutocomplete'
 import SocioFormModal from '@/components/features/socios/SocioFormModal'
+import ParcelaFormModal from '@/components/features/socios/ParcelaFormModal'
 
 /**
  * Valores iniciales de `fieldValues` para una geometría recién finalizada
@@ -369,8 +380,29 @@ export function useVectorEditor({
 // de ESE socio (mismo `searchParcelas(supabase, org, socioId, query)` que
 // ya soporta ese 3er parámetro) — en EUDR_USO_SUELO/EUDR_INSTALACIONES
 // (sin campo de socio) queda `null`, búsqueda sin acotar, igual que hoy.
-function PadronEntityField({ field, value, onChange, organizationId, scopeParcelaSearchToSocio, onCreateSocio }) {
+// `onCreateParcela` (ADR-021): solo se pasa (no undefined) cuando este
+// campo de parcela tiene un campo de socio hermano en el mismo fields[] —
+// hoy únicamente `EUDR_MONITOREO.ID_Parcela_Fija` — porque crear una
+// parcela nueva necesita saber para qué socio (ParcelaFormModal calcula el
+// correlativo real vía lib/parcelaDefaults.js a partir de eso). Sin un
+// campo hermano de socio en la tabla actual (EUDR_USO_SUELO/
+// EUDR_INSTALACIONES) no hay ningún socio del que colgar la parcela nueva,
+// así que el botón directamente no se ofrece ahí — no es un botón
+// deshabilitado sin motivo, es que la pregunta "¿de qué socio?" no tiene
+// sentido en ese formulario.
+function PadronEntityField({
+  field,
+  value,
+  onChange,
+  organizationId,
+  scopeParcelaSearchToSocio,
+  onCreateSocio,
+  onSocioSelected,
+  onCreateParcela,
+  socioSeleccionado,
+}) {
   const isSocio = field.padronEntity === 'socio'
+  const isParcela = field.padronEntity === 'parcela'
 
   async function handleSearch(query) {
     const supabase = getSupabaseClient()
@@ -409,7 +441,14 @@ function PadronEntityField({ field, value, onChange, organizationId, scopeParcel
             </>
           )
         }
-        onSelect={(r) => onChange(isSocio ? r.ID_Socio : r.ID_Parcela_Fija)}
+        onSelect={(r) => {
+          if (isSocio) {
+            onChange(r.ID_Socio)
+            onSocioSelected?.(r)
+          } else {
+            onChange(r.ID_Parcela_Fija)
+          }
+        }}
       />
       {value && <p className="mt-1 text-[11px] text-emerald-700">✓ Seleccionado: {value}</p>}
       {isSocio && (
@@ -420,6 +459,19 @@ function PadronEntityField({ field, value, onChange, organizationId, scopeParcel
         >
           + Crear socio nuevo
         </button>
+      )}
+      {isParcela && onCreateParcela && (
+        <>
+          <button
+            type="button"
+            onClick={onCreateParcela}
+            disabled={!socioSeleccionado}
+            className="mt-1 text-[11px] font-semibold text-green-800 hover:underline disabled:cursor-not-allowed disabled:text-gray-400 disabled:no-underline"
+          >
+            + Crear parcela nueva
+          </button>
+          {!socioSeleccionado && <p className="mt-0.5 text-[11px] text-gray-400">Seleccioná o creá un socio primero.</p>}
+        </>
       )}
     </div>
   )
@@ -455,6 +507,16 @@ export default function VectorEditorPanel({ editor }) {
   // creado que devuelve SocioFormModal.
   const [socioModalFieldKey, setSocioModalFieldKey] = useState(null)
   const socioField = fields.find((f) => f.padronEntity === 'socio')
+  // Overlay de "+ Crear parcela nueva" (ADR-021) — mismo patrón exacto que
+  // el de socio, un campo más abajo. `socioDisplayName`: ParcelaFormModal
+  // necesita `socio.socio_nombre_completo` solo para el título del modal
+  // ("Parcelas de X") — se guarda acá al elegir un socio (búsqueda real, o
+  // el resultado de "+ Crear socio nuevo", que ahora también devuelve el
+  // nombre, ver ADR-021 en sociosActions.js) para no tener que volver a
+  // consultarlo. Si por algún motivo no se conoce (no debería pasar en el
+  // flujo normal), cae al propio código de socio como texto de respaldo.
+  const [parcelaModalFieldKey, setParcelaModalFieldKey] = useState(null)
+  const [socioDisplayName, setSocioDisplayName] = useState('')
 
   return (
     <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-3 text-xs">
@@ -526,6 +588,13 @@ export default function VectorEditorPanel({ editor }) {
                   f.padronEntity === 'parcela' && socioField ? fieldValues[socioField.key] || null : null
                 }
                 onCreateSocio={() => setSocioModalFieldKey(f.key)}
+                onSocioSelected={(r) => setSocioDisplayName(r.socio_nombre_completo || '')}
+                onCreateParcela={
+                  f.padronEntity === 'parcela' && socioField ? () => setParcelaModalFieldKey(f.key) : undefined
+                }
+                socioSeleccionado={
+                  f.padronEntity === 'parcela' && socioField ? Boolean(fieldValues[socioField.key]) : undefined
+                }
               />
             ) : (
               <div key={f.key}>
@@ -609,7 +678,35 @@ export default function VectorEditorPanel({ editor }) {
           onClose={() => setSocioModalFieldKey(null)}
           onSaved={(savedSocio) => {
             setFieldValues((prev) => ({ ...prev, [socioModalFieldKey]: savedSocio.id }))
+            setSocioDisplayName(savedSocio.socio_nombre_completo || '')
             setSocioModalFieldKey(null)
+          }}
+        />
+      )}
+
+      {/* Overlay de "+ Crear parcela nueva" (ADR-021) — mismo criterio que
+          el overlay de socio arriba: ParcelaFormModal reutilizado tal cual
+          (nunca se reimplementa createParcela/el correlativo automático de
+          lib/parcelaDefaults.js), `socio` es un objeto mínimo armado acá
+          con lo que ya se tiene en pantalla (el código ya viene validado
+          por PadronEntityField; el nombre es solo para el título del
+          modal, ver socioDisplayName arriba) — ParcelaFormModal solo
+          necesita `ID_Socio`/`socio_nombre_completo` de ese objeto, nunca
+          la fila completa de PADRON_SOCIOS. `onParcelaCreated` (nuevo,
+          opcional en ParcelaFormModal — /dashboard/socios no lo usa y
+          sigue exactamente igual) selecciona la parcela recién creada sin
+          que el usuario tenga que volver a buscarla. */}
+      {parcelaModalFieldKey && socioField && (
+        <ParcelaFormModal
+          socio={{
+            ID_Socio: fieldValues[socioField.key],
+            socio_nombre_completo: socioDisplayName || fieldValues[socioField.key],
+          }}
+          organizationId={organizationId}
+          onClose={() => setParcelaModalFieldKey(null)}
+          onParcelaCreated={(savedParcela) => {
+            setFieldValues((prev) => ({ ...prev, [parcelaModalFieldKey]: savedParcela.id }))
+            setParcelaModalFieldKey(null)
           }}
         />
       )}

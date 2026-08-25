@@ -124,7 +124,7 @@ function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, onSav
   )
 }
 
-export default function ParcelaFormModal({ socio, organizationId, onClose }) {
+export default function ParcelaFormModal({ socio, organizationId, onClose, onParcelaCreated }) {
   const [parcelas, setParcelas] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -161,10 +161,19 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socio.ID_Socio])
 
-  function handleSaved() {
+  // `result` viene de createParcela/updateParcela ({ id, created }) —
+  // `onParcelaCreated` (ADR-021, opcional, undefined en /dashboard/socios
+  // que no la usa) solo se dispara en un ALTA real, nunca en una edición,
+  // para que el Editor Vectorial pueda seleccionar automáticamente la
+  // parcela recién creada sin tener que volver a buscarla (mismo patrón
+  // ya usado para "+ Crear socio nuevo" en ADR-019).
+  function handleSaved(result) {
     setEditingParcela(null)
     setShowNewForm(false)
     reload()
+    if (result?.created) {
+      onParcelaCreated?.(result)
+    }
   }
 
   async function handleConfirmDeactivate() {
