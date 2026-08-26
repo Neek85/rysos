@@ -1,19 +1,23 @@
 # Spec — Multi-producto (Café/Cacao): auditoría de estado real + primer diseño de `PRODUCTOS`/`ORGANIZACION_PRODUCTOS`
 
-- **Estado:** **Las 5 preguntas abiertas de la sección 4 quedan
-  cerradas (ronda 3, 2026-08-26) — ver sección 7 para el detalle
-  completo de cada decisión.** `hcp`/`hcc` NO se tocan a nivel de base
-  de datos (#1, sección 5.1); `vertical` en `PRODUCTOS` usa `CHECK`
-  (#2, sección 7.1); `ORGANIZACION_PRODUCTOS` se diseña N-a-N (#3,
-  sección 5.2); `id_producto_predominante` va en AMBAS tablas —
-  `PADRON_PARCELAS` como dato maestro editable, `EUDR_USO_SUELO` como
-  foto copiada al momento de cada evento de monitoreo (#4, sección
-  7.2, con la evidencia técnica real del vínculo entre ambas tablas en
-  la sección 6); se conecta al exportador DDS en la misma
-  implementación (#5, sección 7.3). **Sigue sin existir ninguna
-  migración SQL ni cambio de código** — las 3 rondas de esta spec son
-  puramente de relevamiento y diseño; la implementación es una tarea
-  aparte.
+- **Estado:** **Contrato de datos cerrado (ronda 4, 2026-08-26) — ver
+  sección 8 para el diseño consolidado, listo para implementación.**
+  Las 5 preguntas abiertas de la sección 4 quedaron cerradas en ronda
+  3 (detalle en sección 7): `hcp`/`hcc` NO se tocan a nivel de base de
+  datos (#1, sección 5.1); `vertical` en `PRODUCTOS` usa `CHECK` (#2,
+  sección 7.1); `ORGANIZACION_PRODUCTOS` se diseña N-a-N (#3, sección
+  5.2); `id_producto_predominante` va en AMBAS tablas — `PADRON_PARCELAS`
+  como dato maestro editable, `EUDR_USO_SUELO` como foto copiada al
+  momento de cada evento de monitoreo (#4, sección 7.2, con la
+  evidencia técnica real del vínculo entre ambas tablas en la sección
+  6); se conecta al exportador DDS en la misma implementación (#5,
+  sección 7.3). La ronda 4 agrega una decisión nueva que las rondas 2/3
+  no habían cerrado: backfill explícito de `PADRON_PARCELAS` a CAFE
+  para las filas existentes (sección 8.3 — la sección 2.3, ronda 1, la
+  dejaba como pregunta sin resolver; confirmada ahora directamente por
+  el usuario, no asumida). **Sigue sin existir ninguna migración SQL
+  ni cambio de código** — las 4 rondas de esta spec son puramente de
+  relevamiento y diseño; la implementación es una tarea aparte.
 - **Fecha:** 2026-08-25
 - **Contexto previo:** `specs/roadmap_padron_multiorganizacion.md`
   (sección 3, boceto original de alto nivel — "PRODUCTOS/ORGANIZACION_PRODUCTOS/EUDR_USO_SUELO.id_producto_predominante"),
@@ -615,3 +619,150 @@ puede incorporar el producto al payload interno y/o al GeoJSON oficial
 `DEFAULT_PRODUCER_COUNTRY` (sección 1.7): mientras no haya dato real
 para una fila, el campo se omite del payload en vez de inventar un
 valor.
+
+## 8. Contrato de datos cerrado (ronda 4, 2026-08-26)
+
+Consolidación final de las decisiones de las rondas 2 y 3 (secciones 5
+y 7) más una decisión nueva confirmada en esta ronda (8.3, backfill).
+Este es el contrato listo para la tarea de implementación —
+**sigue sin existir ninguna migración SQL**, esta sección es solo
+documentación de diseño.
+
+### 8.1 `PRODUCTOS`
+
+```sql
+CREATE TABLE PRODUCTOS (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  codigo      text NOT NULL UNIQUE,
+  nombre      text NOT NULL,
+  vertical    text NOT NULL CHECK (vertical IN ('AGRICOLA', 'PECUARIO')),
+  activo      boolean NOT NULL DEFAULT true,
+  creado_en   timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Seed: exactamente 2 filas, `('CAFE', 'Café', 'AGRICOLA')` y
+`('CACAO', 'Cacao', 'AGRICOLA')`. Catálogo extensible (confirma 7.1 el
+criterio de `CHECK`, no un enum de Postgres) — no se agregan productos
+`PECUARIO` en esta implementación.
+
+### 8.2 `ORGANIZACION_PRODUCTOS`
+
+```sql
+CREATE TABLE ORGANIZACION_PRODUCTOS (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id_organizacion   text NOT NULL REFERENCES ORGANIZACIONES("ID"),
+  id_producto       uuid NOT NULL REFERENCES PRODUCTOS(id),
+  activo            boolean NOT NULL DEFAULT true,
+  creado_en         timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (id_organizacion, id_producto)
+);
+```
+
+`id_organizacion` es `text` (no uuid) — coincide con el tipo real
+confirmado de `ORGANIZACIONES."ID"` (PK de tenant manual, ej.
+`"COOP-JS"`, ver `docs/schema_live.md`). N-a-N confirmado (5.2): una
+organización puede tener café y cacao a la vez.
+
+### 8.3 `PADRON_PARCELAS.id_producto_predominante` — dato maestro + backfill (decisión nueva de esta ronda)
+
+```sql
+ALTER TABLE PADRON_PARCELAS ADD COLUMN IF NOT EXISTS id_producto_predominante uuid REFERENCES PRODUCTOS(id);
+```
+
+Nullable a nivel de esquema (7.2: es el dato maestro editable desde el
+padrón), pero **con backfill obligatorio en la misma migración**: las
+11 filas reales existentes hoy (sección 1.8) se rellenan con el `id`
+de `CAFE`. Esta decisión **no estaba cerrada** en las rondas 2/3 — la
+sección 2.3 (ronda 1) la dejaba explícitamente como pregunta sin
+resolver ("no puede rellenarse automáticamente sin una decisión de
+producto explícita de qué asumir para las filas existentes"), y
+ninguna ronda posterior la retomaba. Confirmada directamente por el
+usuario en esta ronda, no asumida. Después del backfill,
+`id_producto_predominante` solo queda `NULL` para parcelas nuevas que
+el usuario cree sin especificar producto.
+
+### 8.4 `EUDR_USO_SUELO.id_producto_predominante` — foto por evento vía trigger
+
+```sql
+ALTER TABLE EUDR_USO_SUELO ADD COLUMN IF NOT EXISTS id_producto_predominante uuid REFERENCES PRODUCTOS(id);
+```
+
+Se puebla vía trigger `BEFORE INSERT` (nombre sugerido
+`trg_set_producto_predominante_uso_suelo`, siguiendo la convención
+`trg_<verbo>_<tabla>` ya usada en el repo — ver
+`trg_auto_org_eudr_monitoreo`/`trg_gis_sanitize_eudr_monitoreo` en
+`docs/schema_live.md`), no por los 2 sitios de aplicación identificados
+en 6.4. Resuelve la cadena real de 2 saltos ya verificada empíricamente
+en la sección 6.1:
+
+```
+NEW.id_parcela (GUID crudo de QField)
+  -> EUDR_MONITOREO.qfield_relation_id = NEW.id_parcela AND "ID_Organizacion" = NEW."ID_Organizacion"
+  -> EUDR_MONITOREO."ID_Parcela_Fija"
+  -> PADRON_PARCELAS."ID_Parcela_Fija" + "ID_Organizacion"
+  -> PADRON_PARCELAS.id_producto_predominante -> NEW.id_producto_predominante
+```
+
+**Comportamiento no bloqueante, explícito:** si cualquier salto de la
+cadena no encuentra match (parcela no encontrada, sin monitoreo
+asociado, o parcela sin producto asignado), el trigger deja
+`NEW.id_producto_predominante = NULL` y permite que el INSERT
+continúe — nunca lanza una excepción que bloquee el insert. Razón: no
+trabar la sincronización offline de la app de Campo — `EUDR_USO_SUELO`
+se puebla mayormente vía `scripts/etl_drive_to_supabase.py` en lotes
+provenientes de GeoPackages QField sin supervisión interactiva; una
+excepción ahí rompería la ingesta completa de un archivo por una sola
+subdivisión sin producto resuelto.
+
+Con el trigger a nivel de base de datos, ambos sitios de inserción de
+la sección 6.4 (`lib/actions/gisActions.js::uploadGeoSpatialFeature` y
+`scripts/etl_drive_to_supabase.py::build_uso_suelo_payload`) quedan
+cubiertos automáticamente sin que ninguno de los 2 necesite construir
+la cadena de resolución en código de aplicación — el hallazgo de 6.4
+punto 2 (el sitio Python "hoy no hace ninguna consulta a Supabase" y
+necesitaría una nueva) queda resuelto por el trigger, no por una query
+adicional en el ETL.
+
+### 8.5 Extensión de `vw_monitoreo_web` — solo rama "poligono", sin depender del JOIN roto
+
+En la rama `poligono` de la vista (`vw_monitoreo_poligonos`, origen
+`EUDR_USO_SUELO`/`EUDR_INSTALACIONES`), agregar el producto leyendo
+directo `src.id_producto_predominante` (ya materializado por el
+trigger de 8.4 en el momento del INSERT) — **no** vía el
+`LEFT JOIN PADRON_PARCELAS pp ON src."ID_Parcela_Fija" = pp."ID_Parcela_Fija"`
+ya existente en la vista. Confirmado roto para estas filas releyendo
+la definición viva de la vista
+(`supabase/migrations/20260825201351_pk_surrogate_multiorganizacion.sql`,
+líneas 157-159): `src."ID_Parcela_Fija"` para el origen `EUDR_USO_SUELO`
+es el GUID crudo de QField, no el código real de `PADRON_PARCELAS`
+(sección 6.1) — el `LEFT JOIN` no matchea nunca para esas filas y
+`pp.*` llega `NULL`. Ese bug preexistente del JOIN queda
+deliberadamente **fuera de alcance** de esta implementación — su
+propio ADR/spec futuro, sin bloquear el paso 4.
+
+Formato de exposición: JOIN adicional contra `PRODUCTOS` para exponer
+`producto_codigo`/`producto_nombre` legibles (no solo el uuid crudo) —
+mismo patrón que la vista ya usa para `productor_nombre` (JOIN a
+`PADRON_SOCIOS`, nunca expone `ID_Socio` crudo al cliente).
+`MapDashboard.jsx` consume `vw_monitoreo_web` con una lista explícita
+de columnas en `.select(...)` (línea 470) y usa
+`record.clasificacion`/`record.productor_nombre` como texto ya
+resuelto para renderizar tooltips — exponer `producto_codigo` como
+texto sigue esa misma convención en vez de forzar al cliente a
+resolver el uuid contra `PRODUCTOS` aparte. Recordar (`CLAUDE.md`):
+agregar la columna a la vista no la hace visible en el Dashboard por
+sí sola — el `.select(...)` de `MapDashboard.jsx:470` necesita el
+mismo agregado en la implementación.
+
+### 8.6 UI hardcodeada a "Café" — 4 sitios (fuera del contrato de datos, misma implementación)
+
+Ya identificados y congelados en la sección 5.1 — cambio de texto
+puro, sin cambio de esquema:
+
+- `lib/validations/socios.js:131-132` (fuente única: `HECTARE_FIELDS`)
+- `components/features/socios/ParcelaFormModal.jsx:80` (consumo: formulario)
+- `lib/padronCsv.js:75` (consumo: encabezados CSV)
+
+Conectar el producto al exportador DDS (7.3) es parte de la misma
+implementación, no diferido — vía 8.5.
