@@ -40,7 +40,36 @@ tarea (solo SQL, Markdown, y un test Python), así que el riesgo real de
 saltarse el lint acá es bajo, pero queda documentado como gap real, no
 resuelto.
 
-## 2026-08-26 — `postgrest.exceptions.APIError: invalid input syntax for type bigint: "None"` al insertar en EUDR_USO_SUELO/EUDR_INSTALACIONES vía supabase-py
+## 2026-08-26 — `postgrest.exceptions.APIError: invalid input syntax for type bigint: "None"` al insertar en EUDR_USO_SUELO/EUDR_INSTALACIONES vía supabase-py — **RESUELTO el mismo día**
+
+**Resuelto.** Causa raíz real, confirmada con evidencia (no la hipótesis de
+más abajo, que quedaba corta): el error **no** ocurre en el `INSERT`
+(esa entrada original decía que sí — impreciso, corregido acá) sino en
+el `DELETE` de limpieza de cada test, que filtraba
+`.eq("fid", row["fid"])`. `fid` es un bigint nullable sin `DEFAULT` en
+ambas tablas — un `INSERT` manual (no vía ETL/QField) siempre lo deja
+`NULL`, así que `row["fid"]` es Python `None`. `postgrest-py`
+(`base_request_builder.py:302`, versión 2.31.0 instalada, confirmada por
+`pip show postgrest`) arma el filtro con una f-string sin guardia para
+`None`: `val = f"{operator}.{criteria}"` — con `criteria=None` eso
+serializa literal a `fid=eq.None`. Reproducido capturando la request HTTP
+real (`httpx.Client.send` parcheado): `DELETE .../EUDR_USO_SUELO?fid=eq.None`,
+respuesta `400 {"code":"22P02","message":"invalid input syntax for type
+bigint: \"None\""}`. No es un bug de versión de la librería ni necesita
+upgrade — es uso incorrecto de `.eq()` con un valor `None` en el propio
+test (para eso existe `.is_(col, "null")`, ya usado correctamente en
+otro lado de la suite).
+
+**Fix aplicado** (`tests/test_gis_core_sanitization.py`,
+`fix(tests): resolver bug de postgrest-py en TestGisSanitizationLive`):
+las 2 líneas de limpieza pasan de `.eq("fid", row["fid"])` a
+`.eq("id", row["id"])` — `id` es la PK real de la tabla (`docs/schema_live.md`)
+y siempre viene poblada en la respuesta del `INSERT`. `python -m pytest
+tests/ -v` con credenciales reales: **463 passed, 0 failed, 0 skipped**
+(antes: 461 passed / 2 failed). Sin cambios de dependencias.
+
+<details>
+<summary>Entrada original (2026-08-26, antes de la investigación)</summary>
 
 **Tarea:** paso 4 multi-producto café/cacao (`specs/multi_producto_cafe_cacao.md`,
 `docs/adr/ADR-028-multi-producto-cafe-cacao.md`) — verificación Live final.
@@ -53,7 +82,7 @@ el mismo gap, mismo tipo de `INSERT`). Ahí apareció un error nuevo,
 **enmascarado hasta ahora** por el `23503` de la FK que siempre ocurría
 antes de llegar a este punto.
 
-**Bloqueo:** `test_point_geometry_has_null_area` y
+**Bloqueo (entrada original, ver corrección arriba):** `test_point_geometry_has_null_area` y
 `test_small_polygon_is_flagged_not_rejected` fallan los dos con:
 
 ```
@@ -111,6 +140,8 @@ código de producción ni ninguna migración en esta tarea — el bug es
 puramente de la suite de tests contra la instancia real, no del sistema
 en sí (el trigger y la escritura funcionan correctamente, confirmado
 arriba).
+
+</details>
 
 ## 2026-08-25b — No hay forma de correr SQL crudo (`pg_depend`/`pg_get_viewdef`/GRANTs) contra la instancia real desde este entorno
 

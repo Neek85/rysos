@@ -249,8 +249,16 @@ class TestGisSanitizationLive(unittest.TestCase):
         self.assertIsNotNone(row.get("area_calculada_ha"))
         self.assertLess(float(row["area_calculada_ha"]), 4.0)
         self.assertTrue(row.get("requiere_revision_area"))
+        # NUNCA por `fid` -- es el feature id nativo del GeoPackage, sin
+        # DEFAULT en esta tabla: un INSERT manual (no vía ETL/QField) como
+        # este lo deja NULL. `.eq("fid", None)` serializa literal a
+        # `fid=eq.None` (postgrest-py base_request_builder.py:302, f-string
+        # sin guardia para None) -- Postgres rechaza esa comparación de
+        # bigint con 22P02 ("invalid input syntax for type bigint: \"None\"").
+        # `id` sí es la PK real de la tabla (docs/schema_live.md) y siempre
+        # viene poblada.
         self.supabase.table("EUDR_USO_SUELO").delete().eq(
-            "fid", row["fid"]
+            "id", row["id"]
         ).execute()
         self.supabase.table("ORGANIZACIONES").delete().eq("ID", "TEST-GIS-SANITIZATION").execute()
 
@@ -277,8 +285,11 @@ class TestGisSanitizationLive(unittest.TestCase):
         row = res.data[0]
         self.assertIsNone(row.get("area_calculada_ha"))
         self.assertIsNone(row.get("requiere_revision_area"))
+        # Mismo motivo que en test_small_polygon_is_flagged_not_rejected
+        # arriba -- borrar por `id` (PK real), nunca por `fid` (NULL en un
+        # INSERT manual, `.eq("fid", None)` rompe con 22P02).
         self.supabase.table("EUDR_INSTALACIONES").delete().eq(
-            "fid", row["fid"]
+            "id", row["id"]
         ).execute()
         self.supabase.table("ORGANIZACIONES").delete().eq("ID", "TEST-GIS-SANITIZATION").execute()
 
