@@ -1,8 +1,11 @@
 # Spec — Normalización de certificaciones en `PADRON_SOCIOS`/`PADRON_PARCELAS`
 
-- **Estado:** **Contrato de datos + RLS/GRANTs relevados (ronda 5,
-  2026-08-25) — lista para pasar a implementación.** Sin migración SQL
-  ni cambios de código todavía (eso es la tarea siguiente). Ronda 2
+- **Estado:** **Implementado (paso 3, 2026-08-25) — ver sección 8 para
+  el detalle y el ítem pendiente de UI/display.** Migración SQL, alta/
+  edición de socio y CSV ya reescritos contra las 5 tablas nuevas;
+  `sociosSearch.js`/`page.jsx`/`SocioFormModal.jsx` siguen leyendo las 8
+  columnas viejas para mostrarlas al usuario final (deliberadamente
+  diferido, sección 8.1). Ronda 2
   agregó la evidencia real de `certificaciones`/`cert_org_estatus`.
   Ronda 3 auditó el importador masivo (sección 6) y corrigió la premisa
   de "Excel" a CSV. Ronda 4 formalizó el contrato final de las 5 tablas
@@ -913,3 +916,66 @@ sección 7.1 sugiere una división natural entre las 5 tablas nuevas:
   de implementación, no heredada ciegamente del patrón viejo solo por
   precedente), sin política de escritura para `anon` (las escrituras
   siguen por Server Action con Service Role Key, igual que hoy).
+
+## 8. Estado de implementación (paso 3, 2026-08-25)
+
+Ver `docs/adr/ADR-027-certificaciones-normalizadas.md` para el detalle
+completo y el rationale de cada decisión. Resumen de lo entregado:
+
+- **Migración** —
+  `supabase/migrations/20260825222933_certificaciones_normalizadas.sql`:
+  las 5 tablas del contrato de la sección 2 tal cual, RLS replicando
+  exactamente el patrón de la sección 7.1/7.4, GRANTs de la sección 7.2
+  (con una excepción documentada en el propio archivo: `SOCIO_CERTIFICACIONES`
+  recibe además `GRANT DELETE` para `service_role`, necesario para que
+  `updateSocio` pueda quitar una certificación destildada — la tabla no
+  tiene columna de baja lógica), seed de las 8 filas de la sección 7.3, y
+  el backfill de los socios reales con el criterio de "Orgánica" de la
+  sección 3.4, con guarda de idempotencia por socio.
+- **`createSocio`/`updateSocio`** (`lib/actions/sociosActions.js`) — ya
+  no escriben las 8 columnas planas ni `cert_org_estatus`/`certificaciones`
+  (quedan congeladas en su valor actual, como respaldo, según la
+  decisión de la ronda 4). El payload del formulario (sin cambios de
+  forma — `socioSchema`/`SocioFormModal.jsx` no se tocaron) se traduce a
+  filas de `SOCIO_CERTIFICACIONES` vía `syncSocioCertificaciones`
+  (estrategia borrar-todo + reinsertar, por socio, en cada guardado).
+- **CSV** (`lib/padronCsv.js`) — export/plantilla generan una columna
+  dinámica por cada fila `activo = true` de `CERTIFICACIONES_CATALOGO`,
+  con `nombre` como encabezado (diseño cerrado en la sección 6.1). La
+  importación valida esas columnas contra el catálogo activo por
+  `nombre` y **rechaza el archivo completo** (no fila por fila) si
+  encuentra una columna no reconocida — nunca la ignora en silencio.
+- **Tests** — `tests/test_certificaciones_normalizadas.py`
+  (`TestMigrationFileStatic`: estructura de la migración, siempre corre;
+  `TestCertificacionesNormalizadasLive`: efecto real de la migración
+  sobre los 7 socios, aislamiento multi-tenant, columnas viejas
+  intactas — auto-skip hasta que la migración se aplique en Supabase
+  Studio), `tests/test_certificaciones_sociosactions_code_sites.mjs`
+  (guardas estructurales sobre `sociosActions.js`, mismo patrón que
+  `test_pk_surrogate_code_sites.mjs` — no es importable en Node plano
+  fuera del pipeline de Next.js por el alias `@/lib/...`, así que no hay
+  test de comportamiento real para esta parte), y los nuevos casos de
+  columnas dinámicas/rechazo de columna no reconocida agregados a
+  `tests/test_padron_csv.mjs`.
+
+### 8.1 Pendiente, diferido a propósito — capa de display al usuario final
+
+`lib/sociosSearch.js`, `app/dashboard/socios/page.jsx` y
+`components/features/socios/SocioFormModal.jsx` siguen leyendo/
+mostrando las 8 columnas planas de `PADRON_SOCIOS` (la tabla del padrón,
+sus filtros, y los 8 `<select>` Sí/No del formulario). Como
+`createSocio`/`updateSocio` ya NO escriben esas columnas, cualquier
+socio creado o editado a partir de esta migración queda con esas
+columnas **congeladas en su valor previo** — el dato que el usuario ve
+en la tabla/formulario para las certificaciones de un socio editado
+después de este cambio puede quedar desactualizado respecto de lo que
+en verdad tiene en `SOCIO_CERTIFICACIONES`.
+
+No se resolvió en esta tarea por decisión explícita (alcance grande/
+ambiguo: implica decidir si el formulario pasa a leer/escribir contra
+`SOCIO_CERTIFICACIONES` directamente, y qué hace la tabla/filtros de
+`sociosSearch.js` con una relación en vez de columnas planas — más una
+tarea de rediseño de UI que una extensión mecánica). No rompe la
+aplicación mientras tanto: las columnas viejas siguen físicamente
+presentes con su último valor válido. Queda como tarea de una iteración
+futura.

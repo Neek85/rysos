@@ -420,3 +420,77 @@ test('SOCIO_FIELD_LABELS y PARCELA_FIELD_LABELS no tienen labels vacíos ni dupl
   assert.equal(new Set(socioLabels).size, socioLabels.length, 'SOCIO_FIELD_LABELS tiene labels duplicados')
   assert.equal(new Set(parcelaLabels).size, parcelaLabels.length, 'PARCELA_FIELD_LABELS tiene labels duplicados')
 })
+
+// ---------------------------------------------------------------
+// ADR-027: certificaciones normalizadas -- columnas dinámicas de CSV
+// ---------------------------------------------------------------
+
+const RAINFOREST_CERT = { id: 'cert-rainforest-uuid', codigo: 'RAINFOREST', nombre: 'Rainforest Alliance', activo: true }
+const NOP_USDA_CERT = { id: 'cert-nop-usda-uuid', codigo: 'NOP_USDA', nombre: 'NOP USDA', activo: true }
+
+test('buildSociosCsv sin certificaciones no agrega ninguna columna extra (compatibilidad hacia atrás)', () => {
+  const csv = buildSociosCsv([{ ID_Socio: 'JS-00001', socio_nombre_completo: 'Juan Pérez' }])
+  const header = csv.split('\r\n')[0]
+  assert.ok(!header.includes('Rainforest'))
+})
+
+test('buildSociosCsv con certificaciones agrega una columna por cada una, con su `nombre` como encabezado', () => {
+  const csv = buildSociosCsv(
+    [{ ID_Socio: 'JS-00001', socio_nombre_completo: 'Juan Pérez', [RAINFOREST_CERT.id]: 'Sí' }],
+    [RAINFOREST_CERT]
+  )
+  const [header, dataRow] = csv.split('\r\n')
+  assert.ok(header.includes('Rainforest Alliance'))
+  assert.ok(dataRow.endsWith(',Sí') || dataRow.endsWith(',"Sí"'))
+})
+
+test('buildSocioTemplateCsv con certificaciones agrega columnas dinámicas en "No" por defecto', () => {
+  const csv = buildSocioTemplateCsv(undefined, [RAINFOREST_CERT, NOP_USDA_CERT])
+  const [header, row] = csv.split('\r\n')
+  assert.ok(header.includes('Rainforest Alliance'))
+  assert.ok(header.includes('NOP USDA'))
+  const cells = row.split(',')
+  assert.equal(cells[cells.length - 1], 'No')
+  assert.equal(cells[cells.length - 2], 'No')
+})
+
+test('validateSocioRows con supabase reconoce una columna de certificación por su `nombre` activo y la traduce al campo interno fijo', async () => {
+  const supabase = makeFakeSupabase({ CERTIFICACIONES_CATALOGO: [RAINFOREST_CERT] })
+  const [result] = await validateSocioRows(
+    [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', 'Rainforest Alliance': 'Sí' }],
+    supabase
+  )
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+  assert.equal(result.normalized.cert_rainforest, 'Sí')
+})
+
+test('validateSocioRows con supabase RECHAZA el archivo completo si encuentra una columna no reconocida (typo)', async () => {
+  const supabase = makeFakeSupabase({ CERTIFICACIONES_CATALOGO: [RAINFOREST_CERT] })
+  await assert.rejects(
+    () =>
+      validateSocioRows(
+        [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', 'Rainforezt Alliance': 'Sí' }],
+        supabase
+      ),
+    /Rainforezt Alliance/
+  )
+})
+
+test('validateSocioRows con supabase RECHAZA una columna de una certificación que existe pero está INACTIVA (no en el catálogo activo)', async () => {
+  const supabase = makeFakeSupabase({ CERTIFICACIONES_CATALOGO: [] }) // ninguna activa
+  await assert.rejects(
+    () =>
+      validateSocioRows(
+        [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', 'Rainforest Alliance': 'Sí' }],
+        supabase
+      ),
+    /Rainforest Alliance/
+  )
+})
+
+test('validateSocioRows sin supabase (modo offline) NO valida columnas de certificación -- las deja pasar sin reconocer, sin rechazar el archivo', async () => {
+  const [result] = await validateSocioRows([
+    { ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', 'Rainforest Alliance': 'Sí' },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
