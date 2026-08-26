@@ -312,3 +312,53 @@ test('attachCoberturaSummary marca disponible:false para una parcela sin resulta
   const enriched = attachCoberturaSummary(payload, records, {})
   assert.equal(enriched.cobertura_uso_suelo[0].disponible, false)
 })
+
+// ---------------------------------------------------------------
+// ADR-028 (multi-producto café/cacao) — producto_codigo/producto_nombre
+// ---------------------------------------------------------------
+
+test('buildTracesPayload omite producto_codigo/producto_nombre (null) cuando ningún registro del grupo lo trae', () => {
+  const records = [polygonRecord({ ID_Parcela_Fija: 'p1' })]
+  const payload = buildTracesPayload(records, 'ORG-A')
+  assert.equal(payload.geojson.features[0].properties.producto_codigo, null)
+  assert.equal(payload.geojson.features[0].properties.producto_nombre, null)
+})
+
+test('buildTracesPayload agrega producto_codigo/producto_nombre cuando vienen en el registro (fila de origen EUDR_USO_SUELO)', () => {
+  const records = [
+    polygonRecord({ ID_Parcela_Fija: 'p1', producto_codigo: 'CAFE', producto_nombre: 'Café' }),
+  ]
+  const payload = buildTracesPayload(records, 'ORG-A')
+  assert.equal(payload.geojson.features[0].properties.producto_codigo, 'CAFE')
+  assert.equal(payload.geojson.features[0].properties.producto_nombre, 'Café')
+})
+
+test('buildTracesPayload lee producto_codigo/producto_nombre de CUALQUIER fila del grupo, no solo de pickBoundaryRecord (EUDR_MONITOREO nunca lo trae)', () => {
+  // pickBoundaryRecord prefiere la fila EUDR_MONITOREO (el perímetro real)
+  // como boundary -- esa fila nunca tiene producto_codigo (el trigger solo
+  // puebla EUDR_USO_SUELO.id_producto_predominante). Sin escanear todo el
+  // grupo (pickProducto), este test fallaría con producto_codigo: null.
+  const records = [
+    polygonRecord({ ID_Parcela_Fija: 'p1', tabla_origen: 'EUDR_MONITOREO', producto_codigo: null, producto_nombre: null }),
+    {
+      ...polygonRecord({ ID_Parcela_Fija: 'p1' }),
+      tabla_origen: 'EUDR_USO_SUELO',
+      productor: null,
+      producto_codigo: 'CACAO',
+      producto_nombre: 'Cacao',
+    },
+  ]
+  const payload = buildTracesPayload(records, 'ORG-A')
+  assert.equal(payload.geojson.features.length, 1, 'debe seguir agrupando ambas filas en una sola Feature (AC4)')
+  assert.equal(payload.geojson.features[0].properties.producto_codigo, 'CACAO')
+  assert.equal(payload.geojson.features[0].properties.producto_nombre, 'Cacao')
+})
+
+test('buildOfficialEuGeoJson NO incluye producto/commodity -- sin campo oficial confirmado en TRACES NT (spec sección 1.7), solo el payload interno lo expone', () => {
+  const records = [polygonRecord({ ID_Parcela_Fija: 'p1', producto_codigo: 'CAFE', producto_nombre: 'Café' })]
+  const payload = buildTracesPayload(records, 'ORG-A')
+  const official = buildOfficialEuGeoJson(payload)
+  const props = official.features[0].properties
+  assert.ok(!('producto_codigo' in props))
+  assert.ok(!('producto_nombre' in props))
+})

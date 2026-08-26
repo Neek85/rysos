@@ -467,7 +467,13 @@ export default function MapDashboard() {
       const { data, error: err } = await supabase
         .from('vw_monitoreo_web')
         .select(
-          'registro_id,tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,productor_nombre,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,cumple_eudr,geom_geojson'
+          // ADR-028: id_producto_predominante/producto_codigo/producto_nombre
+          // agregados -- vw_monitoreo_web ya los expone (rama "poligono";
+          // NULL en rama "punto"), pero un SELECT explícito no los deja
+          // pasar sin este agregado (CLAUDE.md: agregar una columna a la
+          // vista no la hace visible por sí sola). buildTracesPayload (vía
+          // pickProducto en lib/eudrDdsExporter.js) los necesita en `records`.
+          'registro_id,tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,productor_nombre,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,cumple_eudr,geom_geojson,id_producto_predominante,producto_codigo,producto_nombre'
         )
         .eq('ID_Organizacion', organizationId)
 

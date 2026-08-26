@@ -61,7 +61,8 @@ test('buildParcelasCsv usa encabezados legibles para las hectáreas', () => {
   const csv = buildParcelasCsv([{ ID_Parcela_Fija: 'COOP-JS-001', hcp: 2 }])
   const header = csv.split('\r\n')[0]
   assert.ok(header.includes('Código de Parcela'))
-  assert.ok(header.includes('Ha. Café Podado'))
+  // ADR-028: "Ha. Café Podado" -> "Ha. En Producción" (ya no exclusivo de café).
+  assert.ok(header.includes('Ha. En Producción'))
 })
 
 // ---------------------------------------------------------------
@@ -216,9 +217,9 @@ test('validateSocioRows acepta encabezados técnicos en minúsculas/mayúsculas 
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })
 
-test('validateParcelaRows acepta encabezados legibles ("Código de Parcela", "Ha. Café Podado")', async () => {
+test('validateParcelaRows acepta encabezados legibles ("Código de Parcela", "Ha. En Producción")', async () => {
   const [result] = await validateParcelaRows([
-    { 'Código de Parcela': 'P-01', 'Código de Socio': 'JS-01', 'Ha. Café Podado': '2.5' },
+    { 'Código de Parcela': 'P-01', 'Código de Socio': 'JS-01', 'Ha. En Producción': '2.5' },
   ])
   assert.equal(result.valid, true, JSON.stringify(result.errors))
   assert.equal(result.data.ID_Parcela_Fija, 'P-01')

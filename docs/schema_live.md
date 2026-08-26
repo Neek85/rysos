@@ -169,11 +169,17 @@ código manual ej. `COOP-JS-001`), `ID_Organizacion`, `ID_Socio`, `socio_dni`/
 `socio_nombre_completo` (copias desnormalizadas del socio — más superficie de
 PII a cuidar en cualquier vista/export que use esta tabla), `parcela_codigo`,
 `parcela_nombre`, `hcp`/`hcc`/`ho`/`hip`/`hrp`/`hbp`/`otros_cultivo` (hectáreas
-por categoría de uso, nomenclatura heredada de AppSheet), `totalh` (suma de
-las categorías), `geom` (**`NULL` en la mayoría de registros reales
-confirmados** — no asumir que siempre hay geometría), `creado_en`,
+por categoría de uso, nomenclatura heredada de AppSheet — desde ADR-028
+los labels de `hcp`/`hcc` en la UI ya no dicen "Café", ver abajo), `totalh`
+(suma de las categorías), `geom` (**`NULL` en la mayoría de registros
+reales confirmados** — no asumir que siempre hay geometría), `creado_en`,
 `actualizado_en`, `creado_por`, `hr`.
 - RLS: igual patrón que `PADRON_SOCIOS` — sin escritura `anon`.
+- **Nuevo (2026-08-26, ADR-028):** `id_producto_predominante uuid NULL
+  REFERENCES PRODUCTOS(id)` — dato maestro editable desde
+  `ParcelaFormModal.jsx` (`/dashboard/socios`). Backfilleado a `CAFE` para
+  todas las filas existentes al aplicar la migración; nuevas parcelas
+  pueden quedar `NULL` si el usuario no selecciona producto.
 
 ### Módulo Padrón Web de Socios y Fincas (2026-08-18, `/dashboard/socios`)
 
@@ -268,6 +274,15 @@ expondría DNI/nombre real a cualquiera con la anon key pública. En su lugar:
 - **Nuevo (2026-08-18):** `area_calculada_ha`, `requiere_revision_area`,
   trigger `trg_gis_sanitize_eudr_uso_suelo`, índices GiST/`ID_Organizacion`
   (mismo patrón que `EUDR_MONITOREO`, ver arriba).
+- **Nuevo (2026-08-26, ADR-028):** `id_producto_predominante uuid NULL
+  REFERENCES PRODUCTOS(id)` — foto por evento, NO editable directamente;
+  poblada por el trigger `trg_set_producto_predominante_uso_suelo`
+  (`BEFORE INSERT`, nunca lanza excepción — deja `NULL` si la cadena de
+  resolución no matchea) que copia el valor de
+  `PADRON_PARCELAS.id_producto_predominante` resolviendo `id_parcela`
+  (GUID crudo de QField) → `EUDR_MONITOREO.qfield_relation_id` → su
+  `ID_Parcela_Fija`. Sin backfill de filas existentes (a diferencia de
+  `PADRON_PARCELAS` arriba) — solo aplica hacia adelante.
 
 ### `public."EUDR_INSTALACIONES"`
 - `fid`, `id` (inferido por simetría con `EUDR_USO_SUELO`, no confirmado
@@ -320,7 +335,25 @@ duplicado por compatibilidad con proyectos QGIS antiguos) e `id_monitoreo`
 (uuid nunca nulo — sintético vía `uuid_generate_v5` para filas que no son de
 `EUDR_MONITOREO`).
 
+> **Nuevo (2026-08-26, ADR-028):** `vw_monitoreo_poligonos` (solo esta,
+> `vw_monitoreo_puntos` no se tocó) gana `id_producto_predominante` al
+> final de cada rama del `UNION ALL` — `NULL::uuid` en la rama
+> `EUDR_MONITOREO` (esa tabla no tiene la columna), `u.id_producto_predominante`
+> en la rama `EUDR_USO_SUELO`. `CREATE OR REPLACE VIEW`, sin `DROP`.
+
 ### `public.vw_monitoreo_web`
+
+> **Nuevo (2026-08-26, ADR-028):** rama "poligono" gana
+> `id_producto_predominante` (leído directo de
+> `vw_monitoreo_poligonos`, NO vía el `JOIN` contra `PADRON_PARCELAS` de
+> abajo, que está roto para filas de origen `EUDR_USO_SUELO`) más
+> `producto_codigo`/`producto_nombre` resueltos con un `LEFT JOIN`
+> adicional contra `PRODUCTOS`. Rama "punto": las 3 columnas `NULL`
+> (`EUDR_INSTALACIONES` no tiene producto). `components/gis/MapDashboard.jsx`
+> necesitó agregar las 3 columnas a su `.select(...)` explícito (línea
+> ~470) para que lleguen a `records` — agregarlas a la vista sola no
+> alcanza.
+
 Consumida por `components/gis/MapDashboard.jsx` **y** por
 `app/trace/[lot_hash]/page.jsx` (Portal Público de Trazabilidad,
 auditado 2026-08-18 — ver `specs/trace_public_audit.md`). El portal público
@@ -505,6 +538,7 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
 | `public.fn_guardar_inspeccion_completa(...)` | `jsonb` (`{id, created}`) | **Nuevo (2026-08-18).** Guardado atómico de `INSPECCIONES` + 6 `CAP_*` en una sola transacción — reemplaza 7 llamadas REST independientes que antes no eran atómicas. Sin `SECURITY DEFINER` (corre con el rol del llamador). Llamada desde `lib/inspeccionesActions.js::saveInspeccion()` vía `supabase.rpc(...)`. |
 | `public.fn_validar_topologia_eudr(p_tabla_origen text, p_registro_id text)` | `jsonb` | **Nuevo (2026-08-20), actualizada el mismo día.** Validación topológica bajo demanda (`ST_IsValid`/`ST_IsSimple`/solapamiento contra otros `APROBADO` de la misma org/`fn_calcular_area_ha`) para un registro `EUDR_MONITOREO`/`EUDR_USO_SUELO` — rechaza `EUDR_INSTALACIONES` (siempre puntual). Sin `SECURITY DEFINER`; se llama solo desde `app/api/qc/validate-spatial/route.js` con el Service Role Key. El campo `deforestacion` cruza contra `EUDR_COBERTURA_BOSCOSA_2020` SI esa tabla tiene filas (`anio_perdida > 2020` + `ST_Intersects`) — mientras siga vacía (estado por defecto), sigue devolviendo `{disponible:false,...}` igual que su primera versión. |
 | `public.fn_parcelas_vecinas_eudr(p_organizacion_id text, p_geom geometry, p_radio_m numeric DEFAULT 500, p_excluir_id uuid DEFAULT NULL, p_limite integer DEFAULT 25)` | `TABLE(id uuid, geom geometry, codigo_socio text, total_encontrados integer, total_devueltos integer)` | **Nuevo (2026-08-21), pendiente de aplicación manual.** Capa de contexto de parcelas vecinas (`EUDR_MONITOREO` `APROBADO` dentro de un radio, `ST_DWithin` sobre `::geography`) para la Consola QC — ver `docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md`. Sin `SECURITY DEFINER`; se llama solo desde `lib/actions/qcActions.js::fetchParcelasVecinas` con el Service Role Key (nunca expuesta a `anon` — `p_organizacion_id` lo decide el llamador, exponerla abriría fuga cross-tenant). |
+| `public.fn_set_producto_predominante_uso_suelo()` | `trigger` | **Nuevo (2026-08-26, ADR-028), pendiente de aplicación manual.** `BEFORE INSERT` sobre `EUDR_USO_SUELO` (`trg_set_producto_predominante_uso_suelo`) — resuelve `id_parcela` (GUID QField) → `EUDR_MONITOREO.qfield_relation_id` → `ID_Parcela_Fija` → `PADRON_PARCELAS.id_producto_predominante`, copiándolo a `NEW.id_producto_predominante`. Nunca lanza excepción: si la cadena no resuelve, deja `NULL` y el `INSERT` continúa. |
 
 ## Tablas nuevas fuera del núcleo EUDR/Padrón
 
@@ -537,6 +571,21 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
   escribe ahí. Escritura best-effort (no atómica con el `UPDATE` de
   `estado_revision` de `approveRecord`/`rejectRecord`) — ver la spec para
   el razonamiento completo.
+
+- **`public."PRODUCTOS"`** (2026-08-26, ADR-028, pendiente de aplicación
+  manual): catálogo global — `id uuid PK`, `codigo text UNIQUE`, `nombre
+  text`, `vertical text CHECK IN ('AGRICOLA','PECUARIO')`, `activo
+  boolean`, `creado_en timestamptz`. Sembrado con 2 filas (`CAFE`,
+  `CACAO`, ambas `AGRICOLA`). RLS: `SELECT` abierto para `anon`
+  (`USING (true)`, mismo patrón que `CERTIFICACIONES_CATALOGO` de
+  ADR-027, no documentado en este archivo).
+- **`public."ORGANIZACION_PRODUCTOS"`** (2026-08-26, ADR-028, pendiente
+  de aplicación manual): membresía N-a-N organización↔producto — `id
+  uuid PK`, `id_organizacion text NOT NULL REFERENCES ORGANIZACIONES("ID")`,
+  `id_producto uuid NOT NULL REFERENCES PRODUCTOS(id)`, `activo boolean`,
+  `creado_en timestamptz`, `UNIQUE(id_organizacion, id_producto)`. Sin
+  seed — se llena por organización cuando corresponda. RLS: `SELECT`
+  para `anon` con `USING (id_organizacion IS NOT NULL)`.
 
 ## Índices espaciales
 
