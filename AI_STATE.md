@@ -40,6 +40,78 @@ tarea (solo SQL, Markdown, y un test Python), así que el riesgo real de
 saltarse el lint acá es bajo, pero queda documentado como gap real, no
 resuelto.
 
+## 2026-08-26 — `postgrest.exceptions.APIError: invalid input syntax for type bigint: "None"` al insertar en EUDR_USO_SUELO/EUDR_INSTALACIONES vía supabase-py
+
+**Tarea:** paso 4 multi-producto café/cacao (`specs/multi_producto_cafe_cacao.md`,
+`docs/adr/ADR-028-multi-producto-cafe-cacao.md`) — verificación Live final.
+Al corregir el bloqueo real de esa tarea (`tests/test_multi_producto_cafe_cacao.py`
+fallaba por falta de una fila en `ORGANIZACIONES` antes de insertar en
+`EUDR_MONITOREO`/`EUDR_USO_SUELO`, que tienen FK real desde
+`20260821_225310_fk_id_organizacion_eudr.sql`), se aplicó el mismo fix a
+`tests/test_gis_core_sanitization.py::TestGisSanitizationLive` (2 tests con
+el mismo gap, mismo tipo de `INSERT`). Ahí apareció un error nuevo,
+**enmascarado hasta ahora** por el `23503` de la FK que siempre ocurría
+antes de llegar a este punto.
+
+**Bloqueo:** `test_point_geometry_has_null_area` y
+`test_small_polygon_is_flagged_not_rejected` fallan los dos con:
+
+```
+postgrest.exceptions.APIError: {'message': 'invalid input syntax for type bigint: "None"', 'code': '22P02', 'hint': None, 'details': None}
+```
+
+al hacer `.execute()` del `INSERT` en `EUDR_INSTALACIONES`/`EUDR_USO_SUELO`
+respectivamente (`tests/test_gis_core_sanitization.py`, línea del
+`.execute()` de cada test).
+
+**Confirmado que NO es un problema de lógica de negocio ni del trigger de
+sanitización:** el `INSERT` se comete igual en la base real pese a la
+excepción del cliente — verificado con una consulta directa post-fallo:
+la fila de `EUDR_USO_SUELO` insertada por
+`test_small_polygon_is_flagged_not_rejected` quedó con
+`area_calculada_ha: 0.0123` y `requiere_revision_area: True` (exactamente
+lo que el test espera de `fn_calcular_area_ha`/`trg_gis_sanitize_eudr_uso_suelo`),
+y la de `EUDR_INSTALACIONES` con `area_calculada_ha`/`requiere_revision_area`
+en `NULL` (también correcto, AC4). En ambas filas, la única columna
+anómala es `fid: None` (`NULL` real en la base, no el texto `"None"`) —
+`fid` no tiene `DEFAULT`/identity en ninguna de las 2 tablas, así que un
+`INSERT` que no lo especifica lo deja `NULL`, cosa que Postgres permite
+sin problema a nivel de escritura. El error `22P02` ocurre después, en el
+manejo de la respuesta del `INSERT` por parte de `postgrest-py`/`supabase-py`
+(versión instalada en este entorno, ver `requirements.txt`) — no en
+ningún trigger ni función de este repo.
+
+**No investigado más a fondo, a propósito** (decisión del usuario, no
+seguir): no se determinó si el `22P02` viene de un header
+`Prefer`/`Range` mal formado por la librería cliente al construir la
+respuesta `RETURNING *` con un `fid` nulo, de una incompatibilidad de
+versión `postgrest-py`↔PostgREST del proyecto, o de otra causa —
+cualquiera de las tres requeriría instrumentar la request HTTP cruda
+(fuera de alcance de esta tarea).
+
+**Cómo se destrabó el estado de la base:** cada corrida fallida deja
+residuo (el cleanup del test nunca llega a ejecutarse porque la excepción
+corta el test antes) — se limpiaron a mano, vía consulta directa, todas
+las filas huérfanas de `EUDR_USO_SUELO`/`EUDR_INSTALACIONES`/
+`ORGANIZACIONES` con `ID_Organizacion`/`ID = 'TEST-GIS-SANITIZATION'`
+generadas durante el diagnóstico. Confirmado limpio antes de cerrar esta
+tarea.
+
+**Qué falta y cómo destrabarlo:** reproducir el `INSERT` con la librería
+`requests`/`httpx` cruda (sin pasar por `supabase-py`) contra el mismo
+endpoint PostgREST para ver si el `22P02` sigue apareciendo — si
+desaparece, confirma que es un bug de la librería cliente Python (posible
+fix: pin a otra versión de `postgrest`/`supabase` en `requirements.txt`);
+si persiste, el problema está del lado de PostgREST/Postgres y necesita
+mirar la definición real de `fid` (`\d "EUDR_USO_SUELO"` en Supabase
+Studio) para confirmar si de verdad no tiene `DEFAULT`, y si eso es
+intencional o un gap de la migración original
+(`20260818_gis_core_sanitization.sql` u otra anterior). No se tocó
+código de producción ni ninguna migración en esta tarea — el bug es
+puramente de la suite de tests contra la instancia real, no del sistema
+en sí (el trigger y la escritura funcionan correctamente, confirmado
+arriba).
+
 ## 2026-08-25b — No hay forma de correr SQL crudo (`pg_depend`/`pg_get_viewdef`/GRANTs) contra la instancia real desde este entorno
 
 **Tarea:** corregir `supabase/migrations/20260825142426_normaliza_tipo_hbp_otros_cultivo.sql`
