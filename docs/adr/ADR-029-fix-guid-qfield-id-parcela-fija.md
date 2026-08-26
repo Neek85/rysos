@@ -1,9 +1,9 @@
 # ADR-029 — Resolver el GUID de QField vía `LEFT JOIN LATERAL` con desempate determinístico, en vistas y trigger
 
-- **Estado:** Diseño aceptado, **sin implementar todavía** — ninguna
-  migración SQL escrita ni aplicada. Este ADR documenta la decisión de
-  arquitectura; el SQL exacto propuesto vive en
-  `specs/fix_id_parcela_fija_guid_qfield.md`.
+- **Estado:** **Implementado y aplicado** (2026-08-26) — ver la nota de
+  estado final al pie de este documento para el detalle completo y 2
+  correcciones a la sección "Decisión" original (escrita antes de
+  implementar, quedaron desactualizadas en 2 afirmaciones puntuales).
 - **Fecha:** 2026-08-26
 - **Spec:** `specs/fix_id_parcela_fija_guid_qfield.md` (evidencia completa,
   SQL propuesto detallado, riesgos y mitigaciones)
@@ -66,7 +66,10 @@ duplicado — dos fuentes de verdad (`"ID_Parcela_Fija"` de la vista,
 para la misma subdivisión. Aplicar el mismo `ORDER BY` en los 3 lugares
 es la única forma de garantizar consistencia entre ellos.
 
-**4. `vw_monitoreo_web` y `lib/eudrDdsExporter.js` no se tocan.** Es una
+**4. `vw_monitoreo_web` y `lib/eudrDdsExporter.js` no se tocan por esta
+decisión** (ver nota de estado al final del documento: `vw_monitoreo_web`
+sí se modificó después, pero por una decisión separada y de alcance
+distinto — no por lo que resuelve este punto 4). Es una
 consecuencia deliberada del diseño, no un descuido: el `LEFT JOIN
 PADRON_PARCELAS` ya existente en `vw_monitoreo_web` y el `groupByParcela`
 del exportador ya asumen que `"ID_Parcela_Fija"` es un código real —
@@ -107,3 +110,47 @@ unificar el criterio en los 4 lugares que hoy resuelven "el
 - El test end-to-end contra las 13 filas reales de `ORG-TEST-E2E`
   (`total_plots: 6` → `3`) es el criterio de aceptación concreto para
   esa tarea futura, no solo una verificación de esquema.
+
+## Nota de estado final (2026-08-26)
+
+Este ADR se escribió antes de implementar — las 3 secciones de arriba
+("Estado" original, punto 4 de "Decisión", y los 2 primeros bullets de
+"Consecuencias") describen el diseño *propuesto*, no lo que terminó
+pasando. Se dejan sin reescribir (razonamiento y contexto siguen siendo
+válidos como registro de la decisión), pero quedan superadas por esto:
+
+- **Migración real aplicada:**
+  `supabase/migrations/20260826140000_fix_id_parcela_fija_guid_qfield.sql`
+  — aplicada en Supabase Studio y **verificada Live**: los 7 tests reales
+  de `tests/test_fix_id_parcela_fija_guid_qfield.py::TestFixIdParcelaFijaGuidQfieldLive`
+  pasan contra la instancia real (antes se auto-saltaban). La regresión
+  de "plots fantasma" que motivó este ADR (sección "Contexto") se
+  confirmó arreglada contra los datos reales de `ORG-TEST-E2E`:
+  `total_plots` bajó de 6 a 3, exactamente como predecía la sección
+  "Decisión", punto 4.
+- **El punto 4 de "Decisión" quedó parcialmente superado:** sigue siendo
+  cierto que `lib/eudrDdsExporter.js` no se tocó (se arregla en cascada,
+  como decía el diseño original). Pero `vw_monitoreo_web` **sí** se
+  modificó — no por lo que resuelve este ADR, sino por una decisión
+  aparte y de alcance distinto tomada el mismo día: el `LEFT JOIN
+  LATERAL` `mon` de esa vista (resuelve `productor`, no
+  `"ID_Parcela_Fija"`) agregó el mismo desempate `creado_en DESC`,
+  confirmado explícitamente por el usuario (`specs/fix_id_parcela_fija_guid_qfield.md`
+  sección 5.1). Esto también supera el párrafo "Fuera de alcance,
+  señalado pero no corregido" de la sección "Decisión" — ya no aplica,
+  se corrigió el mismo día.
+- **Hallazgo real durante la implementación, no anticipado en el diseño
+  original:** `EUDR_MONITOREO` tiene un
+  `UNIQUE("ID_Organizacion", "ID_Parcela_Fija", fecha_monitoreo)` real
+  (`eudr_monitoreo_org_parcela_fecha_key`, no documentado en ninguna
+  migración de este repo, confirmado empíricamente con un `23505` real).
+  Esto vuelve estructuralmente imposible el empate que motivó agregar el
+  desempate al `LATERAL` `mon` de `vw_monitoreo_web` — el cambio sigue
+  siendo correcto y sin riesgo, pero es defensivo, no el cierre de un bug
+  reproducible como las otras 3 piezas de este ADR. Detalle completo en
+  `docs/schema_live.md` (sección `EUDR_MONITOREO`) y `AI_STATE.md`
+  (entrada 2026-08-26b).
+- **Commits:** `0d07138` (migración: 2 vistas + trigger + `vw_monitoreo_web`),
+  `e772844` (doc del `UNIQUE` real en `docs/schema_live.md`), `ef60c35`
+  (fix de un bug del propio test de verificación — fecha de un fixture,
+  no de la vista).
