@@ -529,7 +529,14 @@ class TestFixIdParcelaFijaGuidQfieldLive(unittest.TestCase):
                 "ID_Organizacion": self.ORG_A,
                 "ID_Parcela_Fija": "TEST-FIX-GUID-PRODUCTOR",
                 "qfield_relation_id": guid,
-                "fecha_monitoreo": "2026-08-01",
+                # ANTERIOR a "Visita Nueva" (2026-07-06) a propósito -- su
+                # propio productor es NULL, y si esta fecha fuera la más
+                # reciente el LATERAL `mon` la elegiría a ELLA (por
+                # fecha_monitoreo DESC), devolviendo NULL en vez de
+                # "Productor Visita Nueva" -- bug real de este fixture,
+                # encontrado corriendo el test contra la instancia real
+                # tras aplicar la migración (no un bug de la vista).
+                "fecha_monitoreo": "2026-02-01",
                 "estado_revision": "PENDIENTE",
             }
         ).execute()
