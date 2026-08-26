@@ -1,9 +1,14 @@
 # Spec — Multi-producto (Café/Cacao): auditoría de estado real + primer diseño de `PRODUCTOS`/`ORGANIZACION_PRODUCTOS`
 
 - **Estado:** **Auditoría de solo lectura completa (2026-08-25) — diseño
-  propuesto en la sección 2 es una PRIMERA VERSIÓN, sujeta a revisión del
-  usuario, NO cerrada.** Sin migración SQL ni cambios de código en esta
-  tarea.
+  propuesto en la sección 2 sigue sin cerrar del todo, pero la ronda 2
+  (mismo día) cierra 2 de las 5 preguntas abiertas de la sección 4:
+  `hcp`/`hcc` NO se tocan a nivel de base de datos (pregunta #1,
+  sección 5.1) y `ORGANIZACION_PRODUCTOS` se diseña N-a-N (pregunta #3,
+  sección 5.2, pendiente de confirmación final del usuario pero ya es
+  el criterio a usar para redactar el contrato de datos). Quedan
+  abiertas las preguntas #2, #4 y #5.** Sin migración SQL ni cambios de
+  código todavía — ni en la ronda 1 ni en esta ronda 2.
 - **Fecha:** 2026-08-25
 - **Contexto previo:** `specs/roadmap_padron_multiorganizacion.md`
   (sección 3, boceto original de alto nivel — "PRODUCTOS/ORGANIZACION_PRODUCTOS/EUDR_USO_SUELO.id_producto_predominante"),
@@ -340,18 +345,20 @@ para las filas existentes — ver pregunta abierta abajo.
 
 ## 4. Preguntas abiertas (sin evidencia clara — no asumidas, no resueltas en esta spec)
 
-1. ¿Qué pasa con `PADRON_PARCELAS.hcp`/`hcc` frente a organizaciones
-   que solo trabajan cacao? (hallazgo #1 de la sección 3).
+1. ~~¿Qué pasa con `PADRON_PARCELAS.hcp`/`hcc` frente a organizaciones
+   que solo trabajan cacao? (hallazgo #1 de la sección 3).~~
+   **RESUELTA, ronda 2 — ver sección 5.1.**
 2. ¿`vertical` en `PRODUCTOS` es realmente solo `AGRICOLA`/`PECUARIO`
    como texto libre, o conviene un `CHECK`/enum? Sin evidencia de un
    tercer valor real hoy.
-3. ¿La membresía `ORGANIZACION_PRODUCTOS` es 1-a-N real (una
+3. ~~¿La membresía `ORGANIZACION_PRODUCTOS` es 1-a-N real (una
    organización puede tener café Y cacao a la vez) o el negocio real
    asume una organización = un producto principal? El nombre de la
    tabla y el boceto original sugieren N-a-N, pero no hay ningún dato
    real (las 3 organizaciones no tienen ningún producto asignado hoy)
    que confirme el caso de uso real de una organización con más de un
-   producto simultáneo.
+   producto simultáneo.~~ **RESUELTA (pendiente de confirmación final
+   del usuario), ronda 2 — ver sección 5.2.**
 4. ¿`id_producto_predominante` en `EUDR_USO_SUELO` alcanza, o el
    objetivo final necesita el mismo dato también a nivel
    `PADRON_PARCELAS` (la unidad que ve el padrón, no solo el uso de
@@ -361,3 +368,58 @@ para las filas existentes — ver pregunta abierta abajo.
    de alcance del diseño de esquema, pero es el consumidor final real
    mencionado en el roadmap original ("selectores de producto +
    certificación antes de generar el paquete").
+
+## 5. Decisiones cerradas — ronda 2 (2026-08-25)
+
+### 5.1 `PADRON_PARCELAS.hcp`/`hcc` — NO se tocan a nivel de base de datos (resuelve pregunta #1)
+
+**Decisión:** `hcp`/`hcc` representan un concepto universal ("en
+producción"/"en crecimiento"), aplicable a cualquier producto, no
+exclusivo de café — no requieren ningún cambio de esquema ni migración
+en el paso 4. Se mantienen tal cual, sin agregar columnas equivalentes
+de cacao ni generalizarlas a nivel de columna.
+
+Lo que SÍ es específico de café es únicamente el **texto de la UI**
+("Café Podado"/"Café en Crecimiento"), no el concepto ni la columna.
+Grep completo (`Café Podado|Café en Crecimiento|Ha\. Café|hcp|hcc`
+sobre `.js`/`.jsx`) confirma exactamente 2 sitios fuente y 2 sitios de
+consumo, sin ninguna otra ocurrencia hardcodeada por fuera de esta
+única fuente de verdad:
+
+- **`lib/validations/socios.js:131`** — `{ field: 'hcp', label: 'Ha. Café Podado' }`
+- **`lib/validations/socios.js:132`** — `{ field: 'hcc', label: 'Ha. Café en Crecimiento' }`
+- **`components/features/socios/ParcelaFormModal.jsx:80`** —
+  `{HECTARE_FIELDS.map(({ field, label }) => (<FormField key={field} label={label} ...>` —
+  renderiza esos labels como el texto visible de cada input en el
+  formulario manual de alta/edición de parcela.
+- **`lib/padronCsv.js:75`** —
+  `...Object.fromEntries(HECTARE_FIELDS.map(({ field, label }) => [field, label]))`
+  dentro de `PARCELA_FIELD_LABELS` — los mismos labels se convierten en
+  encabezados de columna del CSV de exportación/plantilla/importación
+  de parcelas.
+
+Ambos sitios de consumo leen `HECTARE_FIELDS` como única fuente — no
+hay ningún texto "Café" duplicado o divergente en otro lugar del
+código (confirmado, no asumido).
+
+**Alcance de la corrección (para la tarea de implementación del paso
+4, NO esta tarea de relevamiento):** el texto se corrige para que sea
+genérico o condicional al producto de la parcela — por ejemplo "Ha. En
+Producción"/"Ha. En Crecimiento" genérico, o un label que varíe según
+el/los producto(s) de la organización dueña de la parcela. Es un
+cambio de UI/texto en `lib/validations/socios.js` (y por herencia,
+`ParcelaFormModal.jsx`/`lib/padronCsv.js` sin tocarlos directamente),
+**no una migración de base de datos** — `hcp`/`hcc` siguen siendo las
+mismas 2 columnas físicas, solo cambia cómo se rotulan.
+
+### 5.2 `ORGANIZACION_PRODUCTOS` — diseño N-a-N (resuelve pregunta #3, pendiente de confirmación final)
+
+**Decisión (criterio a usar para redactar el contrato de datos,
+pendiente de confirmación final del usuario):** una organización puede
+tener más de un producto a la vez (café Y cacao simultáneamente, no
+una relación excluyente 1-a-1 organización↔producto). El diseño de la
+sección 2.2 (`ORGANIZACION_PRODUCTOS` con `UNIQUE(id_organizacion,
+id_producto)`, sin ninguna restricción adicional que limite a una sola
+fila por organización) ya era estructuralmente N-a-N — esta decisión
+confirma que ese es el comportamiento de negocio deseado, no solo un
+artefacto del patrón reutilizado de `ORGANIZACION_CERTIFICACIONES`.
