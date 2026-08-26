@@ -259,17 +259,24 @@ class TestCertificacionesNormalizadasLive(unittest.TestCase):
                 "en Supabase Studio (CERTIFICACIONES_CATALOGO no existe) -- se salta hasta que se aplique."
             )
 
+    def _cleanup_test_orgs(self):
+        """Borra todo rastro de ORG_A/ORG_B, en orden seguro para las FK
+        reales (ORGANIZACION_CERTIFICACIONES -> ORGANIZACIONES): hijos
+        primero, ORGANIZACIONES al final. Llamada desde setUp Y tearDown
+        -- así un test que falla a mitad de camino no deja residuos para
+        el siguiente ni para producción."""
+        self.supabase.table("PARCELA_CERTIFICACIONES").delete().in_("id_organizacion", [ORG_A, ORG_B]).execute()
+        self.supabase.table("SOCIO_CERTIFICACIONES").delete().in_("id_organizacion", [ORG_A, ORG_B]).execute()
+        self.supabase.table("ORGANIZACION_CERTIFICACIONES").delete().in_("id_organizacion", [ORG_A, ORG_B]).execute()
+        self.supabase.table("PADRON_PARCELAS").delete().in_("ID_Organizacion", [ORG_A, ORG_B]).execute()
+        self.supabase.table("PADRON_SOCIOS").delete().in_("ID_Organizacion", [ORG_A, ORG_B]).execute()
+        self.supabase.table("ORGANIZACIONES").delete().in_("ID", [ORG_A, ORG_B]).execute()
+
     def setUp(self):
-        self.supabase.table("SOCIO_CERTIFICACIONES").delete().eq("id_organizacion", ORG_A).execute()
-        self.supabase.table("SOCIO_CERTIFICACIONES").delete().eq("id_organizacion", ORG_B).execute()
-        self.supabase.table("PADRON_SOCIOS").delete().eq("ID_Organizacion", ORG_A).execute()
-        self.supabase.table("PADRON_SOCIOS").delete().eq("ID_Organizacion", ORG_B).execute()
+        self._cleanup_test_orgs()
 
     def tearDown(self):
-        self.supabase.table("SOCIO_CERTIFICACIONES").delete().eq("id_organizacion", ORG_A).execute()
-        self.supabase.table("SOCIO_CERTIFICACIONES").delete().eq("id_organizacion", ORG_B).execute()
-        self.supabase.table("PADRON_SOCIOS").delete().eq("ID_Organizacion", ORG_A).execute()
-        self.supabase.table("PADRON_SOCIOS").delete().eq("ID_Organizacion", ORG_B).execute()
+        self._cleanup_test_orgs()
 
     def test_catalogo_tiene_exactamente_8_filas_activas(self):
         rows = self.supabase.table("CERTIFICACIONES_CATALOGO").select("codigo, nombre, activo").execute().data
@@ -320,6 +327,47 @@ class TestCertificacionesNormalizadasLive(unittest.TestCase):
             "el numero de filas en SOCIO_CERTIFICACIONES para estos socios debe coincidir "
             "exactamente con el numero de columnas 'Si' reales en PADRON_SOCIOS",
         )
+
+    def test_backfill_estado_organico_coincide_exacto_por_socio(self):
+        """Mismo criterio ya validado ad-hoc antes de escribir este test
+        (9 filas orgánicas reales, 0 discrepancias): para cada socio real,
+        `estado` en SOCIO_CERTIFICACIONES debe coincidir EXACTO con
+        `cert_org_estatus` del socio en las 5 certificaciones orgánicas
+        (NOP_USDA/UE_2018_848/COR_CANADA/DS_0442006_AG/LPO_MX, sección 3.4
+        de la spec), y debe ser NULL en las otras 3 -- nunca al revés."""
+        catalogo = self.supabase.table("CERTIFICACIONES_CATALOGO").select("id, codigo").execute().data
+        id_to_codigo = {c["id"]: c["codigo"] for c in catalogo}
+        organic_codes = {"NOP_USDA", "UE_2018_848", "COR_CANADA", "DS_0442006_AG", "LPO_MX"}
+
+        socios = self.supabase.table("PADRON_SOCIOS").select("id, ID_Socio, cert_org_estatus").execute().data
+        self.assertGreaterEqual(len(socios), 7)
+        socio_ids = [s["id"] for s in socios]
+        estatus_by_socio_id = {s["id"]: s["cert_org_estatus"] for s in socios}
+
+        cert_rows = (
+            self.supabase.table("SOCIO_CERTIFICACIONES")
+            .select("id_socio, id_certificacion, estado")
+            .in_("id_socio", socio_ids)
+            .execute()
+            .data
+        )
+
+        organic_checked = 0
+        for row in cert_rows:
+            codigo = id_to_codigo.get(row["id_certificacion"])
+            if codigo in organic_codes:
+                organic_checked += 1
+                self.assertEqual(
+                    row["estado"],
+                    estatus_by_socio_id[row["id_socio"]],
+                    f"estado de una fila orgánica ({codigo}) debe copiar cert_org_estatus del socio",
+                )
+            else:
+                self.assertIsNone(
+                    row["estado"],
+                    f"estado de una fila NO orgánica ({codigo}) debe quedar NULL, nunca copiar cert_org_estatus",
+                )
+        self.assertGreater(organic_checked, 0, "el test no verificó ninguna fila orgánica real -- ¿backfill vacío?")
 
     def test_padron_socios_columnas_viejas_siguen_intactas(self):
         """Confirma que la migración NO tocó ninguna columna vieja --
@@ -373,6 +421,82 @@ class TestCertificacionesNormalizadasLive(unittest.TestCase):
         )
         self.assertEqual(len(rows_a), 1)
         self.assertEqual(rows_a[0]["id_socio"], socio_a["id"])
+
+    def test_aislamiento_multi_tenant_cruzado_en_organizacion_certificaciones(self):
+        """Mismo patrón que el test de SOCIO_CERTIFICACIONES arriba, pero
+        para ORGANIZACION_CERTIFICACIONES -- que a diferencia de las otras
+        4 tablas tiene una FK REAL a ORGANIZACIONES("ID") (ver el contrato
+        de la migración), así que hace falta crear las 2 organizaciones de
+        prueba primero (marcadas `es_organizacion_prueba=True`, mismo
+        convenio que ADR-008) para que el INSERT no viole la FK."""
+        self.supabase.table("ORGANIZACIONES").insert(
+            [
+                {"ID": ORG_A, "es_organizacion_prueba": True},
+                {"ID": ORG_B, "es_organizacion_prueba": True},
+            ]
+        ).execute()
+
+        catalogo = self.supabase.table("CERTIFICACIONES_CATALOGO").select("id").eq("codigo", "RAINFOREST").single().execute().data
+        id_certificacion = catalogo["id"]
+
+        self.supabase.table("ORGANIZACION_CERTIFICACIONES").insert(
+            {"id_organizacion": ORG_A, "id_certificacion": id_certificacion}
+        ).execute()
+        self.supabase.table("ORGANIZACION_CERTIFICACIONES").insert(
+            {"id_organizacion": ORG_B, "id_certificacion": id_certificacion}
+        ).execute()
+
+        rows_a = (
+            self.supabase.table("ORGANIZACION_CERTIFICACIONES")
+            .select("id_organizacion")
+            .eq("id_certificacion", id_certificacion)
+            .eq("id_organizacion", ORG_A)
+            .execute()
+            .data
+        )
+        self.assertEqual(len(rows_a), 1)
+        self.assertEqual(rows_a[0]["id_organizacion"], ORG_A)
+
+    def test_aislamiento_multi_tenant_cruzado_en_parcela_certificaciones(self):
+        """Mismo patrón que el test de SOCIO_CERTIFICACIONES -- dos
+        parcelas de organizaciones distintas con la MISMA certificación no
+        deben mezclarse al filtrar por id_organizacion. PADRON_PARCELAS no
+        tiene FK real a ORGANIZACIONES (confirmado por introspección
+        OpenAPI antes de escribir este test -- a diferencia del caso de
+        ORGANIZACION_CERTIFICACIONES arriba), así que no hace falta crear
+        filas en ORGANIZACIONES para esta."""
+        catalogo = self.supabase.table("CERTIFICACIONES_CATALOGO").select("id").eq("codigo", "RAINFOREST").single().execute().data
+        id_certificacion = catalogo["id"]
+
+        parcela_a = (
+            self.supabase.table("PADRON_PARCELAS")
+            .insert({"ID_Parcela_Fija": "TEST-CERT-PARCELA-A", "ID_Organizacion": ORG_A, "activo": True})
+            .execute()
+            .data[0]
+        )
+        parcela_b = (
+            self.supabase.table("PADRON_PARCELAS")
+            .insert({"ID_Parcela_Fija": "TEST-CERT-PARCELA-B", "ID_Organizacion": ORG_B, "activo": True})
+            .execute()
+            .data[0]
+        )
+        self.supabase.table("PARCELA_CERTIFICACIONES").insert(
+            {"id_parcela": parcela_a["id"], "id_organizacion": ORG_A, "id_certificacion": id_certificacion}
+        ).execute()
+        self.supabase.table("PARCELA_CERTIFICACIONES").insert(
+            {"id_parcela": parcela_b["id"], "id_organizacion": ORG_B, "id_certificacion": id_certificacion}
+        ).execute()
+
+        rows_a = (
+            self.supabase.table("PARCELA_CERTIFICACIONES")
+            .select("id_parcela")
+            .eq("id_certificacion", id_certificacion)
+            .eq("id_organizacion", ORG_A)
+            .execute()
+            .data
+        )
+        self.assertEqual(len(rows_a), 1)
+        self.assertEqual(rows_a[0]["id_parcela"], parcela_a["id"])
 
     def test_organizacion_y_parcela_certificaciones_nacen_vacias(self):
         org_rows = self.supabase.table("ORGANIZACION_CERTIFICACIONES").select("id").limit(1).execute().data
