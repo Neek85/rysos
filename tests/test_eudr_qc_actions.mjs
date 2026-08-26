@@ -57,6 +57,13 @@ function makeFakeSupabase(tableData, { rpcResponses = {} } = {}) {
           rows = rows.filter((r) => r[col] === val)
           return builder
         },
+        // HOTFIX PK multi-organización (ADR-026): checkSocioParcelaOrganizacion
+        // ahora usa .neq('ID_Organizacion', ...) en vez de traer todo y
+        // comparar con .maybeSingle() -- ver lib/eudrQcActions.js.
+        neq(col, val) {
+          rows = rows.filter((r) => r[col] !== val)
+          return builder
+        },
         in(col, vals) {
           rows = rows.filter((r) => vals.includes(r[col]))
           return builder

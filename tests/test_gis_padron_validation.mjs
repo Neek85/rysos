@@ -40,12 +40,21 @@ test('lib/actions/gisActions.js valida ID_Socio/ID_Parcela_Fija/id_parcela contr
   const source = read('lib/actions/gisActions.js')
   assert.match(source, /async function assertSocioActivoOSinValor\(supabase, socioId, organizationId\)/)
   assert.match(source, /async function assertParcelaActivaOSinValor\(supabase, parcelaId, organizationId\)/)
-  // Ambos helpers consultan activo + comparan organización con orgIdsMatch
-  // (tolerante a mayúsculas/espacios), mismo criterio que assertSocioExists
-  // en lib/actions/sociosActions.js -- no un .eq('ID_Organizacion', ...) crudo.
-  assert.match(source, /from\('PADRON_SOCIOS'\)\s*\n\s*\.select\('ID_Organizacion, activo'\)/)
-  assert.match(source, /from\('PADRON_PARCELAS'\)\s*\n\s*\.select\('ID_Organizacion, activo'\)/)
-  assert.match(source, /orgIdsMatch\(data\.ID_Organizacion, organizationId\)/)
+  // HOTFIX PK multi-organización (2026-08-25, ADR-026): superado el
+  // criterio original de ADR-019 de comparar con orgIdsMatch después de
+  // traer la fila sin filtrar -- ID_Socio/ID_Parcela_Fija ya no son PK,
+  // así que esa consulta podía devolver más de una fila (una por
+  // organización) y .maybeSingle() lanzaría. Ambos helpers ahora filtran
+  // por ID_Organizacion directamente en la query (mismo patrón que
+  // assertSocioExists en lib/actions/sociosActions.js tras el mismo
+  // hotfix) -- vuelve a garantizar 0-o-1 fila tras el
+  // UNIQUE(ID_Organizacion, ID_Socio) de la migración de PK.
+  assert.match(source, /from\('PADRON_SOCIOS'\)\s*\n\s*\.select\('activo'\)\s*\n\s*\.eq\('ID_Socio', socioId\)\s*\n\s*\.eq\('ID_Organizacion', organizationId\)/)
+  assert.match(source, /from\('PADRON_PARCELAS'\)\s*\n\s*\.select\('activo'\)\s*\n\s*\.eq\('ID_Parcela_Fija', parcelaId\)\s*\n\s*\.eq\('ID_Organizacion', organizationId\)/)
+  // orgIdsMatch ya no se IMPORTA (el filtro va en la query, no en JS) --
+  // el nombre puede seguir apareciendo en comentarios explicando el
+  // cambio, por eso se chequea el import, no una mención de texto.
+  assert.doesNotMatch(source, /import\s*\{\s*orgIdsMatch\s*\}/, 'orgIdsMatch ya no debe importarse en este archivo')
 
   // Se invocan ANTES del insert real (insertEudrCoreRecord), para las 3
   // tablas EUDR_* -- nunca para PADRON_PARCELAS (esa rama delega en
