@@ -1,5 +1,5 @@
 # ESTADO DEL PROYECTO RYZOS
-*Última actualización: 23 de agosto, 2026*
+*Última actualización: 26 de agosto, 2026*
 
 > Este documento es la "bitácora" del proyecto. Aquí se anota qué se hizo, qué falta y qué decisiones están pendientes. No contiene reglas técnicas fijas (esas viven en el prompt orquestador RYZOS V3.1) — esto es solo el día a día.
 
@@ -33,6 +33,71 @@
 - **Pendiente, fuera de este repo:** aplicar manualmente `supabase/migrations/20260820_fn_validar_topologia_eudr.sql` en Supabase Studio SQL Editor — la función `fn_validar_topologia_eudr` existe en el código desde la tarea anterior pero nunca se aplicó a la instancia real (confirmado reproduciendo el error "Could not find the function..." en vivo). Hasta que se aplique, "Ejecutar Test Espacial" seguirá fallando.
 - **(2026-08-21) Consola QC — capa de contexto de parcelas vecinas (Fase 3):** nueva capa informativa en el mapa (Monitoreos EUDR APROBADOS dentro de un radio configurable, 500m por defecto) con toggle on/off, ver `docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md`. **Pendiente, fuera de este repo:** aplicar `supabase/migrations/20260821_221221_fn_parcelas_vecinas_eudr.sql` — hasta entonces la capa queda visible pero sin datos (fallo silencioso ya verificado como no disruptivo). **Tarea diferida a propósito (pedido explícito del prompt, no un olvido):** no existe pantalla de administración para que un admin configure el radio por organización (`ORGANIZACIONES.Config.gis.radio_contexto_vecinos_m`) — hoy solo se edita a mano en la base, si hiciera falta. Si se necesita esa UI, es una tarea nueva, no se debe asumir que ya existe.
 - **(2026-08-21 a 23) Refuerzo de la Consola QC — resumen completo en un documento aparte:** bugs reales corregidos (colisión de herramientas de dibujo, popup con nombre técnico expuesto, solapamiento no auditable), mejoras nuevas (panel de info en vivo, capa de parcelas vecinas, exclusión de contención propia en el solapamiento), el incidente de datos de prueba huérfanos (`ORG-COOP-NORTE`) y las protecciones agregadas, y el fix del mensaje de error de la sincronización de Google Drive — ver **[docs/bitacora/2026-08-21_hardening-consola-qc.md](bitacora/2026-08-21_hardening-consola-qc.md)** (escrito para alguien que no programa, con enlaces a cada ADR técnico y commit).
+- **(2026-08-25) Certificaciones normalizadas — 5 tablas nuevas:**
+  `CERTIFICACIONES_CATALOGO`, `AGENCIAS_CERTIFICADORAS`,
+  `ORGANIZACION_CERTIFICACIONES`, `SOCIO_CERTIFICACIONES`,
+  `PARCELA_CERTIFICACIONES` reemplazan los 8 flags planos que vivían
+  como columnas sueltas de `PADRON_SOCIOS` (esas columnas viejas **no**
+  se borraron — quedan congeladas como respaldo, para no tener que
+  recrear las 3 vistas que aún dependen de ellas). RLS/GRANTs replican el
+  patrón ya usado en `PADRON_SOCIOS`/`PADRON_PARCELAS`. Ver
+  [ADR-027](adr/ADR-027-certificaciones-normalizadas.md) y
+  `specs/padron_certificaciones_normalizado.md` — commits `470de58`
+  (migración + código) y `73304cb` (2 gaps de cobertura de tests
+  cerrados tras la verificación post-migración: aislamiento multi-tenant
+  en las 3 tablas org-scoped y el chequeo automatizado del backfill de
+  `estado_organico`).
+- **(2026-08-26) Multi-producto café/cacao:** 2 tablas nuevas
+  (`PRODUCTOS`, catálogo con 2 filas semilla CAFE/CACAO;
+  `ORGANIZACION_PRODUCTOS`, membresía N-a-N) y `id_producto_predominante`
+  agregado en 2 lugares con roles distintos — `PADRON_PARCELAS` (dato
+  maestro editable, con backfill obligatorio a CAFE) y
+  `EUDR_USO_SUELO` (una foto por evento de monitoreo, poblada por un
+  trigger `BEFORE INSERT` que nunca bloquea el `INSERT` aunque la cadena
+  de resolución falle). `ParcelaFormModal.jsx` gana un `<select>` nuevo
+  para elegir el producto de la parcela, y `lib/eudrDdsExporter.js`
+  agrega `producto_codigo`/`producto_nombre` al paquete de trazabilidad
+  exportado. Ver [ADR-028](adr/ADR-028-multi-producto-cafe-cacao.md) y
+  `specs/multi_producto_cafe_cacao.md` §8 — migración
+  `20260826120000_multi_producto_cafe_cacao.sql`, commit `4568bee`
+  (implementación); `520436d`/`0064091` cerraron el paso 4 arreglando
+  tests Live que no creaban la fila `ORGANIZACIONES` requerida por una FK
+  real antes de insertar (`23503`).
+- **(2026-08-26) Bug de `postgrest-py` en tests de GIS, causa raíz real
+  encontrada:** el `22P02` (`invalid input syntax for type bigint:
+  "None"`) que bloqueaba 2 tests de `TestGisSanitizationLive` no era un
+  bug de la librería ni del trigger de sanitización (que funcionaba
+  bien) — era el `DELETE` de limpieza de cada test, que filtraba
+  `.eq("fid", row["fid"])` con `fid` en `NULL` (columna sin `DEFAULT`,
+  siempre `NULL` en un `INSERT` manual de test). `postgrest-py`
+  serializa ese filtro literal a `fid=eq.None`, que Postgres rechaza.
+  Fix: filtrar por `id` (la PK real) en vez de `fid`. Commit `1a5bc19`
+  (causa raíz confirmada capturando la request HTTP real, no una
+  hipótesis) — ver `AI_STATE.md` para el detalle completo.
+- **(2026-08-26) Fix del GUID de QField mal etiquetado como
+  `"ID_Parcela_Fija"`:** `vw_monitoreo_poligonos`/`vw_monitoreo_puntos`
+  exponían, para filas de `EUDR_USO_SUELO`/`EUDR_INSTALACIONES`, el GUID
+  crudo que QField genera para el `EUDR_MONITOREO` padre en vez del
+  código real de parcela — invisible en el Dashboard (que ya tenía un
+  guard defensivo) pero no en `lib/eudrDdsExporter.js`: producía "plots
+  fantasma" (6 en vez de 3 para las filas reales de `ORG-TEST-E2E`).
+  Fix: `LEFT JOIN LATERAL` contra `EUDR_MONITOREO` vía
+  `qfield_relation_id`, con desempate determinístico de 2 niveles
+  (`fecha_monitoreo DESC NULLS LAST, creado_en DESC`) ante un duplicado
+  real confirmado — mismo criterio aplicado también al trigger del paso
+  4 y (agregado el mismo día, confirmado explícitamente por el usuario)
+  al `LATERAL` que resuelve `productor` en `vw_monitoreo_web`. Verificado
+  contra la instancia real ya migrada: los "plots fantasma" bajaron de 6
+  a 3 tal como se predijo, y se confirmó en vivo un `UNIQUE` real en
+  `EUDR_MONITOREO` (`"ID_Organizacion", "ID_Parcela_Fija",
+  fecha_monitoreo`) no documentado en ninguna migración — ver
+  `docs/schema_live.md`. Ver [ADR-029](adr/ADR-029-fix-guid-qfield-id-parcela-fija.md)
+  (su "Estado" quedó desactualizado — dice "sin implementar" y
+  "`vw_monitoreo_web` no se toca", ambos ya no ciertos; pendiente de
+  amendar) y `specs/fix_id_parcela_fija_guid_qfield.md` — migración
+  `20260826140000_fix_id_parcela_fija_guid_qfield.sql`, commits
+  `0d07138` (implementación), `e772844` (doc del `UNIQUE`), `ef60c35`
+  (fix de un bug del propio test de verificación, no de la vista).
 
 ---
 
