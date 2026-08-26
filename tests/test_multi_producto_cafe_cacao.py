@@ -324,9 +324,15 @@ class TestMultiProductoCafeCacaoLive(unittest.TestCase):
         self.assertEqual({r["id_producto"] for r in rows}, {self.id_cafe, self.id_cacao})
 
     def _make_parcela_monitoreo(self, id_parcela_fija, id_organizacion, id_producto, qfield_relation_id):
-        """Crea la cadena real de 2 saltos completa: PADRON_PARCELAS (con
-        producto asignado) + EUDR_MONITOREO (con qfield_relation_id que
-        una fila de EUDR_USO_SUELO usará como id_parcela)."""
+        """Crea la cadena real de 2 saltos completa: ORGANIZACIONES (FK real
+        desde EUDR_MONITOREO/EUDR_USO_SUELO, ver
+        supabase/migrations/20260821_225310_fk_id_organizacion_eudr.sql) +
+        PADRON_PARCELAS (con producto asignado) + EUDR_MONITOREO (con
+        qfield_relation_id que una fila de EUDR_USO_SUELO usará como
+        id_parcela)."""
+        self.supabase.table("ORGANIZACIONES").insert(
+            {"ID": id_organizacion, "es_organizacion_prueba": True}
+        ).execute()
         self.supabase.table("PADRON_PARCELAS").insert(
             {
                 "ID_Parcela_Fija": id_parcela_fija,
@@ -366,6 +372,11 @@ class TestMultiProductoCafeCacaoLive(unittest.TestCase):
         self.assertEqual(row["id_producto_predominante"], self.id_cacao)
 
     def test_trigger_no_bloqueante_guid_inventado_no_falla_y_queda_null(self):
+        # FK real EUDR_USO_SUELO.ID_Organizacion -> ORGANIZACIONES("ID")
+        # (20260821_225310_fk_id_organizacion_eudr.sql) -- sin esta fila el
+        # INSERT de abajo falla con 23503 antes de que el trigger llegue a
+        # correr.
+        self.supabase.table("ORGANIZACIONES").insert({"ID": ORG_A, "es_organizacion_prueba": True}).execute()
         res = (
             self.supabase.table("EUDR_USO_SUELO")
             .insert(
@@ -388,6 +399,11 @@ class TestMultiProductoCafeCacaoLive(unittest.TestCase):
         backfill real, pero es un estado válido para una parcela nueva) --
         el trigger no debe fallar, y debe dejar NULL."""
         qfield_guid = "{22222222-2222-2222-2222-222222222222}"
+        # Mismo motivo que en test_trigger_no_bloqueante_guid_inventado_no_falla_y_queda_null
+        # arriba -- este test no pasa por _make_parcela_monitoreo (necesita
+        # una PADRON_PARCELAS SIN id_producto_predominante, distinto de lo
+        # que hace el helper), así que necesita su propia fila de ORGANIZACIONES.
+        self.supabase.table("ORGANIZACIONES").insert({"ID": ORG_A, "es_organizacion_prueba": True}).execute()
         self.supabase.table("PADRON_PARCELAS").insert(
             {"ID_Parcela_Fija": "TEST-PROD-PARCELA-SIN-PRODUCTO", "ID_Organizacion": ORG_A, "activo": True}
         ).execute()
