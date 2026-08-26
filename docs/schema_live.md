@@ -267,6 +267,30 @@ expondría DNI/nombre real a cualquiera con la anon key pública. En su lugar:
 - **Nuevo (2026-08-18):** índice GiST `idx_gist_eudr_monitoreo_geom` sobre
   `geom_inspeccion`; índice btree `idx_eudr_monitoreo_org` sobre
   `"ID_Organizacion"`.
+- **Nuevo (2026-08-23):** `qfield_relation_id` — GUID crudo que QField
+  genera para el registro padre de una subdivisión/instalación (ver
+  ADR-010); índice `idx_eudr_monitoreo_qfield_relation_id`
+  (`supabase/migrations/20260823_145038_qfield_relation_id_monitoreo.sql`).
+- **`UNIQUE("ID_Organizacion", "ID_Parcela_Fija", fecha_monitoreo)`
+  (constraint `eudr_monitoreo_org_parcela_fecha_key`) — NO aparece en
+  ninguna migración de este repo (la tabla se creó fuera de él);
+  confirmado empíricamente el 2026-08-26 disparando un `23505` real al
+  insertar 2 filas de prueba con la misma combinación. Implicación
+  operativa: **2 visitas de monitoreo de la misma parcela nunca pueden
+  compartir `fecha_monitoreo` exacta** — relevante para
+  `scripts/etl_drive_to_supabase.py` si algún reintento de ingesta llega a
+  reenviar el mismo evento de campo (fallaría con `23505` en vez de
+  duplicar la fila; el ETL ya usa `upsert` sobre la PK `id_monitoreo`, no
+  sobre esta combinación, así que no debería chocar en el flujo normal,
+  pero un INSERT manual — como los que hacen los tests Live — sí puede
+  pisarlo si no varía `fecha_monitoreo` entre filas de una misma parcela).
+  También implica que el desempate por `creado_en DESC` agregado al
+  `LEFT JOIN LATERAL` `mon` de `vw_monitoreo_web`
+  (`supabase/migrations/20260826140000_fix_id_parcela_fija_guid_qfield.sql`,
+  spec sección 5.1) es hoy inalcanzable en la práctica para ese `LATERAL`
+  específico (que matchea por `"ID_Parcela_Fija"`, no por
+  `qfield_relation_id`) — ver `AI_STATE.md` (entrada 2026-08-26b) para el
+  detalle completo.
 
 ### `public."EUDR_USO_SUELO"`
 - `fid` (feature id nativo del GeoPackage), `id` (PK real de la tabla),
