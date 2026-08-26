@@ -1,22 +1,24 @@
 # Spec — Normalización de certificaciones en `PADRON_SOCIOS`/`PADRON_PARCELAS`
 
-- **Estado:** **Contrato de datos cerrado (ronda 4, 2026-08-25) — última
-  ronda de especificación, lista para pasar a implementación.** Sin
-  migración SQL ni cambios de código todavía (eso es la tarea
-  siguiente). Ronda 2 agregó la evidencia real de
-  `certificaciones`/`cert_org_estatus`. Ronda 3 auditó el importador
-  masivo (sección 6) y corrigió la premisa de "Excel" a CSV. Ronda 4
-  formaliza el contrato final de las 5 tablas (sección 2, con 2 cambios
-  de diseño reales respecto de la ronda 1: `id_agencia_certificadora` se
-  movió a `ORGANIZACION_CERTIFICACIONES`, `PARCELA_CERTIFICACIONES`
-  perdió `estado`), cierra las columnas planas como respaldo sin `DROP`
-  (sección 3), cierra el diseño de columnas dinámicas del CSV (sección
-  6.1), y resuelve 3 de las 4 preguntas restantes (sección 5) — queda
-  abierta la del diagnóstico de `vw_monitoreo_eudr_aprobado` (que de
-  todos modos ya no bloquea esta migración en particular, ver sección
-  3) y una sub-pregunta real dentro de la #2 (qué certificaciones
-  cuentan como "Orgánica" para el campo `estado`, sección 3.4).
-- **Fecha:** 2026-08-25 (rondas 1 a 4, mismo día)
+- **Estado:** **Contrato de datos + RLS/GRANTs relevados (ronda 5,
+  2026-08-25) — lista para pasar a implementación.** Sin migración SQL
+  ni cambios de código todavía (eso es la tarea siguiente). Ronda 2
+  agregó la evidencia real de `certificaciones`/`cert_org_estatus`.
+  Ronda 3 auditó el importador masivo (sección 6) y corrigió la premisa
+  de "Excel" a CSV. Ronda 4 formalizó el contrato final de las 5 tablas
+  (sección 2). Ronda 5 releva el texto exacto de las 6 políticas RLS
+  activas hoy en `PADRON_SOCIOS`/`PADRON_PARCELAS` y su historial
+  completo de reemplazos (sección 7.1), confirma que no existe ningún
+  `GRANT` explícito versionado (7.2, con script de diagnóstico
+  preparado por si hace falta el texto exacto), cita el mapeo
+  `CERT_FLAG_FIELDS` completo por primera vez como tabla real (7.3 —
+  corrige una referencia rota a "sección 1.8" que nunca tuvo esa tabla),
+  y describe cómo se traduciría el patrón a las 5 tablas nuevas (7.4,
+  descriptivo, sin SQL). Quedan abiertas: el diagnóstico de
+  `vw_monitoreo_eudr_aprobado` (no bloquea esta migración, sección 3) y
+  la sub-pregunta de qué certificaciones cuentan como "Orgánica" para el
+  campo `estado` (sección 3.4).
+- **Fecha:** 2026-08-25 (rondas 1 a 5, mismo día)
 - **Contexto previo:** `specs/roadmap_padron_multiorganizacion.md`
   (sección 1, diseño original de alto nivel), `ADR-023`/`ADR-024`
   (protocolo "capturar exacto, no adivinar" reutilizado acá para las
@@ -405,7 +407,7 @@ limpieza, no como requisito de esta migración — ver
 1. `CERTIFICACIONES_CATALOGO`: **8 filas seed** (no 9 — `normas_internas_17`
    queda fuera del catálogo, sección 2) — una por cada entrada de
    `CERT_FLAG_FIELDS` (`lib/validations/socios.js:92-101`). `codigo`/`nombre`
-   según la tabla de la sección 1.8, `nombre` = el mismo texto que hoy
+   según la tabla de la sección 7.3, `nombre` = el mismo texto que hoy
    usan los labels de `CERT_FLAG_FIELDS` (`'NOP USDA'`, `'UE 2018/848'`, etc.).
 2. `AGENCIAS_CERTIFICADORAS`: sin seed — nace vacía, ninguna fuente de
    datos existente.
@@ -434,7 +436,7 @@ limpieza, no como requisito de esta migración — ver
    `CERT_FLAG_FIELDS`/`CERTIFICACIONES_CATALOGO` se llama literalmente
    `"Orgánica"` — los 8 nombres reales son `NOP USDA`, `UE 2018/848`,
    `COR Canadá`, `DS 044-2006-AG`, `LPO México`, `Rainforest Alliance`,
-   `Comercio Justo`, `Fair Trade USA` (sección 1.8). La evidencia de la
+   `Comercio Justo`, `Fair Trade USA` (sección 7.3). La evidencia de la
    ronda 2 (sección 1.2) mostró que `cert_org_estatus = "Organico"`
    correlaciona, sin excepción en las 7 filas reales, con "al menos uno
    de los 5 flags de tipo orgánico (`cert_nop_usda`/`ue_2018_848`/`cor_canada`/`cert_ds_0442006_ag`/`cert_lpo_mx`)
@@ -706,3 +708,208 @@ dashboard, botón "⬆ Cargar Padrón Masivo (CSV)".
   datos de la sección 2 no impone un formato de celda particular, queda
   para la tarea de implementación decidirlo contra el diseño real de
   `SOCIO_CERTIFICACIONES`/`socioSchema` nuevo.
+
+## 7. RLS y GRANTs a replicar en las tablas nuevas
+
+### Metodología y una limitación real, confirmada de nuevo empíricamente
+
+Mismo límite de siempre: sin conexión Postgres directa desde este
+entorno. Antes de asumirlo, se probó en vivo si `information_schema.role_table_grants`
+o `pg_policies` están expuestas por PostgREST (mismo mecanismo que
+serviría si lo estuvieran, sin necesitar SQL crudo):
+
+```
+GET /rest/v1/role_table_grants?select=*&table_name=eq.PADRON_SOCIOS  -> HTTP 404, PGRST205
+GET /rest/v1/pg_policies?select=*&tablename=eq.PADRON_SOCIOS         -> HTTP 404, PGRST205
+```
+
+Ninguna de las dos existe en el schema cache de PostgREST — como se
+esperaba (PostgREST solo sirve objetos del schema configurado,
+`public`, nunca `information_schema`/`pg_catalog`). El texto de las
+políticas RLS de abajo viene de leer completo el historial de
+migraciones de este repo (fuente primaria real — es el SQL que
+efectivamente se aplicó, no una re-serialización); el texto exacto de
+los `GRANT` **no se pudo obtener** por esta vía — ver el apartado
+correspondiente más abajo.
+
+### 7.1 Políticas RLS activas hoy — texto exacto, con el historial completo de qué reemplazó a qué
+
+Confirmado con `grep` exhaustivo sobre las 21 migraciones que tocan
+`PADRON_SOCIOS`/`PADRON_PARCELAS` (no solo las 3 ya citadas en secciones
+anteriores) — **ninguna migración posterior a `20260818_fix_inspecciones_rls.sql`
+vuelve a tocar sus políticas**, así que ese es el estado final vigente.
+Historial completo, por si hace falta entender el porqué de un nombre:
+
+| Migración | Qué hizo |
+|---|---|
+| `20260815_fase1_security_storage.sql` | Crea `ryzos_all_padron_socios`/`ryzos_all_padron_parcelas` (primera versión) |
+| `20260815_fix_rls_policies.sql` | `DROP` + recrea las mismas 2 (mismo nombre, fix de la expresión) |
+| `20260816_fase3_seguridad_rls.sql` | `DROP` de `ryzos_all_padron_socios`/`ryzos_all_padron_parcelas` — reemplazadas por `rls_select_padron_socios`/`rls_write_padron_socios`/`rls_select_padron_parcelas`/`rls_write_padron_parcelas` |
+| `20260818_fix_inspecciones_rls.sql` | Agrega (sin tocar las 4 anteriores) `rls_anon_select_padron_socios`/`rls_anon_select_padron_parcelas` |
+
+**Las 6 políticas activas hoy, texto exacto** (`ALTER TABLE ...
+ENABLE ROW LEVEL SECURITY` ya está activo en ambas tablas desde la
+primera migración, confirmado idempotente en las 3 posteriores):
+
+```sql
+-- supabase/migrations/20260816_fase3_seguridad_rls.sql
+CREATE POLICY "rls_select_padron_socios" ON public."PADRON_SOCIOS"
+FOR SELECT TO authenticated
+USING (
+  "ID_Organizacion" = public.auth_org_id()
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+);
+
+CREATE POLICY "rls_write_padron_socios" ON public."PADRON_SOCIOS"
+FOR ALL TO authenticated
+USING (
+  "ID_Organizacion" = public.auth_org_id()
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+)
+WITH CHECK (
+  "ID_Organizacion" = public.auth_org_id()
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+);
+
+CREATE POLICY "rls_select_padron_parcelas" ON public."PADRON_PARCELAS"
+FOR SELECT TO authenticated
+USING (
+  "ID_Organizacion" = public.auth_org_id()
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+);
+
+CREATE POLICY "rls_write_padron_parcelas" ON public."PADRON_PARCELAS"
+FOR ALL TO authenticated
+USING (
+  "ID_Organizacion" = public.auth_org_id()
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+)
+WITH CHECK (
+  "ID_Organizacion" = public.auth_org_id()
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+);
+
+-- supabase/migrations/20260818_fix_inspecciones_rls.sql
+CREATE POLICY "rls_anon_select_padron_socios" ON public."PADRON_SOCIOS"
+FOR SELECT TO anon
+USING ("ID_Organizacion" IS NOT NULL);
+
+CREATE POLICY "rls_anon_select_padron_parcelas" ON public."PADRON_PARCELAS"
+FOR SELECT TO anon
+USING ("ID_Organizacion" IS NOT NULL);
+```
+
+**Resumen del patrón real** (el que la app usa hoy para leer/escribir
+con solo la `anon` key, sin sesión — `CLAUDE.md`, "RLS gotcha"):
+
+- `authenticated` tiene `SELECT`/`ALL` reales, scopeados por
+  `auth_org_id()` (claim JWT) — **código muerto para el tráfico real**
+  (la app nunca autentica, confirmado ya en `ADR-025`).
+- `anon` tiene **solo `SELECT`**, scopeado únicamente por
+  `"ID_Organizacion" IS NOT NULL` (no hay JWT que comparar) — esta es la
+  política que **sí** gatea el tráfico real de lectura.
+- **No existe ninguna política de escritura para `anon`** en ninguna de
+  las dos tablas — coherente con `CLAUDE.md`/`specs/padron_web_socios.md`:
+  las escrituras van exclusivamente por Server Actions con Service Role
+  Key (`lib/actions/sociosActions.js`), que bypasea RLS por completo
+  (`auth.role() = 'service_role'` en las policies de `authenticated`
+  arriba es además redundante con el propio comportamiento de Supabase,
+  que ya da `bypassrls` al rol `service_role` a nivel de Postgres —
+  cinturón y tirantes, no el único mecanismo).
+
+### 7.2 GRANTs — sin GRANT explícito versionado, script de diagnóstico preparado
+
+**Grep exhaustivo sobre las 21 migraciones que mencionan
+`PADRON_SOCIOS`/`PADRON_PARCELAS`: cero resultados de `GRANT`** para
+ninguna de las dos tablas — a diferencia de las vistas (`vw_monitoreo_web`,
+`view_eudr_dashboard_aprobados`, etc.), que sí tienen `GRANT SELECT ...
+TO authenticated;` explícito en cada redefinición, **ninguna migración de
+este repo le otorga privilegios explícitos a `anon`/`authenticated`/
+`service_role`** sobre las tablas base del padrón.
+
+Esto es coherente con un hallazgo ya confirmado en `ADR-024`: Supabase
+otorga privilegios por defecto a nivel de esquema a `anon`/`authenticated`/
+`service_role` cuando se provisiona un proyecto — privilegios que este
+repo nunca declara ni necesita declarar explícitamente para que `anon`
+pueda, por ejemplo, leer `PADRON_SOCIOS` (sujeto igual a las políticas
+RLS de la sección 7.1, que sí son las que realmente acotan qué filas se
+ven). **No se puede confirmar el texto exacto de esos GRANTs por defecto
+desde este entorno** — no hay conexión Postgres directa, y
+`information_schema.role_table_grants` no está expuesta por PostgREST
+(sección 7, arriba).
+
+**Script de solo lectura preparado, mismo protocolo que destrabó
+`vw_parcelas_web` en `ADR-024`** — si hace falta el texto exacto antes de
+escribir la migración de las tablas nuevas, correr en Supabase Studio SQL
+Editor y devolver el resultado:
+
+```sql
+SELECT table_name, grantee, privilege_type, is_grantable
+FROM information_schema.role_table_grants
+WHERE table_schema = 'public'
+  AND table_name IN ('PADRON_SOCIOS', 'PADRON_PARCELAS')
+  AND grantee IN ('anon', 'authenticated', 'service_role')
+ORDER BY table_name, grantee, privilege_type;
+```
+
+### 7.3 Mapeo `CERT_FLAG_FIELDS` → certificación — citado tal cual del código, no transcrito de memoria
+
+**Corrección de referencia:** el texto de la sección 1.8 (auditoría de
+uso de `CERT_FLAG_FIELDS` en código) y el comentario de la sección 2
+apuntaban a "la tabla de la sección 1.8" para este mapeo — **esa tabla
+nunca existió como tal en ninguna sección anterior**, solo se citaban 2-3
+ejemplos sueltos. Corregido acá con la cita completa, literal, de
+`lib/validations/socios.js:92-101` (re-leído fresco para esta tarea, sin
+cambios desde la última vez que se citó en esta spec):
+
+| `field` (columna real en `PADRON_SOCIOS`, hoy) | `label` (texto exacto — usar como `CERTIFICACIONES_CATALOGO.nombre`) |
+|---|---|
+| `cert_nop_usda` | `NOP USDA` |
+| `ue_2018_848` | `UE 2018/848` |
+| `cor_canada` | `COR Canadá` |
+| `cert_ds_0442006_ag` | `DS 044-2006-AG` |
+| `cert_lpo_mx` | `LPO México` |
+| `cert_rainforest` | `Rainforest Alliance` |
+| `cert_comercio_justo` | `Comercio Justo` |
+| `cert_fair_trade_usa` | `Fair Trade USA` |
+
+`codigo` (`CERTIFICACIONES_CATALOGO.codigo`, sección 2) no tiene una
+fuente literal en el código existente — es un identificador nuevo que
+esta normalización introduce, no algo que copiar de `CERT_FLAG_FIELDS`.
+Sugerencia consistente con el resto del catálogo (`snake_case`
+mayúsculas, mismo estilo que otras constantes técnicas del repo, no
+cerrado como decisión — a confirmar en la tarea de implementación):
+`NOP_USDA`, `UE_2018_848`, `COR_CANADA`, `DS_0442006_AG`, `LPO_MX`,
+`RAINFOREST`, `COMERCIO_JUSTO`, `FAIR_TRADE_USA`.
+
+### 7.4 Cómo se traduciría este patrón a las 5 tablas nuevas — descriptivo, no la migración en sí
+
+Sin escribir SQL (fuera de alcance de esta tarea), el patrón real de la
+sección 7.1 sugiere una división natural entre las 5 tablas nuevas:
+
+- **`CERTIFICACIONES_CATALOGO`** — catálogo puro, sin dato de
+  organización/socio/parcela. Candidato natural a `SELECT` abierto para
+  `anon`/`authenticated` (necesario para que el formulario/CSV puedan
+  listar las certificaciones activas sin pasar por Server Action), sin
+  el condicionamiento por `ID_Organizacion` que sí aplica al resto — sea
+  cual sea la política final, no tiene un equivalente directo en el
+  patrón de `PADRON_SOCIOS`/`PADRON_PARCELAS`.
+- **`AGENCIAS_CERTIFICADORAS`** — mismo caso que el catálogo: sin
+  organización propia, candidato a lectura abierta.
+- **`ORGANIZACION_CERTIFICACIONES`/`SOCIO_CERTIFICACIONES`/`PARCELA_CERTIFICACIONES`**
+  — estas sí tienen `id_organizacion` (sección 2) y son el equivalente
+  directo de `PADRON_SOCIOS`/`PADRON_PARCELAS` para efectos de RLS: el
+  patrón a replicar es exactamente el de la sección 7.1 — `SELECT` para
+  `anon` scopeado por `"id_organizacion" IS NOT NULL` (o, si se prefiere
+  cerrar el hueco que esa condición deja abierto — cualquier fila con
+  organización no nula es visible para cualquier `anon`, sin importar
+  cuál — usar una condición más estricta, decisión a tomar en la tarea
+  de implementación, no heredada ciegamente del patrón viejo solo por
+  precedente), sin política de escritura para `anon` (las escrituras
+  siguen por Server Action con Service Role Key, igual que hoy).
