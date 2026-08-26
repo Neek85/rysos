@@ -1,12 +1,15 @@
 # Spec — Normalización de certificaciones en `PADRON_SOCIOS`/`PADRON_PARCELAS`
 
-- **Estado:** Auditoría en 2 rondas — spec y diseño propuesto, **sin
+- **Estado:** Auditoría en 3 rondas — spec y diseño propuesto, **sin
   migración SQL ni cambios de código todavía**. Ronda 2 (2026-08-25)
   agregó la evidencia real de `certificaciones`/`cert_org_estatus` y
   resolvió 2 de las 6 preguntas abiertas (`NORMAS` y el naming vs
-  `CAT_NORMAS` — ambas quedan fuera de alcance, ver sección 5). Las
-  demás preguntas siguen abiertas.
-- **Fecha:** 2026-08-25 (ronda 1), actualizado 2026-08-25 (ronda 2)
+  `CAT_NORMAS` — ambas quedan fuera de alcance, ver sección 5). Ronda 3
+  (2026-08-25) audita el importador masivo (sección 6) — corrige la
+  premisa de "Excel" a CSV, y confirma que `certificaciones` no lo toca
+  pero los 8 flags + `cert_org_estatus` sí, en detalle. Las 4 preguntas
+  restantes de la sección 5 siguen abiertas.
+- **Fecha:** 2026-08-25 (rondas 1, 2 y 3, mismo día)
 - **Contexto previo:** `specs/roadmap_padron_multiorganizacion.md`
   (sección 1, diseño original de alto nivel), `ADR-023`/`ADR-024`
   (protocolo "capturar exacto, no adivinar" reutilizado acá para las
@@ -406,3 +409,146 @@ PARCELA_CERTIFICACIONES
    (`pg_get_viewdef`/`GRANT`s exactos vía Supabase Studio SQL Editor), no
    solo leer un archivo de migración como alcanza para
    `view_eudr_dashboard_aprobados`.
+
+## 6. Carga masiva por Excel — impacto en la normalización
+
+### Corrección de premisa: es CSV, no Excel
+
+El prompt de esta tarea pide auditar "la carga masiva por Excel". **No
+existe ningún flujo de importación `.xlsx`/Excel real en este repo** —
+confirmado con evidencia negativa explícita, no solo "no until now": sin
+`SheetJS`/`ExcelJS`/`xlsx` en `package.json` (grep, cero resultados), y
+el único componente de importación masiva
+(`components/features/socios/ImportPadronModal.jsx:154-156`) tiene
+`<input type="file" accept=".csv" .../>` — el selector de archivos del
+navegador literalmente no ofrece `.xlsx` como opción. Las únicas
+menciones de "Excel" en todo el código (`lib/padronCsv.js:219`,
+`lib/padronCsv.js:533`) son sobre **compatibilidad de lectura**: el
+parser CSV casero soporta el mismo formato que Excel produce/abre, y se
+antepone un BOM UTF-8 al exportar para que Excel muestre tildes/ñ
+correctamente al abrir el `.csv`. El flujo real es **CSV**, con un
+parser propio sin librería externa. El resto de esta sección audita el
+flujo real (CSV) — la sustancia de lo pedido (entender el importador
+antes de tocar certificaciones) sigue aplicando igual.
+
+### Archivos del flujo
+
+- **`lib/padronCsv.js`** — toda la lógica pura: construcción de CSV
+  (`arrayToCsv`/`buildSociosCsv`), plantilla (`buildSocioTemplateCsv`),
+  parser (`parseCsv`), normalización de encabezados
+  (`normalizeRowKeys`/`SOCIO_REVERSE_LABELS`), y validación de vista
+  previa (`validateSocioRows`/`applySocioDbChecks`) — sin escribir nada,
+  ver más abajo.
+- **`components/features/socios/ImportPadronModal.jsx`** — el modal
+  `'use client'`: lee el archivo, llama a `validateSocioRows`, muestra la
+  tabla de válidas/inválidas, y en `handleConfirmImport` (línea 79-109)
+  ejecuta la escritura real fila por fila.
+- **`app/dashboard/socios/page.jsx`** — renderiza el modal (botón "⬆
+  Cargar Padrón Masivo (CSV)", línea 180; `<ImportPadronModal
+  organizationId={organizationId} .../>`, línea 397-406) — el mismo
+  `organizationId` derivado por `resolveActiveOrganizationId(rows)` que
+  ya se corrigió en el hotfix de `fetchSocios` (commit `9779717`): desde
+  ese fix, `rows` viene siempre de una sola organización real, así que
+  este valor ya no es una heurística sobre datos mezclados.
+
+### Formato de columnas esperado — confirma exactamente lo que la migración de certificaciones necesita saber
+
+`SOCIO_TEMPLATE_COLUMNS`/`SOCIO_EXPORT_COLUMNS` (`lib/padronCsv.js:10-26,108`)
+incluyen `cert_org_estatus` + **las 8 columnas de `CERT_FLAG_FIELDS`
+como columnas separadas, una por certificación** — exactamente la forma
+que el prompt sospechaba. Ejemplo real de la plantilla
+(`SOCIO_TEMPLATE_EXAMPLE`, líneas 111-133):
+
+```js
+cert_org_estatus: 'Organico',
+cert_nop_usda: 'Sí',
+ue_2018_848: 'No',
+cor_canada: 'No',
+cert_ds_0442006_ag: 'No',
+cert_lpo_mx: 'No',
+cert_rainforest: 'No',
+cert_comercio_justo: 'No',
+cert_fair_trade_usa: 'No',
+```
+
+**Hallazgo no solicitado, relevante:** `certificaciones` (el campo de
+texto libre, sección 1.2) **no forma parte del flujo CSV en absoluto** —
+no está en `SOCIO_EXPORT_COLUMNS`, no se exporta, no se importa, no tiene
+columna en la plantilla. Es exclusivo del formulario manual
+(`SocioFormModal.jsx`). Esto simplifica una parte del diseño: lo que se
+decida sobre `certificaciones` (pregunta abierta #3) no tiene ningún
+impacto en el importador CSV, sea cual sea la decisión.
+
+### Validación — mismo Zod que el formulario manual, no una ruta paralela más laxa
+
+`validateSocioRows` (`lib/padronCsv.js:482-503`) corre `socioSchema.safeParse(row)`
+— **el mismo schema Zod que usa el alta manual** (`SocioFormModal.jsx`),
+no una validación distinta o más permisiva para la carga masiva. Esto
+significa que las 8 columnas de certificación en el CSV están sujetas
+hoy al mismo `siNo = z.enum(['Sí', 'No']).optional().nullable().or(z.literal(''))`
+(sección 1.1) — un CSV con `"Yes"`/`"true"`/`"1"` en esas columnas
+falla la validación de la misma forma que fallaría el formulario.
+Después de Zod corren 2 capas más, todas de solo lectura (vista previa,
+sin escribir): duplicados internos del archivo
+(`applyDuplicateChecks`) y duplicados contra la base real, ya scopeados
+por organización (`applySocioDbChecks`, línea 358-405).
+
+### Escritura real — fila por fila, vía la misma Server Action que el alta manual, nunca un bulk insert
+
+Confirmado en `ImportPadronModal.jsx:79-109` (`handleConfirmImport`):
+recorre `validRows` con un `for` y llama `await createSocio(row.data, organizationId)`
+**una vez por fila** — la misma función exportada de
+`lib/actions/sociosActions.js` que usa el formulario individual "+ Nuevo
+Socio". No hay ningún `.insert([...])` en lote ni ningún `.upsert()`
+(coherente con lo ya confirmado en `specs/multi_organizacion_codigos_unicos.md`:
+cero `.upsert()` en todo el repo). Cada llamada a `createSocio` vuelve a
+correr sus propias validaciones internas (`assertDniNotDuplicated`,
+`assertCodigoFincaNotDuplicated`) como defensa en profundidad —
+redundante con la vista previa, pero real — y hace el `INSERT` real con
+`socioPayload(parsed)`, que hoy escribe los 8 flags + `cert_org_estatus`
+como columnas planas directas.
+
+### Sin plantilla de Excel/CSV documentada como archivo estático
+
+No existe ningún archivo de ejemplo (`.csv`/`.xlsx`) versionado en
+`specs/`/`docs/` ni en ningún otro lugar del repo — la "plantilla" que
+las organizaciones usan es **generada dinámicamente** por
+`downloadSocioTemplate`/`buildSocioTemplateCsv` en el momento de hacer
+clic en "⬇ Descargar Plantilla de Socios (.csv)" dentro del propio modal,
+con un `ID_Socio` de ejemplo libre calculado contra la organización
+activa (no hay un `Plantilla_Socios.csv` fijo commiteado que revisar).
+
+### Quién ejecuta la carga hoy
+
+Cualquier usuario con acceso a `/dashboard/socios` — **sin ningún gate
+de rol visible en el código**, coherente con el resto de la aplicación
+(`CLAUDE.md`: sin sesión de Supabase Auth, solo `anon` key). No es un
+script manual ni un proceso aparte — es un flujo 100% desde la UI del
+dashboard, botón "⬆ Cargar Padrón Masivo (CSV)".
+
+### Impacto directo en la normalización de certificaciones — qué rompe si se retiran las columnas tal cual
+
+1. **La plantilla/export/import CSV pierde 8+1 columnas planas** (los 8
+   flags + `cert_org_estatus`, sección 1.2/1.1) — necesitan una
+   representación nueva en un archivo CSV plano. Ninguna decisión tomada
+   en esta spec todavía sobre cuál (¿una columna con códigos separados
+   por coma? ¿mantener columnas individuales pero contra
+   `CERTIFICACIONES_CATALOGO.codigo` en vez de nombres fijos, para que
+   sea extensible? — no resuelto, nueva pregunta para la
+   implementación).
+2. **`socioPayload(parsed)` (`lib/actions/sociosActions.js`) ya no puede
+   escribir esas columnas directas** — `createSocio`, llamada tanto por
+   el alta manual como por `handleConfirmImport` acá, necesita además
+   crear las filas correspondientes de `SOCIO_CERTIFICACIONES` por cada
+   certificación seleccionada, en la misma transacción lógica (hoy es un
+   solo `INSERT`; pasa a ser 1 + N `INSERT`s). Como `createSocio` es
+   **compartida** entre el formulario individual y el importador, este
+   cambio beneficia a ambos flujos a la vez sin duplicar lógica — pero
+   también significa que cualquier bug en esa función ahora afecta las 2
+   superficies simultáneamente.
+3. **`certificaciones` no afecta al importador** (confirmado arriba) —
+   la decisión pendiente sobre ese campo (pregunta abierta #3) es
+   irrelevante para este flujo.
+4. **La validación Zod compartida es una ventaja, no solo un riesgo** —
+   al ser el mismo `socioSchema` para ambas superficies, el nuevo
+   contrato de certificaciones (sea cual sea) solo se define una vez.
