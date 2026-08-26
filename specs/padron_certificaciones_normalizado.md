@@ -1,15 +1,22 @@
 # Spec — Normalización de certificaciones en `PADRON_SOCIOS`/`PADRON_PARCELAS`
 
-- **Estado:** Auditoría en 3 rondas — spec y diseño propuesto, **sin
-  migración SQL ni cambios de código todavía**. Ronda 2 (2026-08-25)
-  agregó la evidencia real de `certificaciones`/`cert_org_estatus` y
-  resolvió 2 de las 6 preguntas abiertas (`NORMAS` y el naming vs
-  `CAT_NORMAS` — ambas quedan fuera de alcance, ver sección 5). Ronda 3
-  (2026-08-25) audita el importador masivo (sección 6) — corrige la
-  premisa de "Excel" a CSV, y confirma que `certificaciones` no lo toca
-  pero los 8 flags + `cert_org_estatus` sí, en detalle. Las 4 preguntas
-  restantes de la sección 5 siguen abiertas.
-- **Fecha:** 2026-08-25 (rondas 1, 2 y 3, mismo día)
+- **Estado:** **Contrato de datos cerrado (ronda 4, 2026-08-25) — última
+  ronda de especificación, lista para pasar a implementación.** Sin
+  migración SQL ni cambios de código todavía (eso es la tarea
+  siguiente). Ronda 2 agregó la evidencia real de
+  `certificaciones`/`cert_org_estatus`. Ronda 3 auditó el importador
+  masivo (sección 6) y corrigió la premisa de "Excel" a CSV. Ronda 4
+  formaliza el contrato final de las 5 tablas (sección 2, con 2 cambios
+  de diseño reales respecto de la ronda 1: `id_agencia_certificadora` se
+  movió a `ORGANIZACION_CERTIFICACIONES`, `PARCELA_CERTIFICACIONES`
+  perdió `estado`), cierra las columnas planas como respaldo sin `DROP`
+  (sección 3), cierra el diseño de columnas dinámicas del CSV (sección
+  6.1), y resuelve 3 de las 4 preguntas restantes (sección 5) — queda
+  abierta la del diagnóstico de `vw_monitoreo_eudr_aprobado` (que de
+  todos modos ya no bloquea esta migración en particular, ver sección
+  3) y una sub-pregunta real dentro de la #2 (qué certificaciones
+  cuentan como "Orgánica" para el campo `estado`, sección 3.4).
+- **Fecha:** 2026-08-25 (rondas 1 a 4, mismo día)
 - **Contexto previo:** `specs/roadmap_padron_multiorganizacion.md`
   (sección 1, diseño original de alto nivel), `ADR-023`/`ADR-024`
   (protocolo "capturar exacto, no adivinar" reutilizado acá para las
@@ -265,7 +272,100 @@ de código futura toca 5 archivos con código real
 (`test_socios_schema.mjs`) — `gisTargetTables.js` no necesita ningún
 cambio.
 
-## 2. Diseño propuesto — las 5 tablas nuevas
+## 2. Contrato de datos final — las 5 tablas nuevas
+
+**Ronda 4 (2026-08-25): contrato cerrado**, dado literalmente por Neyser
+en el prompt de esta tarea — reemplaza el diseño preliminar de la ronda
+1. Dos cambios reales respecto de esa primera versión, no solo
+formato:
+
+1. **`id_agencia_certificadora` se movió de `SOCIO_CERTIFICACIONES` a
+   `ORGANIZACION_CERTIFICACIONES`** — la agencia certificadora se
+   registra a nivel de organización (una organización contrata una
+   agencia para un programa), no a nivel de socio individual. Esto
+   también **resuelve por diseño** la pregunta abierta #4 de la ronda 1
+   ("`id_agencia_certificadora` sin fuente de datos para el backfill")
+   — ya no es una columna de `SOCIO_CERTIFICACIONES` que necesite
+   backfill: `ORGANIZACION_CERTIFICACIONES` nace vacía completa (sin
+   backfill de ningún campo), a completar manualmente por las
+   organizaciones — ver sección 3.
+2. **`PARCELA_CERTIFICACIONES` ya no tiene columna `estado`** — pasa de
+   "estado granular" (`Certificado`/`En Transición`/`No Certificado`,
+   diseño de la ronda 1) a **presencia pura**: que exista la fila
+   `(id_parcela, id_certificacion)` significa que esa parcela tiene esa
+   certificación, sin matiz de grado. `SOCIO_CERTIFICACIONES` sí
+   conserva un campo `estado`, pero ahora `text NULL` sin `CHECK` (antes
+   era exclusivo de parcela con `CHECK` fijo) — ver el uso concreto que
+   se le da en la sección 3.
+3. **`CERTIFICACIONES_CATALOGO` pierde `es_certificacion_externa`** —
+   ya no hace falta distinguir programas externos de internos en el
+   catálogo, porque el seed de esta ronda es de **8 filas, no 9**:
+   `normas_internas_17` queda fuera del catálogo por completo (coherente
+   con que nunca estuvo en `CERT_FLAG_FIELDS`, sección 1.3, y sigue sin
+   estar en el alcance de esta normalización).
+
+### Tipo de `id_organizacion` — confirmado en vivo, no asumido
+
+`ORGANIZACIONES."ID"` (nombre de columna real, con mayúsculas — no
+`id` en minúscula) es `text`, `PRIMARY KEY` — confirmado por
+introspección OpenAPI de PostgREST (Service Role Key, 2026-08-25):
+`{'description': 'Note:\nThis is a Primary Key.<pk/>', 'format': 'text', 'type': 'string'}`.
+Todas las columnas `id_organizacion` de las tablas nuevas son `text`,
+consistentes con este tipo real.
+
+```sql
+-- Catálogo de programas de certificación (8, mapeados 1:1 desde CERT_FLAG_FIELDS)
+CERTIFICACIONES_CATALOGO
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  codigo      text NOT NULL UNIQUE        -- ej. 'NOP_USDA', 'RAINFOREST'
+  nombre      text NOT NULL               -- ej. 'NOP USDA' (label actual de CERT_FLAG_FIELDS -- ver sección 6.1, es el mismo texto que usa el header del CSV)
+  activo      boolean NOT NULL DEFAULT true
+  creado_en   timestamptz NOT NULL DEFAULT now()
+
+-- Catálogo de agencias certificadoras (nuevo -- no existe hoy ninguna fuente de esto)
+AGENCIAS_CERTIFICADORAS
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  nombre      text NOT NULL
+  activo      boolean NOT NULL DEFAULT true
+  creado_en   timestamptz NOT NULL DEFAULT now()
+
+-- Una organización tiene el programa habilitado, con la agencia y las fechas reales
+ORGANIZACION_CERTIFICACIONES
+  id                        uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  id_organizacion           text NOT NULL REFERENCES "ORGANIZACIONES"("ID")
+  id_certificacion          uuid NOT NULL REFERENCES "CERTIFICACIONES_CATALOGO"(id)
+  id_agencia_certificadora  uuid REFERENCES "AGENCIAS_CERTIFICADORAS"(id)  -- nullable
+  fecha_obtencion           date
+  fecha_vencimiento         date
+  activo                    boolean NOT NULL DEFAULT true
+  creado_en                 timestamptz NOT NULL DEFAULT now()
+  actualizado_en            timestamptz NOT NULL DEFAULT now()
+  UNIQUE (id_organizacion, id_certificacion)
+  -- Nace vacía -- sin fuente de datos para backfill, ver sección 3.
+
+-- Un socio tiene la certificación -- id_organizacion denormalizado (NOT NULL, sin FK propia:
+-- se confía en que siempre coincide con PADRON_SOCIOS.ID_Organizacion vía id_socio, mismo
+-- patrón de columnas denormalizadas ya usado en PADRON_PARCELAS.socio_dni/socio_nombre_completo)
+SOCIO_CERTIFICACIONES
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  id_socio          uuid NOT NULL REFERENCES "PADRON_SOCIOS"(id)
+  id_organizacion   text NOT NULL
+  id_certificacion  uuid NOT NULL REFERENCES "CERTIFICACIONES_CATALOGO"(id)
+  estado            text          -- nullable, sin CHECK -- ver sección 3 para el único uso real hoy (cert_org_estatus)
+  creado_en         timestamptz NOT NULL DEFAULT now()
+  actualizado_en    timestamptz NOT NULL DEFAULT now()
+  UNIQUE (id_socio, id_certificacion)
+
+-- Presencia pura: la fila existe = la parcela tiene esa certificación. Nace vacía (ver 1.4).
+PARCELA_CERTIFICACIONES
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
+  id_parcela        uuid NOT NULL REFERENCES "PADRON_PARCELAS"(id)
+  id_organizacion   text NOT NULL
+  id_certificacion  uuid NOT NULL REFERENCES "CERTIFICACIONES_CATALOGO"(id)
+  creado_en         timestamptz NOT NULL DEFAULT now()
+  actualizado_en    timestamptz NOT NULL DEFAULT now()
+  UNIQUE (id_parcela, id_certificacion)
+```
 
 Habilitado por `ADR-026` (PK surrogate `id` UUID en `PADRON_SOCIOS`/
 `PADRON_PARCELAS`, ya aplicada): las FKs de `SOCIO_CERTIFICACIONES`/
@@ -273,96 +373,100 @@ Habilitado por `ADR-026` (PK surrogate `id` UUID en `PADRON_SOCIOS`/
 código legible — algo que antes de esa migración no era seguro (ver
 `specs/multi_organizacion_codigos_unicos.md`: "sin FK real apuntando a
 estas PK", exactamente por el riesgo de que el código dejara de ser
-único). Este diseño es una consecuencia directa y positiva de esa
-migración anterior, no una coincidencia.
-
-```sql
--- Catálogo de programas de certificación (8 externos + normas_internas_17 interno)
-CERTIFICACIONES_CATALOGO
-  id                      uuid PRIMARY KEY DEFAULT gen_random_uuid()
-  codigo                  text NOT NULL UNIQUE        -- ej. 'NOP_USDA', 'RAINFOREST'
-  nombre                  text NOT NULL               -- ej. 'NOP USDA' (label actual de CERT_FLAG_FIELDS)
-  es_certificacion_externa boolean NOT NULL DEFAULT true  -- false para normas_internas_17
-  activo                  boolean NOT NULL DEFAULT true
-  creado_en               timestamptz NOT NULL DEFAULT now()
-
--- Catálogo de agencias certificadoras (nuevo -- no existe hoy ninguna fuente de esto)
-AGENCIAS_CERTIFICADORAS
-  id           uuid PRIMARY KEY DEFAULT gen_random_uuid()
-  nombre       text NOT NULL
-  activo       boolean NOT NULL DEFAULT true
-  creado_en    timestamptz NOT NULL DEFAULT now()
-
--- Una organización tiene el programa habilitado, con una fecha de obtención
-ORGANIZACION_CERTIFICACIONES
-  id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
-  id_organizacion   text NOT NULL             -- FK NO agregada (mismo criterio que ADR-007: sin FK real hoy hacia ORGANIZACIONES desde ninguna tabla de este bloque)
-  id_certificacion  uuid NOT NULL REFERENCES "CERTIFICACIONES_CATALOGO"(id)
-  fecha_obtencion   date
-  UNIQUE (id_organizacion, id_certificacion)
-
--- Un socio tiene la certificación, con la agencia real que lo certificó
-SOCIO_CERTIFICACIONES
-  id                        uuid PRIMARY KEY DEFAULT gen_random_uuid()
-  id_socio                  uuid NOT NULL REFERENCES "PADRON_SOCIOS"(id)
-  id_certificacion          uuid NOT NULL REFERENCES "CERTIFICACIONES_CATALOGO"(id)
-  id_agencia_certificadora  uuid REFERENCES "AGENCIAS_CERTIFICADORAS"(id)  -- nullable: normas_internas_17 no tiene agencia
-  creado_en                 timestamptz NOT NULL DEFAULT now()
-  actualizado_en            timestamptz NOT NULL DEFAULT now()
-  UNIQUE (id_socio, id_certificacion)   -- garantiza estructuralmente una sola agencia por socio+programa
-
--- Estado granular por parcela -- nace vacía, sin dato origen (ver 1.4)
-PARCELA_CERTIFICACIONES
-  id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
-  id_parcela        uuid NOT NULL REFERENCES "PADRON_PARCELAS"(id)
-  id_certificacion  uuid NOT NULL REFERENCES "CERTIFICACIONES_CATALOGO"(id)
-  estado            text NOT NULL DEFAULT 'No Certificado' CHECK (estado IN ('Certificado', 'En Transición', 'No Certificado'))
-  UNIQUE (id_parcela, id_certificacion)
-```
+único). A diferencia de esa auditoría (que evitó deliberadamente agregar
+FK hacia `ORGANIZACIONES` por el mismo criterio de `ADR-007`), esta
+ronda **sí** agrega `REFERENCES "ORGANIZACIONES"("ID")` en
+`ORGANIZACION_CERTIFICACIONES.id_organizacion` — instrucción explícita
+de Neyser en el contrato de esta tarea, no una decisión tomada
+unilateralmente acá.
 
 ## 3. Plan de migración de datos desde las columnas planas actuales
 
 **Solo para la tarea de implementación futura — no se ejecuta acá.**
 
-1. `CERTIFICACIONES_CATALOGO`: 9 filas seed — las 8 de
-   `CERT_FLAG_FIELDS` (`es_certificacion_externa = true`) + `normas_internas_17`
-   (`es_certificacion_externa = false`). `codigo`/`nombre` según la tabla
-   de la sección 1.8.
-2. `SOCIO_CERTIFICACIONES`: por cada fila de `PADRON_SOCIOS` × cada una de
-   las 8 columnas de `CERT_FLAG_FIELDS` con valor `'Sí'`, un `INSERT`.
-   `id_agencia_certificadora` queda `NULL` — **no hay ninguna fuente de
-   datos existente que indique qué agencia certificó a cada socio** (dato
-   nuevo que el diseño introduce, no uno que se pueda derivar del backfill,
-   ver "Preguntas abiertas").
-3. `normas_internas_17 = 'Sí'` migra igual, como una fila más de
-   `SOCIO_CERTIFICACIONES` contra el registro `es_certificacion_externa = false`.
-4. `PARCELA_CERTIFICACIONES`: sin backfill — nace vacía (sección 1.4).
-5. `ORGANIZACION_CERTIFICACIONES`: sin fuente de datos clara — `cert_org_estatus`
-   es un campo de socio, no de organización, y no mapea 1:1 a un programa
-   específico (ver "Preguntas abiertas"). Probablemente arranca vacía
-   también, a completar manualmente.
-6. `certificaciones`/`cert_org_estatus`: **no tienen un mapeo 1:1 claro**
-   a las tablas nuevas — ver "Preguntas abiertas", sección siguiente.
-7. Retiro de columnas (`DROP COLUMN`, después de confirmar el backfill):
-   los 8 flags + `certificaciones` + `cert_org_estatus` de `PADRON_SOCIOS`
-   — **`normas_internas_17` NO está en esta lista** (el prompt de esta
-   tarea solo pidió retirar las 8 + esas 2, no esa columna aparte).
-8. Vistas a recrear: `view_eudr_dashboard_aprobados` con
-   `CREATE OR REPLACE VIEW` (definición vigente ya conocida, en
-   `supabase/migrations/20260825201351_pk_surrogate_multiorganizacion.sql`
-   tras `ADR-026`); `vw_monitoreo_eudr_aprobado` con el protocolo completo
-   de `ADR-024` (`DROP VIEW`/`CREATE VIEW`/`GRANT` exactos, capturados en
-   vivo — no versionada en este repo, ver sección 1.5); `vw_socios_web`
-   (si se decide mantenerla, dado que no tiene consumidor conocido, mismo
-   protocolo de `ADR-024` por no estar versionada tampoco).
+**Decisión cerrada (2026-08-25, instrucción explícita de Neyser): las
+columnas planas actuales de `PADRON_SOCIOS`
+(`cert_nop_usda`/`ue_2018_848`/`cor_canada`/`cert_ds_0442006_ag`/`cert_lpo_mx`/`cert_rainforest`/`cert_comercio_justo`/`cert_fair_trade_usa`/`cert_org_estatus`/`certificaciones`)
+NO se eliminan en esta migración.** Quedan físicamente presentes, sin
+uso por el código de aplicación (que pasa a leer/escribir exclusivamente
+las tablas nuevas), como respaldo — un `DROP COLUMN` es irreversible sin
+backup y esta migración no lo ejecuta. La limpieza física de esas
+columnas queda para una tarea de limpieza aparte, más adelante,
+explícitamente fuera de esta migración. **Esto simplifica un riesgo real
+de la ronda 1**: como ninguna columna se elimina ni cambia de tipo,
+`view_eudr_dashboard_aprobados`/`vw_monitoreo_eudr_aprobado`/`vw_socios_web`
+**no necesitan recrearse en esta migración** — siguen leyendo
+`PADRON_SOCIOS.certificaciones` exactamente como hoy, sin ningún cambio.
+El diagnóstico en vivo de `vw_monitoreo_eudr_aprobado` (sección 1.5)
+sigue siendo un paso a hacer, pero como preparación para la futura
+limpieza, no como requisito de esta migración — ver
+`plans/padron_certificaciones_normalizado_ejecucion.md`.
+
+1. `CERTIFICACIONES_CATALOGO`: **8 filas seed** (no 9 — `normas_internas_17`
+   queda fuera del catálogo, sección 2) — una por cada entrada de
+   `CERT_FLAG_FIELDS` (`lib/validations/socios.js:92-101`). `codigo`/`nombre`
+   según la tabla de la sección 1.8, `nombre` = el mismo texto que hoy
+   usan los labels de `CERT_FLAG_FIELDS` (`'NOP USDA'`, `'UE 2018/848'`, etc.).
+2. `AGENCIAS_CERTIFICADORAS`: sin seed — nace vacía, ninguna fuente de
+   datos existente.
+3. `ORGANIZACION_CERTIFICACIONES`: sin backfill — nace completamente
+   vacía. No hay ninguna columna hoy en `ORGANIZACIONES` ni en
+   `PADRON_SOCIOS` que indique "esta organización tiene el programa X
+   habilitado con la agencia Y" a nivel de organización — es información
+   nueva que el diseño introduce, a completar manualmente por cada
+   organización. Con `id_agencia_certificadora` viviendo acá (sección 2,
+   cambio de diseño de esta ronda), esto también reemplaza la antigua
+   pregunta abierta #4 ("sin fuente de datos para el backfill de
+   agencia") — ya no es un vacío en el backfill de `SOCIO_CERTIFICACIONES`,
+   es simplemente una tabla que arranca vacía por diseño.
+4. `SOCIO_CERTIFICACIONES` — el backfill real, instrucción literal de
+   Neyser: **por cada uno de los 7 socios reales de `PADRON_SOCIOS`, por
+   cada una de las 8 columnas de `CERT_FLAG_FIELDS` con valor `'Sí'` en
+   ese socio, una fila nueva** — `id_socio` = el `id` UUID del socio
+   (`ADR-026`), `id_organizacion` = `PADRON_SOCIOS.ID_Organizacion` del
+   mismo socio (denormalizado), `id_certificacion` = la fila de
+   `CERTIFICACIONES_CATALOGO` correspondiente a esa columna.
+
+   **Regla del campo `estado` — instrucción literal, con una ambigüedad
+   real que queda marcada, no resuelta a ciegas:** *"en la fila de la
+   certificación Orgánica, el campo estado toma el valor de
+   cert_org_estatus de ese socio"*. Ninguna de las 8 entradas de
+   `CERT_FLAG_FIELDS`/`CERTIFICACIONES_CATALOGO` se llama literalmente
+   `"Orgánica"` — los 8 nombres reales son `NOP USDA`, `UE 2018/848`,
+   `COR Canadá`, `DS 044-2006-AG`, `LPO México`, `Rainforest Alliance`,
+   `Comercio Justo`, `Fair Trade USA` (sección 1.8). La evidencia de la
+   ronda 2 (sección 1.2) mostró que `cert_org_estatus = "Organico"`
+   correlaciona, sin excepción en las 7 filas reales, con "al menos uno
+   de los 5 flags de tipo orgánico (`cert_nop_usda`/`ue_2018_848`/`cor_canada`/`cert_ds_0442006_ag`/`cert_lpo_mx`)
+   en `'Sí'`" — son 5 estándares de certificación orgánica de distintos
+   mercados (EE.UU., UE, Canadá, México x2), no un único programa.
+   **Interpretación aplicada en este plan, a confirmar:** el valor de
+   `cert_org_estatus` del socio se copia al campo `estado` de **cada una**
+   de las filas de `SOCIO_CERTIFICACIONES` que se originen en esos 5
+   flags orgánicos (nunca en `Rainforest Alliance`/`Comercio Justo`/`Fair
+   Trade USA`, que no tienen relación con `cert_org_estatus` en la
+   evidencia real). **Esto es una interpretación, no una instrucción
+   inequívoca — confirmar antes de implementar.** El resto de las filas
+   de `SOCIO_CERTIFICACIONES` (los 3 flags no-orgánicos) quedan con
+   `estado = NULL`.
+5. `PARCELA_CERTIFICACIONES`: sin backfill — nace vacía (sección 1.4,
+   sin ninguna columna origen en `PADRON_PARCELAS`).
+6. `certificaciones`/`normas_internas_17`: **no se migran como dato
+   autoritativo a ninguna tabla nueva.** `certificaciones` no es de fiar
+   como derivable por fórmula de los flags (contraejemplo real
+   confirmado en la ronda 2, sección 1.2) y no forma parte del flujo CSV
+   (sección 6) — queda como columna de respaldo sin usar, junto con el
+   resto (punto explícito de esta ronda, arriba). `normas_internas_17`
+   sigue fuera de alcance por completo, como ya establecía la sección 1.3
+   — ni se retira, ni se migra, ni entra al catálogo.
 
 ## 4. Archivos de código a actualizar — alcance real
 
 | Archivo | Alcance del cambio |
 |---|---|
-| `lib/validations/socios.js` | Retira `CERT_FLAG_FIELDS`, el `siNo` enum, y los campos `certificaciones`/`cert_org_estatus`/8 flags de `socioSchema`/`SOCIO_DEFAULT_VALUES`. Necesita un esquema nuevo para las selecciones de certificación (probablemente un array de `id_certificacion` seleccionados, no 8 campos planos). |
-| `lib/padronCsv.js` | `SOCIO_EXPORT_COLUMNS`/`SOCIO_FIELD_LABELS` dejan de incluir las columnas retiradas — el export/import CSV de certificaciones pasa a ser una relación, no columnas planas (cambio de forma real, no solo de nombres). |
-| `lib/sociosSearch.js` | `SOCIO_COLUMNS`/`fetchSocios` dejan de traer las columnas retiradas — `filters.certFlags`/`filters.certOrgEstatus` necesitan repensarse contra las tablas nuevas (probablemente un `JOIN`/subquery contra `SOCIO_CERTIFICACIONES`). |
+| `lib/validations/socios.js` | Deja de usar `CERT_FLAG_FIELDS`, el `siNo` enum, y los campos `certificaciones`/`cert_org_estatus`/8 flags en `socioSchema`/`SOCIO_DEFAULT_VALUES` (las columnas siguen existiendo en la base — sección 3 — solo el código deja de leerlas/escribirlas). Necesita un esquema nuevo para las selecciones de certificación (probablemente un array de `id_certificacion` seleccionados, no 8 campos planos). |
+| `lib/padronCsv.js` | `SOCIO_EXPORT_COLUMNS`/`SOCIO_FIELD_LABELS` dejan de incluir las 8+1 columnas planas — el export/import CSV de certificaciones pasa a columnas dinámicas contra `CERTIFICACIONES_CATALOGO`, ver sección 6.1 (nuevo diseño de esta ronda). |
+| `lib/sociosSearch.js` | `SOCIO_COLUMNS`/`fetchSocios` dejan de traer las columnas planas — `filters.certFlags`/`filters.certOrgEstatus` necesitan repensarse contra las tablas nuevas (probablemente un `JOIN`/subquery contra `SOCIO_CERTIFICACIONES`). |
 | `components/features/socios/SocioFormModal.jsx` | Los 8 `<select>` Sí/No se reemplazan por una UI real contra `CERTIFICACIONES_CATALOGO` (multi-select o checklist) — cambio de UI, no solo de datos. |
 | `app/dashboard/socios/page.jsx` | Columna de tabla y filtros de certificación pasan a leer de las tablas nuevas. |
 | `tests/test_socios_schema.mjs` | Se actualiza o se retira el test que verifica la forma de `CERT_FLAG_FIELDS` (ya no existiría). |
@@ -380,21 +484,33 @@ PARCELA_CERTIFICACIONES
    `NORMAS` y `PADRON_SOCIOS`/las tablas nuevas (señalado en la sección
    1.7) queda documentado pero explícitamente aceptado, no resuelto por
    esta normalización.
-2. **`cert_org_estatus` no mapea 1:1** a ningún programa específico de
-   `CERT_FLAG_FIELDS` — es un resumen textual libre ("Organico"/"Sin
-   Estatus"). ¿Se retira sin migrar (se pierde esa etiqueta), se migra
-   como una `SOCIO_CERTIFICACIONES` "genérica" contra un pseudo-programa
-   "Orgánico (resumen)", o se deriva en la UI a partir de qué
-   certificaciones orgánicas reales tiene el socio?
-3. **`certificaciones` parece derivable de los flags** (hipótesis de la
-   sección 1.2, muestra de 7 filas) — ¿confirmás que es así, o hay casos
-   reales donde diverge? Si es derivable, no necesita tabla ni columna
-   nueva — se calcula en la UI a partir de `SOCIO_CERTIFICACIONES`.
-4. **`id_agencia_certificadora` no tiene ninguna fuente de datos para el
-   backfill** — las 16 filas `'Sí'` reales de hoy (contando las 6 filas ×
-   hasta 8 flags) quedarían con agencia `NULL` tras la migración. ¿Es
-   aceptable que arranque así, a completar manualmente, o hace falta
-   pedir esos datos a las organizaciones antes de cortar a producción?
+2. ~~**`cert_org_estatus` no mapea 1:1** a ningún programa específico~~ —
+   **RESUELTO (2026-08-25, ronda 4, instrucción de Neyser, ver sección
+   3.4):** su valor se copia al campo `estado` de las filas de
+   `SOCIO_CERTIFICACIONES` que se originan en la certificación
+   "Orgánica". **Queda una sub-pregunta real, no resuelta**: ninguna de
+   las 8 certificaciones del catálogo se llama literalmente "Orgánica"
+   — la sección 3.4 documenta la interpretación aplicada (los 5 flags de
+   tipo orgánico: NOP USDA/UE 2018/848/COR Canadá/DS 044-2006-AG/LPO
+   México) con evidencia real de respaldo, pero sigue siendo una
+   interpretación a confirmar antes de implementar, no una lectura
+   inequívoca de la instrucción.
+3. ~~**`certificaciones` parece derivable de los flags**~~ — **RESUELTO
+   (2026-08-25, ronda 4, instrucción de Neyser):** no se migra como dato
+   autoritativo — decisión explícita, no una derivación calculada en la
+   UI. Coherente con el contraejemplo real encontrado en la ronda 2
+   (sección 1.2: `certificaciones` no es de fiar como puramente
+   derivable) y con que no forma parte del flujo CSV (sección 6). Queda
+   como columna de respaldo sin usar (sección 3).
+4. ~~**`id_agencia_certificadora` sin fuente de datos para el
+   backfill**~~ — **RESUELTO (2026-08-25, ronda 4):** ya no es una
+   pregunta de backfill — el contrato de esta ronda movió
+   `id_agencia_certificadora` de `SOCIO_CERTIFICACIONES` a
+   `ORGANIZACION_CERTIFICACIONES` (sección 2), que nace **completamente
+   vacía** por diseño (sección 3.3), no parcialmente poblada con un
+   campo en `NULL`. Sigue sin haber una fuente de datos de qué agencia
+   certificó a quién — pero eso ahora es "una tabla vacía a completar
+   manualmente", no un hueco en un backfill.
 5. ~~**Naming de `CERTIFICACIONES_CATALOGO` vs `CAT_NORMAS.certificacion`**~~
    (sección 1.6) — **RESUELTO (2026-08-25, decisión de Neyser):**
    `CERTIFICACIONES_CATALOGO` es un catálogo **independiente**, sin
@@ -528,14 +644,10 @@ dashboard, botón "⬆ Cargar Padrón Masivo (CSV)".
 
 ### Impacto directo en la normalización de certificaciones — qué rompe si se retiran las columnas tal cual
 
-1. **La plantilla/export/import CSV pierde 8+1 columnas planas** (los 8
-   flags + `cert_org_estatus`, sección 1.2/1.1) — necesitan una
-   representación nueva en un archivo CSV plano. Ninguna decisión tomada
-   en esta spec todavía sobre cuál (¿una columna con códigos separados
-   por coma? ¿mantener columnas individuales pero contra
-   `CERTIFICACIONES_CATALOGO.codigo` en vez de nombres fijos, para que
-   sea extensible? — no resuelto, nueva pregunta para la
-   implementación).
+1. **La plantilla/export/import CSV pierde las 8 columnas planas fijas
+   de `CERT_FLAG_FIELDS`** (`cert_org_estatus` queda como columna de
+   respaldo sin uso, sección 3 — no forma parte de este cambio). Diseño
+   cerrado en la sección 6.1, no una pregunta abierta.
 2. **`socioPayload(parsed)` (`lib/actions/sociosActions.js`) ya no puede
    escribir esas columnas directas** — `createSocio`, llamada tanto por
    el alta manual como por `handleConfirmImport` acá, necesita además
@@ -547,8 +659,50 @@ dashboard, botón "⬆ Cargar Padrón Masivo (CSV)".
    también significa que cualquier bug en esa función ahora afecta las 2
    superficies simultáneamente.
 3. **`certificaciones` no afecta al importador** (confirmado arriba) —
-   la decisión pendiente sobre ese campo (pregunta abierta #3) es
-   irrelevante para este flujo.
+   decidido que no se migra como dato autoritativo (sección 3), pero eso
+   es irrelevante para este flujo de cualquier forma, porque nunca formó
+   parte de él.
 4. **La validación Zod compartida es una ventaja, no solo un riesgo** —
    al ser el mismo `socioSchema` para ambas superficies, el nuevo
-   contrato de certificaciones (sea cual sea) solo se define una vez.
+   contrato de certificaciones solo se define una vez.
+
+### 6.1 Diseño cerrado — columnas dinámicas contra `CERTIFICACIONES_CATALOGO`
+
+**Decisión de esta ronda (2026-08-25), instrucción explícita de Neyser:**
+
+- **Exportación/plantilla:** la plantilla deja de tener columnas fijas —
+  al generarla (`downloadSocioTemplate`/`buildSocioTemplateCsv`) o al
+  exportar (`exportSociosCsv`), se agrega **una columna por cada fila de
+  `CERTIFICACIONES_CATALOGO` con `activo = true`**, en vez de las 8
+  columnas hardcodeadas de hoy.
+- **¿Encabezado = `codigo` o `nombre`?** Confirmado por evidencia real
+  (sección 6, "Formato de columnas esperado"): `arrayToCsv`
+  (`lib/padronCsv.js:88-92`) arma el encabezado con
+  `labels?.[col] || col` — hoy los encabezados exportados son el
+  **label humano** (`"NOP USDA"`, `"Rainforest Alliance"`, etc.), nunca
+  el nombre técnico de columna (`cert_nop_usda`). El diseño nuevo
+  mantiene esa misma convención: **el encabezado dinámico usa
+  `CERTIFICACIONES_CATALOGO.nombre`** (no `codigo`), para no romper la
+  expectativa visual ya establecida en las plantillas actuales.
+- **Importación — columna no reconocida = error explícito, nunca
+  ignorada:** al normalizar los encabezados del CSV subido
+  (`normalizeRowKeys`, hoy vía `SOCIO_REVERSE_LABELS`), cualquier columna
+  que no matchee (case-insensitive, mismo criterio que
+  `buildReverseLabelMap` ya usa hoy) el `nombre` de una certificación con
+  `activo = true` en `CERTIFICACIONES_CATALOGO`, ni ninguna de las
+  columnas técnicas fijas restantes (`ID_Socio`, `socio_dni`, etc.), debe
+  **rechazar el archivo entero con un mensaje explícito citando el
+  nombre exacto de la columna no reconocida** — comportamiento nuevo:
+  hoy (`normalizeRowKeys`, línea 298-305) una columna sin match se deja
+  pasar tal cual sin error, confiando en que Zod la ignore por no ser un
+  campo conocido del schema; con columnas dinámicas ese silencio ya no es
+  aceptable (un nombre de certificación mal tipeado o una certificación
+  desactivada no debe perderse en silencio — el usuario tiene que
+  enterarse antes de confirmar la importación, mismo espíritu que ya
+  aplican `applySocioDbChecks`/`applyDuplicateChecks` para otros errores).
+- **Valor de celda:** no definido en esta ronda si se mantiene el mismo
+  contrato `'Sí'`/`'No'`/vacío por celda (una columna por certificación,
+  presencia/ausencia como hoy) o si cambia de forma — el contrato de
+  datos de la sección 2 no impone un formato de celda particular, queda
+  para la tarea de implementación decidirlo contra el diseño real de
+  `SOCIO_CERTIFICACIONES`/`socioSchema` nuevo.
