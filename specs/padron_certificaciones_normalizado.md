@@ -1,8 +1,12 @@
 # Spec — Normalización de certificaciones en `PADRON_SOCIOS`/`PADRON_PARCELAS`
 
-- **Estado:** Auditoría completa — spec y diseño propuesto, **sin
-  migración SQL ni cambios de código todavía**.
-- **Fecha:** 2026-08-25
+- **Estado:** Auditoría en 2 rondas — spec y diseño propuesto, **sin
+  migración SQL ni cambios de código todavía**. Ronda 2 (2026-08-25)
+  agregó la evidencia real de `certificaciones`/`cert_org_estatus` y
+  resolvió 2 de las 6 preguntas abiertas (`NORMAS` y el naming vs
+  `CAT_NORMAS` — ambas quedan fuera de alcance, ver sección 5). Las
+  demás preguntas siguen abiertas.
+- **Fecha:** 2026-08-25 (ronda 1), actualizado 2026-08-25 (ronda 2)
 - **Contexto previo:** `specs/roadmap_padron_multiorganizacion.md`
   (sección 1, diseño original de alto nivel), `ADR-023`/`ADR-024`
   (protocolo "capturar exacto, no adivinar" reutilizado acá para las
@@ -65,24 +69,59 @@ Zod la permite).
 
 Ambas `text`, sin restricción de valores a nivel de base ni de Zod
 (`lib/validations/socios.js:50-51`: ambas mapean a `str` = `z.string().optional().nullable()`,
-sin `.enum()`).
+sin `.enum()`). Confirmado por introspección OpenAPI: **ninguna de las
+dos es JSON** (`format: 'text'`, `type: 'string'` en ambas) — son
+strings escalares simples, no estructuras a desempaquetar.
 
-Valores reales observados:
+`PADRON_SOCIOS` tiene solo **7 filas en total** — por debajo del umbral
+de 15-20 pedido para tomar una muestra representativa, así que esta es
+la **población completa**, no una muestra, extraída en vivo el
+2026-08-25 (REST directo, Service Role Key, sin columnas de PII):
 
-| Columna | Valores reales (2026-08-25) |
+| ID_Socio | `certificaciones` | `cert_org_estatus` | Flags orgánicos en `"Sí"` (de 5: nop_usda/ue_2018_848/cor_canada/ds_0442006_ag/lpo_mx) | `cert_rainforest` |
+|---|---|---|---|---|
+| JS-00001 | `"Orgánica"` | `"Organico"` | 5 de 5 | No |
+| JS-00002 | `"Rainforest"` | `"Sin Estatus"` | 0 de 5 | Sí |
+| JS-00003 | `NULL` | `"Sin Estatus"` | 0 de 5 | Sí |
+| JS-0005 | `NULL` | `NULL` | 1 de 5 (`cert_nop_usda`, resto `NULL`) | `NULL` |
+| ND-00001 | `"Orgánica"` | `"Organico"` | 1 de 5 (`cert_lpo_mx`) | No |
+| ND-00002 | `"Rainforest"` | `"Sin Estatus"` | 0 de 5 | Sí |
+| TEST-DELETE-ME-001... | `"Orgánica"` | `"Organico"` | 2 de 5 (`cert_nop_usda`, `cert_lpo_mx`) | **Sí** |
+
+Valores únicos observados (población completa, no muestra):
+
+| Columna | Valores reales |
 |---|---|
 | `certificaciones` | `"Orgánica"`, `"Rainforest"`, `NULL` |
 | `cert_org_estatus` | `"Organico"`, `"Sin Estatus"`, `NULL` |
 
-**Observación no solicitada, relevante para el diseño:** en los datos
-reales, `certificaciones` parece un resumen derivado de los flags, no
-información independiente — `JS-00001` tiene `certificaciones =
-"Orgánica"` y 5 de los 8 flags de tipo orgánico en `"Sí"`; `JS-00002`
-tiene `certificaciones = "Rainforest"` y `cert_rainforest = "Sí"`. No se
-confirma con evidencia que sea *siempre* así (7 filas es poca muestra),
-pero es una hipótesis a resolver antes de decidir si `certificaciones`
-necesita migrarse a una tabla nueva o si puede derivarse en la UI a
-partir de `SOCIO_CERTIFICACIONES` — ver "Preguntas abiertas".
+**Correlación real, con un contraejemplo confirmado — la hipótesis de
+"derivable de los flags" de la ronda anterior NO se sostiene del todo:**
+
+- `cert_org_estatus = "Organico"` correlaciona perfectamente con "al
+  menos un flag orgánico en `Sí`" en las 7 filas (JS-00001, ND-00001,
+  TEST-DELETE-ME) — sin excepciones.
+- `certificaciones = "Orgánica"` correlaciona con `cert_org_estatus =
+  "Organico"` en las 3 filas donde aparece — también sin excepciones.
+- Pero `certificaciones = "Rainforest"` **no** correlaciona
+  consistentemente con `cert_rainforest = "Sí"`: **JS-00003 tiene
+  `cert_rainforest = "Sí"` (mismo perfil exacto que JS-00002/ND-00002:
+  `cert_org_estatus = "Sin Estatus"`, 0 flags orgánicos) pero
+  `certificaciones = NULL`, no `"Rainforest"`.** Es un contraejemplo real
+  y directo a la hipótesis de "siempre derivable", no una ambigüedad de
+  interpretación.
+- El caso `TEST-DELETE-ME-001...` tiene **`cert_rainforest = "Sí"` Y
+  `certificaciones = "Orgánica"` a la vez** — confirma que
+  `certificaciones` no es "el único flag verdadero", sino algo más
+  parecido a una etiqueta de certificación *primaria/destacada* elegida
+  a mano, independiente de cuántos flags estén en `Sí`.
+
+**Conclusión de esta ronda:** `certificaciones` no es de fiar como
+puramente derivable de los flags — con al menos un contraejemplo real en
+7 filas, migrarla automáticamente por fórmula arriesgaría perder o
+inventar datos. Esta pregunta (sección "Preguntas abiertas" #3) queda
+**sin resolver a propósito** — la evidencia ahora es más completa, pero
+la decisión de qué hacer con `certificaciones` sigue siendo tuya.
 
 ### 1.3 `normas_internas_17` — confirmado huérfano en código de aplicación, separado de `CERT_FLAG_FIELDS`
 
@@ -149,10 +188,9 @@ tiene qué certificación"), pero su taxonomía de nombres (`"Fairtrade"`,
 no `"Fair Trade USA"` ni `"Comercio Justo"`) es una fuente real y viva de
 nombres de certificación que **no coincide exactamente** con los labels
 de `CERT_FLAG_FIELDS` (`'Fair Trade USA'`, `'Comercio Justo'` como dos
-programas separados) — al diseñar `CERTIFICACIONES_CATALOGO.codigo`/`nombre`,
-alguien tiene que decidir si buscan alinear esta nomenclatura con
-`CAT_NORMAS` o si son taxonomías deliberadamente independientes. Ver
-"Preguntas abiertas".
+programas separados). **Resuelto (2026-08-25, ver "Preguntas
+abiertas" #5): `CERTIFICACIONES_CATALOGO` no alinea su naming con
+`CAT_NORMAS` — taxonomías independientes a propósito.**
 
 ### 1.7 Hallazgo inesperado, el más importante de esta auditoría: `NORMAS` — una tabla base independiente con el mismo bloque de 10 columnas
 
@@ -192,12 +230,11 @@ del mismo bloque de certificación que `PADRON_SOCIOS` captura a nivel de
 socio (probablemente el origen histórico real de esos datos — un
 técnico llenaba este bloque durante una inspección de campo (AppSheet),
 y en algún momento se copió/sincronizó a `PADRON_SOCIOS` como "estado
-actual"). Esta spec **no** propone consumir `NORMAS` como fuente de
-datos para la normalización (el prompt de esta tarea pidió
-específicamente `PADRON_SOCIOS`/`PADRON_PARCELAS`, no este módulo) — pero
-dejarla sin mencionar sería ocultar una pieza real del rompecabezas. Ver
-"Preguntas abiertas" — **este hallazgo, por su tamaño, amerita revisión
-tuya antes de decidir el alcance final de la migración de datos.**
+actual"). **Resuelto (2026-08-25, ver "Preguntas abiertas" #1):**
+`NORMAS` queda intacta y fuera de alcance — es parte del flujo de la
+futura app de Campo (inspecciones internas), no del padrón normalizado
+de certificaciones; dominios distintos a propósito, no un gap a cerrar
+en esta migración.
 
 ### 1.8 Uso de `CERT_FLAG_FIELDS` en código — 7 archivos confirmados, con matices reales
 
@@ -330,13 +367,16 @@ PARCELA_CERTIFICACIONES
 
 ## 5. Preguntas abiertas (sin evidencia clara — no asumidas, no resueltas en esta spec)
 
-1. **`NORMAS` (sección 1.7)** — el hallazgo más grande de esta auditoría.
-   ¿Se debe considerar como fuente/destino relacionado de esta
-   normalización, o es un módulo completamente aparte (Fase 6/FED, fuera
-   de alcance)? Con solo 1 fila real hoy, el impacto inmediato es bajo,
-   pero la existencia de un bloque de columnas duplicado sin relación
-   documentada entre ambos es una señal de posible drift de datos futuro
-   si alguna vez se llena de verdad.
+1. ~~**`NORMAS` (sección 1.7)**~~ — **RESUELTO (2026-08-25, decisión de
+   Neyser):** `NORMAS` queda **intacta y fuera de alcance** de este paso
+   de normalización. Es parte del flujo de datos de la futura app de
+   Campo (inspecciones internas), no del padrón normalizado de
+   certificaciones a nivel organización/socio/parcela — dominios
+   distintos a propósito, no un gap a cerrar acá. No se migra, no se
+   consume como fuente, no se toca su schema. El riesgo de drift entre
+   `NORMAS` y `PADRON_SOCIOS`/las tablas nuevas (señalado en la sección
+   1.7) queda documentado pero explícitamente aceptado, no resuelto por
+   esta normalización.
 2. **`cert_org_estatus` no mapea 1:1** a ningún programa específico de
    `CERT_FLAG_FIELDS` — es un resumen textual libre ("Organico"/"Sin
    Estatus"). ¿Se retira sin migrar (se pierde esa etiqueta), se migra
@@ -352,11 +392,13 @@ PARCELA_CERTIFICACIONES
    hasta 8 flags) quedarían con agencia `NULL` tras la migración. ¿Es
    aceptable que arranque así, a completar manualmente, o hace falta
    pedir esos datos a las organizaciones antes de cortar a producción?
-5. **Naming de `CERTIFICACIONES_CATALOGO` vs `CAT_NORMAS.certificacion`**
-   (sección 1.6) — ¿se busca alinear la nomenclatura con la que ya usa el
-   módulo de Inspecciones (`"Fairtrade"`, `"Orgánica"`, `"Rainforest"`),
-   o son taxonomías independientes a propósito (una para el padrón
-   comercial, otra para el checklist de auditoría)?
+5. ~~**Naming de `CERTIFICACIONES_CATALOGO` vs `CAT_NORMAS.certificacion`**~~
+   (sección 1.6) — **RESUELTO (2026-08-25, decisión de Neyser):**
+   `CERTIFICACIONES_CATALOGO` es un catálogo **independiente**, sin
+   alinear su naming con `CAT_NORMAS` — mismo criterio que la resolución
+   de `NORMAS` arriba: son taxonomías de dominios distintos (padrón
+   comercial vs. checklist de auditoría de Campo) y se mantienen
+   deliberadamente separadas, no un caso a reconciliar.
 6. **`vw_monitoreo_eudr_aprobado`** (hallazgo nuevo, sección 1.5) — no
    versionada en este repo (confirmado, cero resultados en
    `supabase/migrations/`) — antes de escribir la migración real hace
