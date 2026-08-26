@@ -1,8 +1,9 @@
 # Spec — Fix del GUID de QField mal etiquetado como `"ID_Parcela_Fija"` en `vw_monitoreo_poligonos`/`vw_monitoreo_puntos`
 
-- **Estado:** Diseño cerrado (2026-08-26), listo para implementación. **Sigue
-  sin existir ninguna migración SQL** — esta spec incluye el SQL exacto
-  propuesto (secciones 3 y 4), pero no se aplicó como migración real.
+- **Estado:** Diseño cerrado (2026-08-26) + alcance extendido el mismo día
+  (sección 5.1, confirmado explícitamente por el usuario) para incluir un
+  4to lugar. Migración real ya escrita:
+  `supabase/migrations/20260826140000_fix_id_parcela_fija_guid_qfield.sql`.
 - **Fecha:** 2026-08-26
 - **Contexto previo:** auditoría de solo lectura hecha en la sesión de esta
   misma fecha (evidencia completa citada en la sección 1, no repetida
@@ -80,7 +81,7 @@ reales.
 | `vw_monitoreo_poligonos` (rama `EUDR_USO_SUELO`) | `u.id_parcela AS "ID_Parcela_Fija"` → `resolved."ID_Parcela_Fija"` vía `LEFT JOIN LATERAL` a `EUDR_MONITOREO` |
 | `vw_monitoreo_puntos` (rama `EUDR_INSTALACIONES`) | `i.id_parcela AS "ID_Parcela_Fija"` → `resolved."ID_Parcela_Fija"` vía `LEFT JOIN LATERAL` a `EUDR_MONITOREO` (misma cadena) |
 | `fn_set_producto_predominante_uso_suelo()` (trigger del paso 4) | agrega `ORDER BY fecha_monitoreo DESC NULLS LAST, creado_en DESC` al `SELECT ... LIMIT 1` existente — mismo criterio de desempate que las vistas, para que vista y trigger elijan siempre el mismo `EUDR_MONITOREO` padre ante un `qfield_relation_id` duplicado |
-| `vw_monitoreo_web` | **sin cambios** — su `LEFT JOIN PADRON_PARCELAS` ya existente empieza a matchear solo una vez que `"ID_Parcela_Fija"` upstream es el código real |
+| `vw_monitoreo_web` | Su `LEFT JOIN PADRON_PARCELAS` ya existente empieza a matchear solo una vez que `"ID_Parcela_Fija"` upstream es el código real (sin cambio de código ahí). **Además (sección 5.1, agregado el mismo día):** el `LEFT JOIN LATERAL` `mon` (resuelve `productor`) agrega `, creado_en DESC` a su `ORDER BY`, mismo desempate que las otras 3 piezas |
 | `lib/eudrDdsExporter.js` | **sin cambios** — el fix en las vistas resuelve en cascada el bug de "plots fantasma" (sección 5) |
 
 ## 3. Diseño — `vw_monitoreo_poligonos`
@@ -266,15 +267,79 @@ $$;
 de constraint real, ver `20260825201351_pk_surrogate_multiorganizacion.sql`
 sección 2 de esa migración.)
 
-**Nota de consistencia, fuera de alcance de esta spec:** el `LATERAL`
-`mon` ya existente en `vw_monitoreo_web` (resuelve `productor` para
-filas de `EUDR_USO_SUELO`/`EUDR_INSTALACIONES` desde el `EUDR_MONITOREO`
-más reciente) usa `ORDER BY m.fecha_monitoreo DESC NULLS LAST LIMIT 1`
-— **el mismo patrón, con la misma ambigüedad sin desempate secundario**
-que este fix cierra en otros 3 lugares. No se toca en esta spec (alcance
-distinto: resuelve `productor`, no `"ID_Parcela_Fija"`), pero queda
-señalado como el mismo tipo de gap, candidato a una spec de seguimiento
-si se decide unificar el criterio en los 4 lugares.
+**Nota de consistencia (agregada a esta spec en la sección 5.1 más abajo,
+2026-08-26 — ya NO está fuera de alcance):** el `LATERAL` `mon` ya
+existente en `vw_monitoreo_web` (resuelve `productor` para filas de
+`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` desde el `EUDR_MONITOREO` más
+reciente) usa `ORDER BY m.fecha_monitoreo DESC NULLS LAST LIMIT 1` — el
+mismo patrón, con la misma ambigüedad sin desempate secundario que este
+fix cierra en las 3 piezas de arriba, aunque resuelve por una llave
+distinta (`"ID_Parcela_Fija"` ya resuelto, no `qfield_relation_id`). El
+usuario confirmó explícitamente incluirlo en el mismo día — ver sección
+5.1.
+
+## 5.1 Diseño — 4to lugar: `LATERAL` `mon` en `vw_monitoreo_web` (agregado 2026-08-26)
+
+**Confirmado explícitamente por el usuario** (no asumido) en la sesión
+que implementó esta spec — ver conversación real, no solo esta nota.
+Mecanismo **distinto** al de las secciones 3/4/5: ese `LATERAL` resuelve
+`productor` buscando la visita `EUDR_MONITOREO` más reciente de la
+**misma `"ID_Parcela_Fija"` ya resuelta** (no del GUID crudo de QField vía
+`qfield_relation_id`) — una ambigüedad real distinta (una misma parcela
+fija puede tener varias visitas de monitoreo a lo largo del tiempo), pero
+de la misma clase (empate en `fecha_monitoreo`, sin desempate
+determinístico).
+
+**Corrección de base encontrada al implementar (no estaba en la
+auditoría original de esta spec):** el `LATERAL` `mon` que hay que tocar
+no vive en `20260819_vw_monitoreo_web_productor_nombre_parcela_fallback.sql`
+(la versión que citó la auditoría de la sección 1) sino en la versión más
+reciente de `vw_monitoreo_web`,
+`supabase/migrations/20260826120000_multi_producto_cafe_cacao.sql`
+(mismo día, aplicada después) — esa migración ya agregó
+`id_producto_predominante`/`producto_codigo`/`producto_nombre` y
+condiciones `AND ... "ID_Organizacion"` explícitas en los 4 `LEFT JOIN`
+de la vista. La migración real de esta spec parte de ESA versión como
+base (no de la de la auditoría), para no revertir esas columnas/joins.
+
+Cambio real, aplicado 2 veces (rama "poligono" y rama "punto" del
+`UNION ALL`, mismo texto en ambas):
+
+```sql
+LEFT JOIN LATERAL (
+    SELECT COALESCE(m."ID_Socio", m.nuevo_productor_nombre) AS productor
+    FROM public."EUDR_MONITOREO" m
+    WHERE m."ID_Parcela_Fija" = src."ID_Parcela_Fija"
+      AND m."ID_Organizacion" = src."ID_Organizacion"
+    ORDER BY m.fecha_monitoreo DESC NULLS LAST, m.creado_en DESC  -- CAMBIO: antes sin m.creado_en DESC
+    LIMIT 1
+) mon ON true
+```
+
+Ningún otro JOIN/columna/WHERE de `vw_monitoreo_web` cambia. Ver el SQL
+completo (las 4 piezas) en
+`supabase/migrations/20260826140000_fix_id_parcela_fija_guid_qfield.sql`.
+
+**Hallazgo en vivo durante la implementación de los tests (no estaba en
+la auditoría original, cambia el perfil de riesgo real de esta pieza):**
+`EUDR_MONITOREO` tiene un `UNIQUE("ID_Organizacion", "ID_Parcela_Fija",
+fecha_monitoreo)` real, confirmado empíricamente contra la instancia Live
+(`eudr_monitoreo_org_parcela_fecha_key` — no aparece en ninguna migración
+de este repo, la tabla se creó fuera de él). Esto significa que **2
+filas de `EUDR_MONITOREO` de la MISMA parcela nunca pueden empatar en
+`fecha_monitoreo`** — el escenario exacto que motivó agregar `creado_en
+DESC` al `LATERAL` `mon` de esta pieza. A diferencia del empate real de
+las piezas 1/2/3 (por `qfield_relation_id` compartido entre 2 filas con
+`"ID_Parcela_Fija"` **distinto**, sí permitido por este UNIQUE — el caso
+real COOP-JS-001/COOP-JS-003 lo confirma), el empate que esta 4ta pieza
+pretende resolver es **hoy estructuralmente imposible** bajo el schema
+real. El cambio queda igual de correcto y sigue sin riesgo (desempate
+secundario inerte, nunca se activa mientras exista este UNIQUE), pero es
+una pieza defensiva/de paridad de criterio entre los 4 lugares, no el
+cierre de un bug reproducible como las otras 3 — a diferencia de lo que
+asumía la premisa original de la sección 5 ("misma clase de ambigüedad").
+Ver `tests/test_fix_id_parcela_fija_guid_qfield.py::TestFixIdParcelaFijaGuidQfieldLive::test_vw_monitoreo_web_productor_no_regresiona_para_misma_parcela_con_2_visitas`
+para el detalle y por qué el test no reproduce un empate genuino.
 
 ## 6. Impacto verificado en cascada
 
@@ -322,10 +387,9 @@ si se decide unificar el criterio en los 4 lugares.
 - **No se aplica ninguna migración SQL en esta spec** — el SQL de las
   secciones 3, 4 y 5 es el diseño propuesto, listo para una migración
   futura, no ejecutado todavía.
-- **El `LATERAL` `mon` de `vw_monitoreo_web`** (sección 5, nota de
-  consistencia) — misma clase de ambigüedad, en un lugar y con un
-  propósito distintos (`productor`, no `"ID_Parcela_Fija"`). Señalado,
-  no corregido acá.
+- ~~El `LATERAL` `mon` de `vw_monitoreo_web`~~ — **ya no está fuera de
+  alcance**, incluido en sección 5.1 (agregado 2026-08-26, confirmado por
+  el usuario).
 - **Backfill de datos ya escritos con el `id_producto_predominante`
   potencialmente mal resuelto por el trigger sin desempate** (paso 4,
   antes de este fix) — hoy no aplica: 100% de `EUDR_USO_SUELO` sigue con

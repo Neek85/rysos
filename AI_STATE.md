@@ -229,3 +229,69 @@ en la misma transacción) sin adivinar ningún `JOIN`/`WHERE` ni ningún
 `GRANT`. No se tocó `20260825142426_normaliza_tipo_hbp_otros_cultivo.sql`
 en esta tarea — sigue en el estado que falló, a la espera de esta
 evidencia.
+
+## 2026-08-26b — Migración `20260826140000_fix_id_parcela_fija_guid_qfield.sql` lista, no aplicada (mismo límite de siempre) + 2 hallazgos reales durante la implementación
+
+**Tarea:** implementar la migración real del diseño ya cerrado en
+`specs/fix_id_parcela_fija_guid_qfield.md` (2 vistas + trigger +, agregado
+el mismo día con confirmación explícita del usuario, el `LATERAL` `mon`
+de `vw_monitoreo_web`).
+
+**Bloqueo (no es un fallo, es el mismo límite documentado en la entrada
+"2026-08-25b" de arriba):** esta sesión no tiene forma de ejecutar
+`CREATE OR REPLACE VIEW`/`FUNCTION` contra la instancia real (sin RPC de
+SQL libre, sin `DATABASE_URL`/`psycopg2`) — la migración
+`supabase/migrations/20260826140000_fix_id_parcela_fija_guid_qfield.sql`
+quedó escrita y verificada (tests estáticos + smoke test de los fixtures
+de los tests Live contra la instancia real, sin aplicar DDL) pero
+**pendiente de aplicación manual en Supabase Studio SQL Editor** por el
+usuario. Los 7 tests Live nuevos en
+`tests/test_fix_id_parcela_fija_guid_qfield.py` se auto-saltan
+(`_migration_is_applied`) hasta que se aplique — suite completa: **472
+passed, 7 skipped** (antes de esta tarea: 463 passed, 0 skipped — los 9
+tests estáticos nuevos ya corren y pasan; los 7 Live nuevos son los que
+suman a "skipped").
+
+**Hallazgo 1 (corrección de premisa, encontrada verificando el repo real
+antes de escribir la migración):** la spec original citó
+`20260819_vw_monitoreo_web_productor_nombre_parcela_fallback.sql` como la
+versión vigente de `vw_monitoreo_web` para diseñar el cambio del `LATERAL`
+`mon` — esa versión quedó vieja el mismo día:
+`20260826120000_multi_producto_cafe_cacao.sql` (aplicada después) ya
+había agregado `id_producto_predominante`/`producto_codigo`/
+`producto_nombre` y condiciones `AND ..."ID_Organizacion"` en los 4 JOIN.
+La migración de esta tarea parte de la versión realmente vigente —
+`test_vw_monitoreo_web_preserves_multi_producto_columns_and_joins` en el
+nuevo archivo de tests deja esto cubierto como regresión permanente.
+
+**Hallazgo 2 (encontrado en vivo escribiendo los tests, cambia el perfil
+de riesgo real de la 4ta pieza):** `EUDR_MONITOREO` tiene un
+`UNIQUE("ID_Organizacion", "ID_Parcela_Fija", fecha_monitoreo)` real
+(`eudr_monitoreo_org_parcela_fecha_key`, no documentado en ninguna
+migración de este repo -- confirmado insertando 2 filas de prueba y
+recibiendo `23505`). Esto hace **estructuralmente imposible** que 2 filas
+de la MISMA parcela empaten en `fecha_monitoreo` -- exactamente el
+escenario que motivó agregar `creado_en DESC` al `LATERAL` `mon` de
+`vw_monitoreo_web` (spec sección 5.1). El cambio sigue siendo correcto y
+sin riesgo (desempate inerte, nunca se activa mientras exista este
+UNIQUE), pero es defensivo/de paridad de criterio, no el cierre de un bug
+reproducible como las otras 3 piezas -- documentado en la spec (sección
+5.1) y en el test
+`test_vw_monitoreo_web_productor_no_regresiona_para_misma_parcela_con_2_visitas`,
+que no puede reproducir un empate genuino por este motivo.
+
+**Nota aparte, sobre el bullet de "plots fantasma" del prompt original:**
+pide correr `buildTracesPayload()` (JS, `lib/eudrDdsExporter.js`) desde
+un test -- este repo no tiene ningún framework que ejecute JS desde
+pytest. `test_plots_fantasma_ya_no_se_cuentan_por_separado_regresion_dds`
+replica la lógica exacta de `groupByParcela` en Python contra los datos
+reales de `ORG-TEST-E2E` vía `vw_monitoreo_web` en su lugar (verifica el
+efecto real del fix sobre la vista, que es la causa raíz del bug) --
+verificado manualmente antes de escribir el test: 13 filas `APROBADO`
+reales, 6 grupos antes del fix (confirmado, GUID crudo sin resolver), 3
+esperados después (`COOP-JS-001`/`COOP-JS-003`/`COOP-JS-004`).
+
+**Qué falta:** aplicar la migración en Supabase Studio (paso manual del
+usuario) y volver a correr `python -m pytest tests/ -v` para confirmar
+que los 7 tests Live pasan (no solo se saltan) contra el schema real ya
+corregido.
