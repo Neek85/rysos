@@ -101,6 +101,15 @@
 
 ---
 
+- **(2026-08-27) Primera organización real del sistema creada:**
+  `COOP-AROMAS-VALLE` (COOPERATIVA AGRARIA AROMAS DEL VALLE), aplicada
+  directamente en Supabase (alta de dato, no de esquema — no fue una
+  migración) y vinculada a Café en `ORGANIZACION_PRODUCTOS`. El
+  procedimiento quedó documentado como runbook repetible en
+  `specs/alta_organizacion_real.md`, con la convención de código
+  (`TIPO-SLUG`) fijada en
+  [ADR-030](adr/ADR-030-convencion-codigo-organizaciones.md).
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
