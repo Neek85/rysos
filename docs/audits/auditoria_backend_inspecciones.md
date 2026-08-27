@@ -1,5 +1,18 @@
 # Auditoría Técnica: Neek85/backend-inspecciones
 
+> ## ⚠️ SUPERSEDED (2026-08-26)
+> El hallazgo central de este documento — que `backend-inspecciones` y
+> `rysos` comparten la misma instancia Supabase en vivo — quedó corregido
+> por [ADR-023 — `backend-inspecciones` ya no comparte base de datos en
+> vivo con este proyecto](../adr/ADR-023-backend-inspecciones-ya-no-comparte-base.md)
+> (2026-08-25): según confirmación directa del usuario registrada en ese
+> ADR, `backend-inspecciones` **ya no** comparte la instancia de Supabase
+> con RYZOS. El resto de este documento se conserva sin cambios como
+> registro histórico de la auditoría original (2026-08-17) — sus otros
+> hallazgos (inventario de pantallas, stack técnico, fuga de PII en logs
+> de consola, etc.) no fueron re-verificados ni invalidados por esta
+> corrección, solo el hallazgo de base de datos compartida del inicio.
+
 **Fecha:** 2026-08-17
 **Repositorio auditado:** `https://github.com/Neek85/backend-inspecciones.git` (clonado temporalmente en `.temp/backend-inspecciones`, eliminado al cerrar esta auditoría)
 **Commits:** `a94ed75` "Migracio appsheet a vscode" (HEAD) — historial completo: `47e6e64e` → `e1378b8` → `2400491` → `7013ad2` → `61c47c2` → `004cf77` → `a94ed75`

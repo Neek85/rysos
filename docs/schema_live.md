@@ -184,10 +184,16 @@ reales confirmados** — no asumir que siempre hay geometría), `creado_en`,
 ### Módulo Padrón Web de Socios y Fincas (2026-08-18, `/dashboard/socios`)
 
 Primer módulo de escritura del proyecto que **no** usa una política RLS
-`anon` nueva. `PADRON_SOCIOS`/`PADRON_PARCELAS` son el padrón maestro,
-compartido en vivo con otro repositorio
-(`docs/audits/auditoria_backend_inspecciones.md`) — abrir escritura `anon`
-expondría DNI/nombre real a cualquiera con la anon key pública. En su lugar:
+`anon` nueva. `PADRON_SOCIOS`/`PADRON_PARCELAS` son el padrón maestro del
+proyecto. **Corrección de premisa (2026-08-26, ver
+[ADR-023](adr/ADR-023-backend-inspecciones-ya-no-comparte-base.md)):**
+hasta el 2026-08-25 esta sección decía que estaban "compartidas en vivo
+con otro repositorio" (`backend-inspecciones`,
+`docs/audits/auditoria_backend_inspecciones.md`) — ADR-023 confirmó que
+eso ya no aplica. Abrir escritura `anon` seguiría exponiendo DNI/nombre
+real a cualquiera con la anon key pública de todos modos — motivo
+suficiente por sí solo para mantener esta decisión, independiente de si
+el padrón se comparte o no con otro sistema. En su lugar:
 
 - **Lectura:** `lib/sociosSearch.js`, vía la anon key existente (mismo
   patrón que `fetchInspecciones` — sin filtro explícito por

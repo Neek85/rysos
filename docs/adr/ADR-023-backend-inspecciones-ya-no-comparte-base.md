@@ -5,7 +5,10 @@
 - **Migraciones:** `supabase/migrations/20260825183000_baseline_padron_socios_parcelas.sql`
   (tarea acompañante, ver `specs/padron_baseline_adopcion.md`)
 - **Documentos corregidos:** `CLAUDE.md`, `docs/adr/ADR-002-padron-enterprise-y-baja-cascada.md`,
-  `docs/adr/ADR-007-integridad-referencial-id-organizacion.md`
+  `docs/adr/ADR-007-integridad-referencial-id-organizacion.md`,
+  `docs/schema_live.md` (2026-08-26), `docs/audits/auditoria_backend_inspecciones.md`
+  (2026-08-26 — nota de estado agregada al inicio, contenido original
+  conservado como registro histórico)
 
 ## Contexto
 
