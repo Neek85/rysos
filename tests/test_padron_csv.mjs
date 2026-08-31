@@ -1028,6 +1028,107 @@ test('socio_provincia: vacío sigue siendo válido (campo opcional), incluso con
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })
 
+// ── 8: Distrito contra catálogo real (ronda 5) — pertenencia a la Provincia de la misma fila ──
+
+test('socio_distrito: acepta un distrito real que pertenece a la provincia declarada (Callayuc/Cutervo y Huabal/Jaén, Cajamarca -- valores reales de la primera carga)', async () => {
+  const { rows: results } = await validateSocioRows([
+    {
+      ID_Socio: 'JS-01',
+      socio_nombre_completo: 'Uno',
+      socio_dni: '11111111',
+      socio_departamento: 'Cajamarca',
+      socio_provincia: 'Cutervo',
+      socio_distrito: 'Callayuc',
+    },
+    {
+      ID_Socio: 'JS-02',
+      socio_nombre_completo: 'Dos',
+      socio_dni: '22222222',
+      socio_departamento: 'Cajamarca',
+      socio_provincia: 'Jaén',
+      socio_distrito: 'Huabal',
+    },
+  ])
+  assert.ok(results.every((r) => r.valid), JSON.stringify(results.map((r) => r.errors)))
+})
+
+test('socio_distrito: rechaza un distrito que EXISTE en el catálogo pero no pertenece a la provincia declarada ("Jaén" es distrito de la provincia Jaén, no de Cutervo)', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    {
+      ID_Socio: 'JS-01',
+      socio_nombre_completo: 'Uno',
+      socio_dni: '11111111',
+      socio_departamento: 'Cajamarca',
+      socio_provincia: 'Cutervo',
+      socio_distrito: 'Jaén',
+    },
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('Distrito') && e.includes('Cutervo')), JSON.stringify(result.errors))
+})
+
+test('socio_distrito: rechaza un distrito inexistente en el catálogo', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    {
+      ID_Socio: 'JS-01',
+      socio_nombre_completo: 'Uno',
+      socio_dni: '11111111',
+      socio_departamento: 'Cajamarca',
+      socio_provincia: 'Cutervo',
+      socio_distrito: 'Distrito Inventado',
+    },
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('Distrito')))
+})
+
+test('socio_distrito: es tolerante a mayúsculas/tildes igual que Departamento/Provincia', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    {
+      ID_Socio: 'JS-01',
+      socio_nombre_completo: 'Uno',
+      socio_dni: '11111111',
+      socio_departamento: 'CAJAMARCA',
+      socio_provincia: 'cutervo',
+      socio_distrito: 'CALLAYUC',
+    },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
+
+test('socio_distrito: con valor pero SIN Provincia en la misma fila, se rechaza (no se puede validar pertenencia)', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_departamento: 'Cajamarca', socio_distrito: 'Callayuc' },
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('Distrito')))
+})
+
+test('socio_distrito: con valor pero SIN Departamento ni Provincia, no duplica el error de Distrito (ya alcanza con el de Provincia)', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_distrito: 'Callayuc' },
+  ])
+  assert.equal(result.valid, false)
+  // Sin Provincia en la fila, el Distrito no puede validarse -- pero como
+  // tampoco había Provincia, ese es el único motivo reportado (no hay
+  // Departamento tampoco, así que ni siquiera se intenta resolver Distrito).
+  assert.ok(result.errors.some((e) => e.includes('Distrito')))
+})
+
+test('socio_distrito: vacío sigue siendo válido (campo opcional), incluso con Departamento/Provincia presentes', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    {
+      ID_Socio: 'JS-01',
+      socio_nombre_completo: 'Uno',
+      socio_dni: '11111111',
+      socio_departamento: 'Cajamarca',
+      socio_provincia: 'Cutervo',
+      socio_distrito: '',
+    },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
+
 // ── 1g: aviso no bloqueante de hectáreas ≥1000 ──
 
 test('validateParcelaRows: hectáreas totales ≥1000 generan un aviso no bloqueante en hectareWarnings, la fila igual se importa', async () => {

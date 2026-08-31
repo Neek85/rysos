@@ -1,14 +1,14 @@
 # Spec — Mejoras al Importador de Padrón Masivo (CSV)
 
-- **Estado:** **Implementado** (ronda 4, 2026-09-01) — ver sección 7 para
-  el diseño/implementación de esta ronda (fecha de nacimiento
-  determinística + validación de Provincia). Rondas 1-3 (secciones 1-6)
-  quedan cerradas, sin reabrir salvo la corrección puntual documentada en
-  7.1 (reemplaza el diseño de fecha de la ronda 3, que resultó ambiguo).
+- **Estado:** **Implementado** (ronda 5, 2026-09-01) — ver sección 8 para
+  el diseño/implementación de esta ronda (validación de Distrito, tercer
+  nivel de ubigeo). Rondas 1-4 (secciones 1-7) quedan cerradas, sin
+  reabrir.
 - **Fecha:** 2026-08-31 (ronda 1: diseño; ronda 2: cierre de decisiones +
   implementación; ronda 3, mismo día: hallazgos de la primera carga real
   de producción, COOP-AROMAS-VALLE, 618 socios / 825 parcelas); 2026-09-01
-  (ronda 4: corrección de ambigüedad en fecha + extensión a Provincia)
+  (ronda 4: corrección de ambigüedad en fecha + extensión a Provincia;
+  ronda 5, mismo día: extensión a Distrito)
 - **Contexto previo:** `ADR-027-certificaciones-normalizadas.md`,
   `specs/padron_certificaciones_normalizado.md` (diseño original de las
   columnas dinámicas y del rechazo por columna no reconocida, sección 6.1),
@@ -851,3 +851,86 @@ pipeline existente, no un campo nuevo en el retorno.
 | **Filas reales que dependían del fallback D/M ahora se rechazan** | Sin evidencia de que existan en el dataset real de COOP-AROMAS-VALLE (todas las fechas muestreadas son M/D consistentes) — pero si aparece alguna al reimportar, hay que corregirla a mano en el Excel, no es un bug. |
 | **Provincia más estricta que el formulario manual** | Misma asimetría ya aceptada para Departamento en la ronda 3 (sección 6.1.f) — el importador masivo es más estricto a propósito; el formulario manual sigue teniendo la opción "Otro" sin cambios. |
 | **Reimportar un CSV con Provincia pero sin Departamento (columna eliminada a mano, por ejemplo)** | Ahora se rechaza esa fila explícitamente, con un mensaje que indica el motivo — antes de esta ronda, Provincia no se validaba en absoluto, así que este es un caso nuevo de rechazo, no una regresión de algo que antes funcionaba. |
+
+---
+
+## 8. Ronda 5 (2026-09-01) — validación de Distrito (tercer nivel de ubigeo)
+
+### 8.0 Investigación (antes de implementar)
+
+Pedido explícito de investigar 2 cosas antes de tocar código:
+
+**a. ¿`Distrito` ya existe como campo, sin validar?** Sí, en los 3
+lugares donde correspondía revisar:
+- `PADRON_SOCIOS.socio_distrito` — columna real confirmada
+  (`docs/schema_live.md:153`).
+- `socioSchema.socio_distrito: str` (`lib/validations/socios.js:100`) —
+  texto libre, sin ninguna validación de formato/catálogo, exactamente el
+  mismo estado en que estaba `socio_provincia` antes de la ronda 4.
+- Columna reconocida del CSV desde siempre: `SOCIO_EXPORT_COLUMNS`
+  (`lib/padronCsv.js:35`) y `SOCIO_FIELD_LABELS.socio_distrito =
+  'Distrito'` (`lib/padronCsv.js:78`).
+
+**b. ¿El catálogo ya tiene datos de Distrito?** Sí, completos:
+`lib/ubigeoData.js:19-25` ya exponía `getDistritos(departamentoNombre,
+provinciaNombre)`, resolviendo sobre `lib/data/ubigeo_peru.json` — 25
+departamentos / 196 provincias / **1869 distritos**. No se creó ningún
+archivo ni dataset nuevo.
+
+**Salvedad documentada explícitamente (no bloqueante, pero real):** a
+diferencia de Departamento/Provincia ("alta confianza" según el propio
+`_meta` del JSON), el dato de Distrito tiene confianza MENOR — el
+`_meta` dice textual: *"La lista de distritos es un esfuerzo de buena fe
+pero puede tener omisiones o algún nombre desactualizado, sobre todo en
+provincias con muchos distritos pequeños/rurales"*. `docs/schema_live.md:234-238`
+documenta que este riesgo ya fue aceptado explícitamente con el usuario
+en una ronda anterior del proyecto (no algo nuevo de esta tarea). Se
+documenta acá para que quede claro: si empiezan a aparecer rechazos
+falsos de Distrito en producción, la causa más probable es una omisión
+real del dataset (no un bug del validador) — candidato a contrastar
+contra el Ubigeo oficial del INEI si se vuelve un problema recurrente
+(misma recomendación que ya trae el propio `_meta`).
+
+**Conclusión:** escenario simple (extender validación existente, no
+agregar campo ni dataset nuevo) — se procedió a implementar en la misma
+tarea, tal como preveía el pedido para este caso.
+
+### 8.1 Diseño
+
+Extiende `applyUbigeoCatalogChecks` (`lib/padronCsv.js`, ya existente
+desde la ronda 4) con un tercer nivel en cascada: `socio_distrito` (si no
+está vacío) debe pertenecer a la `socio_provincia` declarada **en la
+misma fila** — mismo criterio exacto que Provincia→Departamento:
+
+- Resuelve `provinciaCanonica` (ya lo hacía la ronda 4 solo para validar
+  membresía; ahora además se **retiene** el nombre canónico, porque
+  `getDistritos(departamentoCanonico, provinciaCanonica)` necesita el
+  nombre EXACTO del catálogo, no uno normalizado).
+- Distrito con valor pero sin Provincia válida en la misma fila →
+  rechazo, con mensaje propio SOLO si la Provincia estaba vacía (si ya
+  estaba inválida o sin Departamento, ese error de arriba alcanza — no
+  se duplica, mismo patrón que Provincia sin Departamento).
+- Comparación normalizada (NFD + strip de diacríticos, minúsculas) igual
+  que los otros 2 niveles.
+
+### 8.2 Contrato de datos
+
+Sin cambios de forma — misma firma que las rondas 3-4
+(`{ rows, unrecognizedColumns }` para Socios). Distrito es una regla de
+validación más dentro del mismo `applyUbigeoCatalogChecks`.
+
+### 8.3 Archivos tocados
+
+- `lib/padronCsv.js` — `applyUbigeoCatalogChecks` extendida con el nivel
+  Distrito; import de `getDistritos` agregado.
+- `tests/test_padron_csv.mjs` — 7 tests nuevos (válido, existe pero en
+  otra provincia, inexistente, tolerancia mayúsculas/tildes, sin
+  Provincia en la fila, sin Departamento ni Provincia -- no duplica
+  error, vacío sigue siendo válido).
+
+### 8.4 Riesgos
+
+| Riesgo | Detalle |
+|---|---|
+| **Falsos rechazos por dataset de Distrito incompleto** | Riesgo real y mayor que en Departamento/Provincia (ver 8.0.b) — el propio `_meta` del JSON lo advierte. Si aparece en producción, no es un bug del validador, es una omisión del dataset — corregible agregando el distrito faltante a `lib/data/ubigeo_peru.json` o contrastando contra el INEI. |
+| **Distrito más estricto que el formulario manual** | Misma asimetría ya aceptada para Departamento/Provincia (secciones 6.1.f/7.2) — `UbigeoSelect.jsx` sigue teniendo "Otro" en los 3 niveles, sin cambios. |
