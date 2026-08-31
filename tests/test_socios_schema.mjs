@@ -87,13 +87,22 @@ test('socioSchema acepta los 8 flags de certificación en "Sí"/"No"', () => {
 
 // mejoras_importador_padron_masivo.md ronda 3: socio_fecha_nacimiento
 // gana validación de formato (antes era string libre sin chequeo).
-test('socioSchema acepta socio_fecha_nacimiento en D/M/AAAA o M/D/AAAA, con o sin ceros', () => {
+// Ronda 4: formato ÚNICO M/D/AAAA (mes primero) -- ronda 3 aceptaba D/M o
+// M/D indistintamente, lo cual era ambiguo para fechas donde ambas partes
+// son ≤12 (ver comentario de fechaNacimiento en lib/validations/socios.js).
+test('socioSchema acepta socio_fecha_nacimiento en M/D/AAAA (mes primero), con o sin ceros', () => {
   assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '4/29/1986' })).success, true)
-  assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '29/04/1986' })).success, true)
+  assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '04/29/1986' })).success, true)
   assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '' })).success, true)
 })
 
-test('socioSchema rechaza socio_fecha_nacimiento con formato inválido (ISO con guiones, o partes fuera de rango)', () => {
+test('socioSchema rechaza socio_fecha_nacimiento en orden D/M (día primero) -- ya no hay fallback ambiguo', () => {
+  // "29/4/1986" solo tiene sentido como día/mes (29 no puede ser mes) --
+  // antes de la ronda 4 esto pasaba por el fallback D/M; ahora se rechaza.
+  assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '29/4/1986' })).success, false)
+})
+
+test('socioSchema rechaza socio_fecha_nacimiento con formato inválido (ISO con guiones, o mes fuera de rango)', () => {
   assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '1986-04-29' })).success, false)
   assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '45/13/1990' })).success, false)
 })

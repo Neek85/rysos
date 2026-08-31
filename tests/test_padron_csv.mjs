@@ -878,7 +878,9 @@ test('socio_dni: fila con 8 dígitos válidos es válida', async () => {
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })
 
-// ── 1c: formato de fecha de nacimiento (D/M/AAAA o M/D/AAAA, sin ceros) ──
+// ── 1c/ronda 4: formato ÚNICO y determinístico M/D/AAAA (mes primero) ──
+// Reemplaza el diseño ambiguo de la ronda 3 ("acepta D/M o M/D, el que
+// matchee") -- ver mejoras_importador_padron_masivo.md sección 7.
 
 test('socio_fecha_nacimiento: acepta el formato real de la primera carga (M/D/AAAA sin ceros, ej. "4/29/1986")', async () => {
   const { rows: [result] } = await validateSocioRows([
@@ -887,11 +889,33 @@ test('socio_fecha_nacimiento: acepta el formato real de la primera carga (M/D/AA
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })
 
-test('socio_fecha_nacimiento: acepta también D/M/AAAA con ceros ("29/04/1986")', async () => {
+test('socio_fecha_nacimiento: fecha ambigua "3/4/1990" se interpreta SIEMPRE como mes/día (4 de marzo) -- válida, determinística, nunca "3 de abril"', async () => {
+  // "3/4/1990" es válida en CUALQUIER orden (3 y 4 caben como día o mes) --
+  // exactamente el caso ambiguo que motivó esta corrección. El campo sigue
+  // siendo texto libre de display (no se parsea a Date en ningún lado del
+  // repo), así que lo único verificable en código es que la regla NO
+  // depende de cuál interpretación "tiene sentido" -- ver el test
+  // siguiente ("13/4/1990") para una prueba más concreta: un valor que
+  // SOLO tendría sentido como D/M debe rechazarse, no aceptarse con fallback.
   const { rows: [result] } = await validateSocioRows([
-    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_fecha_nacimiento: '29/04/1986' },
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_fecha_nacimiento: '3/4/1990' },
   ])
   assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
+
+test('socio_fecha_nacimiento: "13/4/1990" se RECHAZA -- solo tendría sentido como D/M (día 13, mes 4), y D/M ya no se acepta (antes de esta ronda SÍ pasaba por fallback ambiguo)', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_fecha_nacimiento: '13/4/1990' },
+  ])
+  assert.equal(result.valid, false)
+})
+
+test('socio_fecha_nacimiento: "29/4/1986" (orden día/mes, invertido respecto al real) se RECHAZA como formato inválido, no se acepta silenciosamente', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_fecha_nacimiento: '29/4/1986' },
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('fecha')))
 })
 
 test('socio_fecha_nacimiento: vacío sigue siendo válido (campo opcional)', async () => {
@@ -901,7 +925,7 @@ test('socio_fecha_nacimiento: vacío sigue siendo válido (campo opcional)', asy
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })
 
-test('socio_fecha_nacimiento: rechaza un valor donde ninguna parte cabe como día/mes (ej. "45/13/1990")', async () => {
+test('socio_fecha_nacimiento: rechaza un valor donde el mes está fuera de rango (ej. "45/13/1990")', async () => {
   const { rows: [result] } = await validateSocioRows([
     { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_fecha_nacimiento: '45/13/1990' },
   ])
@@ -952,6 +976,54 @@ test('socio_departamento: acepta el valor real de la primera carga ("Cajamarca")
 test('socio_departamento: vacío sigue siendo válido (campo opcional)', async () => {
   const { rows: [result] } = await validateSocioRows([
     { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_departamento: '' },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
+
+// ── 7: Provincia contra catálogo real (ronda 4) — pertenencia al Departamento de la misma fila ──
+
+test('socio_provincia: acepta una provincia real que pertenece al departamento declarado (Cutervo/Jaén, Cajamarca -- valores reales de la primera carga)', async () => {
+  const { rows: results } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_departamento: 'Cajamarca', socio_provincia: 'Cutervo' },
+    { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos', socio_dni: '22222222', socio_departamento: 'Cajamarca', socio_provincia: 'Jaén' },
+  ])
+  assert.ok(results.every((r) => r.valid), JSON.stringify(results.map((r) => r.errors)))
+})
+
+test('socio_provincia: rechaza una provincia que EXISTE en el catálogo pero no pertenece al departamento declarado ("Cañete" es de Lima, no de Cajamarca)', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_departamento: 'Cajamarca', socio_provincia: 'Cañete' },
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('Provincia') && e.includes('Cajamarca')), JSON.stringify(result.errors))
+})
+
+test('socio_provincia: rechaza una provincia inexistente en el catálogo', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_departamento: 'Cajamarca', socio_provincia: 'Provincia Inventada' },
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('Provincia')))
+})
+
+test('socio_provincia: es tolerante a mayúsculas/tildes igual que Departamento', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_departamento: 'CAJAMARCA', socio_provincia: 'jaén' },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
+
+test('socio_provincia: con valor pero SIN Departamento en la misma fila, se rechaza (no se puede validar pertenencia)', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_provincia: 'Cutervo' },
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('Provincia')))
+})
+
+test('socio_provincia: vacío sigue siendo válido (campo opcional), incluso con Departamento presente', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_departamento: 'Cajamarca', socio_provincia: '' },
   ])
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })

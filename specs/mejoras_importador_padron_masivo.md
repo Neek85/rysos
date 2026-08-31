@@ -1,12 +1,14 @@
 # Spec — Mejoras al Importador de Padrón Masivo (CSV)
 
-- **Estado:** **Implementado** (ronda 3, 2026-08-31) — ver sección 6 para
-  el diseño/implementación de esta ronda (controles de calidad post-carga
-  real + corrección de labels de hectárea). Rondas 1-2 (secciones 1-5)
-  quedan cerradas, sin reabrir.
+- **Estado:** **Implementado** (ronda 4, 2026-09-01) — ver sección 7 para
+  el diseño/implementación de esta ronda (fecha de nacimiento
+  determinística + validación de Provincia). Rondas 1-3 (secciones 1-6)
+  quedan cerradas, sin reabrir salvo la corrección puntual documentada en
+  7.1 (reemplaza el diseño de fecha de la ronda 3, que resultó ambiguo).
 - **Fecha:** 2026-08-31 (ronda 1: diseño; ronda 2: cierre de decisiones +
   implementación; ronda 3, mismo día: hallazgos de la primera carga real
-  de producción, COOP-AROMAS-VALLE, 618 socios / 825 parcelas)
+  de producción, COOP-AROMAS-VALLE, 618 socios / 825 parcelas); 2026-09-01
+  (ronda 4: corrección de ambigüedad en fecha + extensión a Provincia)
 - **Contexto previo:** `ADR-027-certificaciones-normalizadas.md`,
   `specs/padron_certificaciones_normalizado.md` (diseño original de las
   columnas dinámicas y del rechazo por columna no reconocida, sección 6.1),
@@ -713,3 +715,139 @@ no breaking.
 | **Reimportar un CSV exportado ANTES de esta ronda con hip/hrp** | El label viejo (Ha. Infraestructura Productiva/Ha. Reserva/Protección) ya no matchea `PARCELA_REVERSE_LABELS` → esas 2 columnas pasan a `unrecognizedColumns` (aviso no bloqueante desde la ronda 2, no bloquea) pero sus valores se pierden silenciosamente para esas filas si el usuario no nota el banner amarillo. |
 | **Los otros 3 archivos en `~/Downloads/`** (`Padron_Parcelas_20260818*.csv`, `Padron_Socios_20260818*.csv`, `Plantilla_Parcelas.csv`/`Plantilla_Socios.csv`) | No se analizaron en esta ronda (son exports/plantillas más viejos, sin relación con el reporte "5 columnas no reconocidas" que motivó esta tarea, que apuntaba específicamente a los archivos `_prueba`). Si el usuario los va a reimportar también, valen las mismas 2 filas de riesgo de arriba. |
 | **`socio_departamento` ahora rechaza fila si no matchea el catálogo** | Más estricto que el formulario manual (que tiene la opción "Otro"). Aceptado por diseño explícito del pedido — documentado en 6.1.f como asimetría consciente, no un descuido. |
+
+---
+
+## 7. Ronda 4 (2026-09-01) — fecha de nacimiento determinística + validación de Provincia
+
+### 7.1 Corrección: fecha de nacimiento — de "acepta ambos órdenes" a formato ÚNICO M/D/AAAA
+
+**Problema con el diseño de la ronda 3:** `fechaNacimiento` aceptaba
+D/M/AAAA o M/D/AAAA indistintamente (`max(parte1,parte2) <= 31 &&
+min(parte1,parte2) <= 12`). Esto es **ambiguo y silenciosamente
+incorrecto** para cualquier fecha donde ambas partes son ≤12 — ej.
+`"3/4/1990"`: ¿4 de marzo o 3 de abril? Ambas son fechas válidas, no hay
+forma de saber cuál es la real sin más contexto. El diseño de la ronda 3
+nunca fallaba de forma RUIDOSA (rechazando) en ese caso — fallaba de
+forma SILENCIOSA (aceptando con una interpretación arbitraria que podía
+estar invertida respecto a la real).
+
+**Corrección:** formato único y determinístico **M/D/AAAA** (mes
+primero), sin exigir ceros de relleno. Basado en la misma evidencia real
+de la ronda 3 (sección 0, sin cambios: la primera carga real de
+COOP-AROMAS-VALLE trae fechas en M/D/AAAA sin padding, ej. `"4/29/1986"`
+= 29 de abril, inequívoco porque 29 no puede ser mes) — nunca hubo
+evidencia real de D/M en este dataset, así que ya no hace falta
+tolerarlo. Un valor en orden D/M (ej. `"29/4/1986"`, día primero) ahora
+se **rechaza explícito** como formato inválido — no se acepta con un
+fallback silencioso.
+
+```js
+// lib/validations/socios.js
+const FECHA_NACIMIENTO_REGEX = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/
+const fechaNacimiento = z.string().optional().nullable().or(z.literal('')).refine(
+  (val) => {
+    if (!val) return true
+    const match = val.match(FECHA_NACIMIENTO_REGEX)
+    if (!match) return false
+    const month = Number(match[1])
+    const day = Number(match[2])
+    return month >= 1 && month <= 12 && day >= 1 && day <= 31
+  },
+  { message: 'Formato de fecha inválido (usar M/D/AAAA, mes primero, ej. 4/29/1986)' }
+)
+```
+
+**Por qué "aceptar ambos" es inaceptable, no solo subóptimo:** un
+importador de datos reales no puede adivinar la intención del usuario
+cuando existen dos lecturas igualmente válidas — hacerlo con un fallback
+silencioso significa que una fracción desconocida de fechas quedaría
+GUARDADA MAL sin que nadie se entere (a diferencia de un rechazo, que sí
+se nota y se corrige). El único diseño seguro para un campo de fecha
+ambiguo es fijar una convención única y rechazar explícitamente lo que no
+la cumpla — obliga a corregir el dato en el origen (Excel) en vez de
+adivinar en el importador.
+
+**Impacto retroactivo:** cualquier fila real que dependiera del fallback
+D/M (fecha con día >12, ej. `"25/3/1980"`) que antes pasaba por la
+interpretación D/M ahora se **rechaza** — no hay evidencia de que el
+dataset real de COOP-AROMAS-VALLE tenga casos así (todas las fechas
+muestreadas son M/D consistentes), pero si aparece alguno al reimportar,
+es la señal correcta de que esa fila necesita corregirse a mano sabiendo
+que el sistema espera mes primero, no un bug del importador.
+
+**Ejemplo de plantilla actualizado:** `SOCIO_TEMPLATE_EXAMPLE.socio_fecha_nacimiento`
+(`lib/padronCsv.js`) pasó de `'14/5/1980'` (válida en cualquier orden, a
+propósito no ambigua bajo el diseño viejo) a `'5/14/1980'` (14 de mayo —
+solo válida como M/D, ya que 14 no puede ser mes).
+
+### 7.2 Extensión: validación de Provincia contra el catálogo real
+
+**Sin catálogo nuevo** — reusa `getProvincias(departamentoNombre)`,
+función ya existente en `lib/ubigeoData.js` (confirmado antes de escribir
+código, mismo criterio que la ronda 3 con Departamento). El JSON
+subyacente (`lib/data/ubigeo_peru.json`) ya tenía las ~196 provincias
+completas — la ronda 3 solo no las usaba porque no había sido pedido
+todavía.
+
+**Regla:** `socio_provincia` (si no está vacía) debe pertenecer al
+`socio_departamento` declarado **en la misma fila** — no alcanza con que
+la provincia exista en el catálogo general, tiene que existir DENTRO de
+ese departamento específico. `applyDepartamentoCatalogCheck` se renombró
+a `applyUbigeoCatalogChecks` (mismo archivo, `lib/padronCsv.js`) y ahora
+resuelve primero el nombre canónico del departamento (necesario porque
+`getProvincias()` requiere el nombre exacto del catálogo, no uno
+normalizado) y luego valida la provincia contra esa lista específica.
+
+**Caso de borde diseñado, no pedido explícitamente pero necesario:**
+Provincia con valor pero SIN Departamento en la misma fila se **rechaza**
+— no hay forma de validar pertenencia sin saber a qué departamento
+debería pertenecer. Si el Departamento está presente pero es inválido
+(no está en el catálogo), ese error ya cubre la fila — no se duplica un
+segundo mensaje de Provincia sobre un Departamento que ya se sabe que
+está mal.
+
+**Misma decisión de arquitectura que Departamento (sección 6.1.f, sin
+cambios):** el chequeo vive en `padronCsv.js`, no en `socioSchema` —
+`UbigeoSelect.jsx` (formulario manual) sigue ofreciendo "Otro / no está
+en la lista" tanto para Departamento como para Provincia, y ese escape
+hatch no debe romperse.
+
+**Ejemplo real usado para los tests** (`lib/ubigeoData.js`, catálogo
+real): Cajamarca → `Cutervo`/`Jaén` (provincias reales observadas en la
+muestra de `Plantilla_Socios_prueba.csv`, sección 0); `Cañete` (provincia
+real, pero de Lima) usada como caso "existe en el catálogo pero no
+pertenece a ese departamento".
+
+### 7.3 Contrato de datos
+
+Sin cambios de forma en `validateSocioRows`/`validateParcelaRows` (sigue
+`{ rows, unrecognizedColumns }` para Socios) — ambos cambios de esta
+ronda son reglas de validación nuevas/corregidas dentro del mismo
+pipeline existente, no un campo nuevo en el retorno.
+
+### 7.4 Archivos tocados
+
+- `lib/validations/socios.js` — `fechaNacimiento`/`FECHA_NACIMIENTO_REGEX`
+  reescritos (mes primero, sin fallback ambiguo).
+- `lib/padronCsv.js` — `applyDepartamentoCatalogCheck` renombrada a
+  `applyUbigeoCatalogChecks` y extendida con la validación de Provincia;
+  `DEPARTAMENTOS_NORMALIZADOS` (Set) reemplazado por
+  `DEPARTAMENTOS_CANONICOS_POR_NORMALIZADO` (Map normalizado → nombre
+  canónico, necesario para poder llamar `getProvincias()`); import de
+  `getProvincias` agregado; `SOCIO_TEMPLATE_EXAMPLE.socio_fecha_nacimiento`
+  actualizado a `'5/14/1980'`.
+- `tests/test_padron_csv.mjs` — 2 tests de fecha reescritos (el que
+  aceptaba D/M ahora prueba que se rechaza), 2 tests nuevos de fecha
+  (ambigüedad determinística, "13/4/1990" solo válida como D/M rechazada),
+  6 tests nuevos de Provincia.
+- `tests/test_socios_schema.mjs` — 1 test de fecha reescrito, 1 test
+  nuevo (rechaza orden D/M).
+
+### 7.5 Riesgos / notas
+
+| Riesgo | Detalle |
+|---|---|
+| **Filas reales que dependían del fallback D/M ahora se rechazan** | Sin evidencia de que existan en el dataset real de COOP-AROMAS-VALLE (todas las fechas muestreadas son M/D consistentes) — pero si aparece alguna al reimportar, hay que corregirla a mano en el Excel, no es un bug. |
+| **Provincia más estricta que el formulario manual** | Misma asimetría ya aceptada para Departamento en la ronda 3 (sección 6.1.f) — el importador masivo es más estricto a propósito; el formulario manual sigue teniendo la opción "Otro" sin cambios. |
+| **Reimportar un CSV con Provincia pero sin Departamento (columna eliminada a mano, por ejemplo)** | Ahora se rechaza esa fila explícitamente, con un mensaje que indica el motivo — antes de esta ronda, Provincia no se validaba en absoluto, así que este es un caso nuevo de rechazo, no una regresión de algo que antes funcionaba. |
