@@ -17,9 +17,11 @@ import {
   validateSocioRows,
   validateParcelaRows,
   fetchSocioCertOrgEstatus,
+  decodeCsvBuffer,
   SOCIO_FIELD_LABELS,
   PARCELA_FIELD_LABELS,
 } from '../lib/padronCsv.js'
+import { HECTARE_FIELDS } from '../lib/validations/socios.js'
 
 // ---------------------------------------------------------------
 // arrayToCsv / buildSociosCsv
@@ -247,9 +249,11 @@ test('normalizeDecimalComma (vía validateParcelaRows): un valor con punto Y com
 // validateSocioRows / validateParcelaRows
 // ---------------------------------------------------------------
 
-test('validateSocioRows marca como válida una fila con ID_Socio y nombre', async () => {
-  const { rows: [result] } = await validateSocioRows([{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba Import' }])
-  assert.equal(result.valid, true)
+test('validateSocioRows marca como válida una fila con ID_Socio, nombre y DNI', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba Import', socio_dni: '12345678' },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
   assert.equal(result.errors.length, 0)
 })
 
@@ -300,14 +304,18 @@ test('validateSocioRows/validateParcelaRows con lista vacía devuelve unrecogniz
 // Encabezados legibles en importación (normalizeRowKeys)
 // ---------------------------------------------------------------
 
-test('validateSocioRows acepta encabezados legibles ("Código de Socio", "Nombre Completo") igual que los técnicos', async () => {
-  const { rows: [result] } = await validateSocioRows([{ 'Código de Socio': 'JS-00099', 'Nombre Completo': 'Prueba Import' }])
+test('validateSocioRows acepta encabezados legibles ("Código de Socio", "Nombre Completo", "DNI") igual que los técnicos', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { 'Código de Socio': 'JS-00099', 'Nombre Completo': 'Prueba Import', DNI: '12345678' },
+  ])
   assert.equal(result.valid, true, JSON.stringify(result.errors))
   assert.equal(result.data.ID_Socio, 'JS-00099')
 })
 
 test('validateSocioRows acepta encabezados técnicos en minúsculas/mayúsculas distintas ("id_socio")', async () => {
-  const { rows: [result] } = await validateSocioRows([{ id_socio: 'JS-00099', socio_nombre_completo: 'Prueba Import' }])
+  const { rows: [result] } = await validateSocioRows([
+    { id_socio: 'JS-00099', socio_nombre_completo: 'Prueba Import', socio_dni: '12345678' },
+  ])
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })
 
@@ -321,13 +329,13 @@ test('validateParcelaRows acepta encabezados legibles ("Código de Parcela", "Ha
 
 test('validateSocioRows acepta cert_org_estatus por su encabezado legible y por el técnico', async () => {
   const { rows: [byLabel] } = await validateSocioRows([
-    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', 'Estatus de Certificación Orgánica': 'Organico' },
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', 'Estatus de Certificación Orgánica': 'Organico' },
   ])
   assert.equal(byLabel.valid, true, JSON.stringify(byLabel.errors))
   assert.equal(byLabel.data.cert_org_estatus, 'Organico')
 
   const { rows: [byTechnicalKey] } = await validateSocioRows([
-    { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos', cert_org_estatus: 'Sin Estatus' },
+    { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos', socio_dni: '22222222', cert_org_estatus: 'Sin Estatus' },
   ])
   assert.equal(byTechnicalKey.valid, true, JSON.stringify(byTechnicalKey.errors))
   assert.equal(byTechnicalKey.data.cert_org_estatus, 'Sin Estatus')
@@ -358,13 +366,15 @@ test('validateSocioRows marca inválidas las filas con el mismo DNI repetido, au
   assert.ok(results[0].errors.some((e) => e.includes('DNI duplicado')))
 })
 
-test('validateSocioRows no marca duplicado un DNI vacío repetido (campo opcional)', async () => {
+test('validateSocioRows marca inválida una fila sin DNI (ahora requerido, ronda 3) sin marcarla como duplicado', async () => {
   const { rows: results } = await validateSocioRows([
     { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno' },
     { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos' },
   ])
-  assert.equal(results[0].valid, true)
-  assert.equal(results[1].valid, true)
+  assert.equal(results[0].valid, false)
+  assert.equal(results[1].valid, false)
+  assert.ok(results[0].errors.some((e) => e.includes('socio_dni')))
+  assert.ok(!results[0].errors.some((e) => e.includes('duplicado')))
 })
 
 test('validateParcelaRows marca inválidas ambas filas con el mismo ID_Parcela_Fija repetido', async () => {
@@ -511,8 +521,10 @@ test('validateParcelaRows con ID_Socio real en la BD no marca error de "no exist
 })
 
 test('validateSocioRows/validateParcelaRows sin supabase/organizationId no intentan tocar la BD (compatibilidad hacia atrás)', async () => {
-  const { rows: [result] } = await validateSocioRows([{ ID_Socio: 'JS-01', socio_nombre_completo: 'Uno' }])
-  assert.equal(result.valid, true)
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111' },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
   const { rows: [resultParcela] } = await validateParcelaRows([{ ID_Parcela_Fija: 'P-01', ID_Socio: 'JS-01', hcp: '2' }])
   assert.equal(resultParcela.valid, true)
 })
@@ -566,7 +578,7 @@ test('buildSocioTemplateCsv con certificaciones agrega columnas dinámicas en "N
 test('validateSocioRows con supabase reconoce una columna de certificación por su `nombre` activo y la traduce al campo interno fijo', async () => {
   const supabase = makeFakeSupabase({ CERTIFICACIONES_CATALOGO: [RAINFOREST_CERT] })
   const { rows: [result] } = await validateSocioRows(
-    [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', 'Rainforest Alliance': 'Sí' }],
+    [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', socio_dni: '12345678', 'Rainforest Alliance': 'Sí' }],
     supabase
   )
   assert.equal(result.valid, true, JSON.stringify(result.errors))
@@ -575,7 +587,7 @@ test('validateSocioRows con supabase reconoce una columna de certificación por 
 
 test('validateSocioRows sin supabase (modo offline) NO valida columnas de certificación -- las deja pasar sin reconocer, sin rechazar el archivo', async () => {
   const { rows: [result] } = await validateSocioRows([
-    { ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', 'Rainforest Alliance': 'Sí' },
+    { ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', socio_dni: '12345678', 'Rainforest Alliance': 'Sí' },
   ])
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })
@@ -591,7 +603,7 @@ test('validateSocioRows sin supabase (modo offline) NO valida columnas de certif
 test('validateSocioRows con supabase YA NO rechaza el archivo por una columna no reconocida (typo) -- la reporta en unrecognizedColumns', async () => {
   const supabase = makeFakeSupabase({ CERTIFICACIONES_CATALOGO: [RAINFOREST_CERT] })
   const { rows, unrecognizedColumns } = await validateSocioRows(
-    [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', 'Rainforezt Alliance': 'Sí' }],
+    [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', socio_dni: '12345678', 'Rainforezt Alliance': 'Sí' }],
     supabase
   )
   assert.equal(rows[0].valid, true, JSON.stringify(rows[0].errors)) // la fila se procesa igual, la columna typo se ignora
@@ -601,7 +613,7 @@ test('validateSocioRows con supabase YA NO rechaza el archivo por una columna no
 test('validateSocioRows con supabase reporta en unrecognizedColumns una columna de certificación INACTIVA (no en el catálogo activo)', async () => {
   const supabase = makeFakeSupabase({ CERTIFICACIONES_CATALOGO: [] }) // ninguna activa
   const { rows, unrecognizedColumns } = await validateSocioRows(
-    [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', 'Rainforest Alliance': 'Sí' }],
+    [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Prueba', socio_dni: '12345678', 'Rainforest Alliance': 'Sí' }],
     supabase
   )
   assert.equal(rows[0].valid, true, JSON.stringify(rows[0].errors))
@@ -628,25 +640,47 @@ test('validateParcelaRows con encabezados válidos no reporta ninguna columna no
   assert.deepEqual(unrecognizedColumns, [])
 })
 
-test('validateSocioRows bloquea el archivo COMPLETO si una columna no obligatoria tiene al menos 1 valor y al menos 1 vacío (DNI)', async () => {
-  await assert.rejects(
-    () =>
-      validateSocioRows([
-        { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111' },
-        { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos', socio_dni: '' },
-      ]),
-    (err) => {
-      assert.ok(err.message.includes('DNI'), err.message)
-      assert.ok(err.message.includes('fila(s) 3'), err.message) // fila 1 = encabezado, fila 3 = 2da fila de datos
-      return true
-    }
-  )
+// Ronda 3 (mejoras_importador_padron_masivo.md, 2026-08-31): "columna
+// dispareja" RETIRADO por completo para Socios -- ver el comentario en
+// lib/padronCsv.js. Los 4 tests siguientes reemplazan a los que antes
+// probaban el bloqueo (ya no existe) -- confirman la exención total,
+// incluido el patrón real reportado por el usuario tras la primera carga
+// (fecha_nacimiento/celular_socio parcialmente vacíos en el mismo archivo).
+
+test('validateSocioRows NO bloquea el archivo con fecha_nacimiento y celular_socio parcialmente vacíos (patrón real reportado tras la primera carga)', async () => {
+  const { rows } = await validateSocioRows([
+    {
+      ID_Socio: 'JS-01',
+      socio_nombre_completo: 'Uno',
+      socio_dni: '11111111',
+      socio_fecha_nacimiento: '5/6/1984',
+      celular_socio: '987654321',
+    },
+    {
+      ID_Socio: 'JS-02',
+      socio_nombre_completo: 'Dos',
+      socio_dni: '22222222',
+      socio_fecha_nacimiento: '',
+      celular_socio: '',
+    },
+  ])
+  assert.equal(rows.length, 2)
+  assert.ok(rows.every((r) => r.valid), JSON.stringify(rows.map((r) => r.errors)))
+})
+
+test('validateSocioRows NO bloquea el archivo con codigo_finca/socio_departamento parcialmente vacíos (cualquier campo opcional de Socios, no solo fecha/celular)', async () => {
+  const { rows } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', codigo_finca: 'F-001', socio_departamento: 'Cajamarca' },
+    { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos', socio_dni: '22222222', codigo_finca: '', socio_departamento: '' },
+  ])
+  assert.equal(rows.length, 2)
+  assert.ok(rows.every((r) => r.valid), JSON.stringify(rows.map((r) => r.errors)))
 })
 
 test('validateSocioRows NO bloquea si la columna no obligatoria está vacía en TODAS las filas (dato no cargado todavía)', async () => {
   const { rows } = await validateSocioRows([
-    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '' },
-    { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos', socio_dni: '' },
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', codigo_finca: '' },
+    { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos', socio_dni: '22222222', codigo_finca: '' },
   ])
   assert.equal(rows.length, 2)
 })
@@ -682,22 +716,17 @@ test('validateParcelaRows NO bloquea por columna dispareja en las 7 hectáreas i
   assert.ok(rows.every((r) => r.valid))
 })
 
-test('validateSocioRows bloquea por columna dispareja en una certificación dinámica (CERT_FLAG_FIELDS sí queda en el chequeo, a diferencia de las hectáreas)', async () => {
+test('validateSocioRows NO bloquea columna dispareja en una certificación dinámica (retirado por completo para Socios en la ronda 3, a diferencia de la ronda 2)', async () => {
   const supabase = makeFakeSupabase({ CERTIFICACIONES_CATALOGO: [RAINFOREST_CERT] })
-  await assert.rejects(
-    () =>
-      validateSocioRows(
-        [
-          { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', 'Rainforest Alliance': 'Sí' },
-          { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos', 'Rainforest Alliance': '' },
-        ],
-        supabase
-      ),
-    (err) => {
-      assert.ok(err.message.includes('Rainforest Alliance'), err.message)
-      return true
-    }
+  const { rows } = await validateSocioRows(
+    [
+      { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', 'Rainforest Alliance': 'Sí' },
+      { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos', socio_dni: '22222222', 'Rainforest Alliance': '' },
+    ],
+    supabase
   )
+  assert.equal(rows.length, 2)
+  assert.ok(rows.every((r) => r.valid), JSON.stringify(rows.map((r) => r.errors)))
 })
 
 // ── fetchSocioCertOrgEstatus (spec sección 1.4 -- export en vivo) ──────
@@ -755,7 +784,7 @@ test('cert_org_estatus: ida y vuelta -- el valor importado del CSV, una vez en S
   //    en row.data.cert_org_estatus (mismo objeto que createSocio
   //    recibiría como `values`, ver sociosActions.js:349-351).
   const { rows: [imported] } = await validateSocioRows([
-    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', cert_org_estatus: 'Organico' },
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', cert_org_estatus: 'Organico' },
   ])
   assert.equal(imported.valid, true, JSON.stringify(imported.errors))
   assert.equal(imported.data.cert_org_estatus, 'Organico')
@@ -775,4 +804,208 @@ test('cert_org_estatus: ida y vuelta -- el valor importado del CSV, una vez en S
   //    congelado de PADRON_SOCIOS.
   const exported = await fetchSocioCertOrgEstatus(supabase, ['socio-1-uuid'])
   assert.equal(exported.get('socio-1-uuid'), 'Organico')
+})
+
+// ---------------------------------------------------------------
+// Ronda 3 (mejoras_importador_padron_masivo.md, 2026-08-31) --
+// controles de calidad post-carga real (COOP-AROMAS-VALLE) + corrección
+// de labels de hectáreas.
+// ---------------------------------------------------------------
+
+// ── 0.a: decodeCsvBuffer -- causa raíz real de "columnas no reconocidas" ──
+
+test('decodeCsvBuffer decodifica un ArrayBuffer UTF-8 válido normalmente', () => {
+  const buffer = new TextEncoder().encode('Código de Parcela,Nombre\nCOOP-001,El Lache')
+  const text = decodeCsvBuffer(buffer.buffer)
+  assert.equal(text, 'Código de Parcela,Nombre\nCOOP-001,El Lache')
+})
+
+test('decodeCsvBuffer cae a windows-1252 cuando el buffer NO es UTF-8 válido (caso real: Excel "CSV" plano)', () => {
+  // Mismos bytes exactos que el encabezado real de Plantilla_Parcelas_prueba.csv:
+  // 'C' + 0xF3 ('ó' en CP-1252, byte suelto inválido como UTF-8) + 'digo'.
+  const buffer = new Uint8Array([0x43, 0xf3, 0x64, 0x69, 0x67, 0x6f]).buffer
+  const text = decodeCsvBuffer(buffer)
+  assert.equal(text, 'Código')
+})
+
+test('decodeCsvBuffer con BOM UTF-8 (caso real: Plantilla_Socios_prueba.csv) decodifica correcto y el BOM sigue removible por parseCsv', () => {
+  const buffer = new Uint8Array([0xef, 0xbb, 0xbf, 0x43, 0xc3, 0xb3, 0x64, 0x69, 0x67, 0x6f]).buffer // BOM + "Código" en UTF-8 real
+  const text = decodeCsvBuffer(buffer)
+  const rows = parseCsv(text + ',x\nval,y') // agrega una fila para que parseCsv tenga contenido válido
+  assert.deepEqual(rows, [{ Código: 'val', x: 'y' }])
+})
+
+// ── 0.b/1: labels de hectárea hip/hrp corregidos ──
+
+test('HECTARE_FIELDS: hip/hrp usan los labels corregidos ("Invernadero/Pasto"/"Rastrojo/Purma"), no los viejos', () => {
+  const hip = HECTARE_FIELDS.find((f) => f.field === 'hip')
+  const hrp = HECTARE_FIELDS.find((f) => f.field === 'hrp')
+  assert.equal(hip.label, 'Ha. Invernadero/Pasto')
+  assert.equal(hrp.label, 'Ha. Rastrojo/Purma')
+})
+
+test('PARCELA_FIELD_LABELS/buildParcelaTemplateCsv reflejan el label nuevo de hip/hrp (misma fuente que HECTARE_FIELDS)', () => {
+  assert.equal(PARCELA_FIELD_LABELS.hip, 'Ha. Invernadero/Pasto')
+  assert.equal(PARCELA_FIELD_LABELS.hrp, 'Ha. Rastrojo/Purma')
+  const csv = buildParcelaTemplateCsv(['JS-01'])
+  const header = csv.split('\r\n')[0]
+  assert.ok(header.includes('Ha. Invernadero/Pasto'))
+  assert.ok(header.includes('Ha. Rastrojo/Purma'))
+  assert.ok(!header.includes('Infraestructura Productiva'))
+  assert.ok(!header.includes('Reserva/Protección'))
+})
+
+// ── 1b: DNI obligatorio ──
+
+test('socio_dni: fila sin DNI queda inválida (Requerido)', async () => {
+  const { rows: [result] } = await validateSocioRows([{ ID_Socio: 'JS-01', socio_nombre_completo: 'Uno' }])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('socio_dni')))
+})
+
+test('socio_dni: fila con 7 dígitos (cero inicial perdido, patrón real de 10 de 618 filas) queda inválida', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '1043464' },
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('8 dígitos')))
+})
+
+test('socio_dni: fila con 8 dígitos válidos es válida', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '46837434' },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
+
+// ── 1c: formato de fecha de nacimiento (D/M/AAAA o M/D/AAAA, sin ceros) ──
+
+test('socio_fecha_nacimiento: acepta el formato real de la primera carga (M/D/AAAA sin ceros, ej. "4/29/1986")', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_fecha_nacimiento: '4/29/1986' },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
+
+test('socio_fecha_nacimiento: acepta también D/M/AAAA con ceros ("29/04/1986")', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_fecha_nacimiento: '29/04/1986' },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
+
+test('socio_fecha_nacimiento: vacío sigue siendo válido (campo opcional)', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_fecha_nacimiento: '' },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
+
+test('socio_fecha_nacimiento: rechaza un valor donde ninguna parte cabe como día/mes (ej. "45/13/1990")', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_fecha_nacimiento: '45/13/1990' },
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('fecha')))
+})
+
+test('socio_fecha_nacimiento: rechaza el formato ISO con guiones (ya no se acepta)', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_fecha_nacimiento: '1986-04-29' },
+  ])
+  assert.equal(result.valid, false)
+})
+
+// ── 1d: celular ya validado (confirmación, sin cambios) ──
+
+test('celular_socio: sigue rechazando un valor que no tiene 9 dígitos (regex ya existente, confirmado sin cambios)', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', celular_socio: '12345' },
+  ])
+  assert.equal(result.valid, false)
+})
+
+// ── 1e: DNI duplicado en archivo (ya existía desde antes, confirmado) ──
+// Ver 'validateSocioRows marca inválidas las filas con el mismo DNI
+// repetido, aunque el ID_Socio sea distinto' más arriba -- mismo
+// mecanismo (applyDuplicateChecks), sin cambios en esta ronda.
+
+// ── 1f: Departamento contra catálogo real de Perú ──
+
+test('socio_departamento: rechaza un valor que no es un departamento real de Perú', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_departamento: 'Departamento Inventado' },
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('Departamento')))
+})
+
+test('socio_departamento: acepta el valor real de la primera carga ("Cajamarca") y es tolerante a mayúsculas/tildes', async () => {
+  const { rows: results } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_departamento: 'Cajamarca' },
+    { ID_Socio: 'JS-02', socio_nombre_completo: 'Dos', socio_dni: '22222222', socio_departamento: 'CAJAMARCA' },
+    { ID_Socio: 'JS-03', socio_nombre_completo: 'Tres', socio_dni: '33333333', socio_departamento: 'cájamarca' },
+  ])
+  assert.ok(results.every((r) => r.valid), JSON.stringify(results.map((r) => r.errors)))
+})
+
+test('socio_departamento: vacío sigue siendo válido (campo opcional)', async () => {
+  const { rows: [result] } = await validateSocioRows([
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111', socio_departamento: '' },
+  ])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+})
+
+// ── 1g: aviso no bloqueante de hectáreas ≥1000 ──
+
+test('validateParcelaRows: hectáreas totales ≥1000 generan un aviso no bloqueante en hectareWarnings, la fila igual se importa', async () => {
+  const { rows, hectareWarnings } = await validateParcelaRows([
+    { ID_Parcela_Fija: 'P-01', ID_Socio: 'JS-01', hcp: '600', hcc: '500', ho: '', hip: '', hrp: '', hbp: '', otros_cultivo: '' },
+  ])
+  assert.equal(rows[0].valid, true, JSON.stringify(rows[0].errors))
+  assert.equal(hectareWarnings.length, 1)
+  assert.ok(hectareWarnings[0].includes('Fila 2'), hectareWarnings[0])
+  assert.ok(hectareWarnings[0].includes('1100'), hectareWarnings[0])
+})
+
+test('validateParcelaRows: hectáreas totales <1000 (caso real, máximo observado 30) NO generan aviso', async () => {
+  const { hectareWarnings } = await validateParcelaRows([
+    { ID_Parcela_Fija: 'P-01', ID_Socio: 'JS-01', hcp: '30', hcc: '', ho: '', hip: '', hrp: '', hbp: '', otros_cultivo: '' },
+  ])
+  assert.deepEqual(hectareWarnings, [])
+})
+
+test('validateSocioRows no trae hectareWarnings/missingSocioWarnings (no aplican a Socios)', async () => {
+  const result = await validateSocioRows([{ ID_Socio: 'JS-01', socio_nombre_completo: 'Uno', socio_dni: '11111111' }])
+  assert.equal(result.hectareWarnings, undefined)
+  assert.equal(result.missingSocioWarnings, undefined)
+})
+
+// ── 1h: mensaje agrupado de ID_Socio no encontrado ──
+
+test('validateParcelaRows: agrupa los ID_Socio no encontrados en missingSocioWarnings, con las filas donde aparecen (caso real: "#N/D" de una fórmula de Excel rota)', async () => {
+  const supabase = makeFakeSupabase({
+    PADRON_SOCIOS: [{ ID_Socio: 'JS-01', ID_Organizacion: 'COOP-JS' }],
+    PADRON_PARCELAS: [],
+  })
+  const { rows, missingSocioWarnings } = await validateParcelaRows(
+    [
+      { ID_Parcela_Fija: 'P-01', ID_Socio: 'JS-01', hcp: '2' },
+      { ID_Parcela_Fija: 'P-02', ID_Socio: '#N/D', hcp: '3' },
+      { ID_Parcela_Fija: 'P-03', ID_Socio: '#N/D', hcp: '1' },
+    ],
+    supabase,
+    'COOP-JS'
+  )
+  assert.equal(rows[0].valid, true, JSON.stringify(rows[0].errors))
+  assert.equal(rows[1].valid, false)
+  assert.equal(rows[2].valid, false)
+  assert.equal(missingSocioWarnings.length, 1) // un solo ID_Socio distinto agrupado, no 2 mensajes repetidos
+  assert.ok(missingSocioWarnings[0].includes('#N/D'), missingSocioWarnings[0])
+  assert.ok(missingSocioWarnings[0].includes('fila(s) 3, 4'), missingSocioWarnings[0]) // fila 1 = encabezado
+})
+
+test('validateParcelaRows: sin supabase/organizationId, missingSocioWarnings queda vacío (mismo gating que applyParcelaDbChecks)', async () => {
+  const { missingSocioWarnings } = await validateParcelaRows([{ ID_Parcela_Fija: 'P-01', ID_Socio: 'JS-INEXISTENTE', hcp: '2' }])
+  assert.deepEqual(missingSocioWarnings, [])
 })

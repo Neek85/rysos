@@ -1,12 +1,12 @@
 # Spec — Mejoras al Importador de Padrón Masivo (CSV)
 
-- **Estado:** **Implementado** (ronda 2, 2026-08-31) — las 2 preguntas
-  abiertas de la ronda 1 (commit `bee73e5`) quedaron resueltas acá (ver
-  secciones 1.4 y 3.4, marcadas **RESUELTO**) e implementadas junto con
-  las 3 mejoras completas en `lib/padronCsv.js`/`ImportPadronModal.jsx`,
-  con tests nuevos en `tests/test_padron_csv.mjs`.
-- **Fecha:** 2026-08-31 (ronda 1: diseño; ronda 2, mismo día: cierre de
-  decisiones + implementación)
+- **Estado:** **Implementado** (ronda 3, 2026-08-31) — ver sección 6 para
+  el diseño/implementación de esta ronda (controles de calidad post-carga
+  real + corrección de labels de hectárea). Rondas 1-2 (secciones 1-5)
+  quedan cerradas, sin reabrir.
+- **Fecha:** 2026-08-31 (ronda 1: diseño; ronda 2: cierre de decisiones +
+  implementación; ronda 3, mismo día: hallazgos de la primera carga real
+  de producción, COOP-AROMAS-VALLE, 618 socios / 825 parcelas)
 - **Contexto previo:** `ADR-027-certificaciones-normalizadas.md`,
   `specs/padron_certificaciones_normalizado.md` (diseño original de las
   columnas dinámicas y del rechazo por columna no reconocida, sección 6.1),
@@ -472,3 +472,244 @@ vacío en el caso feliz, la detección simétrica en Parcelas
 (`findUnrecognizedParcelaColumns`), y los casos bloqueantes/no bloqueantes
 de `findUnevenColumns` (columna con 0 filas llenas → pasa; con todas
 llenas → pasa; con mezcla → bloquea con el mensaje exacto).
+
+---
+
+## 6. Ronda 3 (2026-08-31) — controles de calidad post-carga real + corrección de labels de hectárea
+
+Disparada por la primera carga real de producción: **COOP-AROMAS-VALLE**,
+618 socios / 825 parcelas, archivos `Plantilla_Socios_prueba.csv` /
+`Plantilla_Parcelas_prueba.csv` (`~/Downloads/`, 2026-08-31). El usuario
+reportó que Parcelas salía con "5 columnas no reconocidas" y 0 de 825
+filas válidas.
+
+### 6.0 Investigación (antes de tocar código)
+
+**6.0.a — Causa raíz real de "5 columnas no reconocidas": codificación de
+caracteres, NO el reverse-label-map.**
+
+Comparación de bytes crudos del encabezado real de `Plantilla_Parcelas_prueba.csv`
+contra UTF-8:
+
+```
+Bytes reales:  43 f3 64 69 67 6f      → "C" + 0xF3 + "digo"
+UTF-8 válido:  43 c3 b3 64 69 67 6f   → "C" + 0xC3 0xB3 + "digo"  ("Código")
+```
+
+El archivo está en **Windows-1252/ANSI** (Excel "CSV" plano), no en UTF-8
+— el byte suelto `0xF3` no es una secuencia UTF-8 válida. `file.text()`
+(`ImportPadronModal.jsx`, único call site) decodifica **siempre** como
+UTF-8, así que cada encabezado con tilde se corrompe. Las 5 columnas
+reportadas como "no reconocidas" (Código de Parcela, Código de Socio,
+Código Interno de Parcela, Ha. En Producción, Ha. Reserva/Protección) son
+exactamente — y únicamente — las que tienen tilde en su label canónico;
+las que no tienen tilde (Nombre de la Parcela, Ha. En Crecimiento, Ha.
+Otros, Ha. Infraestructura Productiva, Ha. Bosque Protector, Ha. Otros
+Cultivos) no fallaron. `ID_Parcela_Fija`/`ID_Socio` (los 2 únicos campos
+requeridos de Parcelas) están entre las corrompidas → explica el "0 de
+825 filas válidas".
+
+**El commit `e031450` (delimitador flexible) no cubre esto** — es un
+problema distinto (codificación de caracteres, no delimitador de
+columnas). Confirmado que el MISMO usuario, el MISMO día, exportó
+`Plantilla_Socios_prueba.csv` en **UTF-8 real con BOM** (`xxd`: `ef bb bf`
++ `c3 b3`) — es decir, Excel generó dos archivos con codificaciones
+DISTINTAS el mismo día (probablemente "CSV UTF-8" vs. "CSV" plano, dos
+opciones de exportación distintas de Excel). El fix no puede asumir
+ninguna codificación fija.
+
+**Corrección de premisa (el prompt original asumía otra causa):** el
+renombrado de labels de hip/hrp (pedido en el mismo prompt, ver 6.0.b) NO
+es la causa de las 5 columnas no reconocidas — `Ha. Infraestructura
+Productiva` (el label VIEJO, sin tilde) no está en la lista de columnas
+no reconocidas del usuario; la única de las 7 de hectárea que sí está ahí
+es `Ha. Reserva/Protección`, y es por la tilde de "Protección", no por el
+texto. El fix de codificación por sí solo resuelve las 5 columnas — el
+renombrado de labels es un cambio de negocio real y válido (pedido
+explícito), pero no corrige el bug reportado.
+
+**Fix implementado:** `decodeCsvBuffer(buffer)` (`lib/padronCsv.js`,
+función pura, exportada) — intenta `TextDecoder('utf-8', {fatal: true})`
+primero (rechaza el byte suelto 0xF3, no válido como UTF-8) y si falla
+reintenta `TextDecoder('windows-1252')`. `ImportPadronModal.jsx` usa
+`file.arrayBuffer()` + `decodeCsvBuffer` en vez de `file.text()`. Un
+archivo ya en UTF-8 correcto (con o sin BOM) nunca activa el fallback.
+
+**6.0.b — Mapeo campo→label actual de las 7 hectáreas** (`HECTARE_FIELDS`,
+antes de esta ronda):
+
+| Campo | Label (antes de ronda 3) | Label (después, ronda 3) |
+|---|---|---|
+| `hcp` | Ha. En Producción | *(sin cambio)* |
+| `hcc` | Ha. En Crecimiento | *(sin cambio)* |
+| `ho` | Ha. Otros | *(sin cambio)* |
+| `hip` | Ha. Infraestructura Productiva | **Ha. Invernadero/Pasto** |
+| `hrp` | Ha. Reserva/Protección | **Ha. Rastrojo/Purma** |
+| `hbp` | Ha. Bosque Protector | *(sin cambio)* |
+| `otros_cultivo` | Ha. Otros Cultivos | *(sin cambio)* |
+
+Solo cambia el **label** (texto de display en CSV/plantilla/formulario
+manual) — las columnas físicas siguen siendo `hip`/`hrp`, sin migración
+de esquema. Un solo punto de cambio (`HECTARE_FIELDS` en
+`lib/validations/socios.js`), compartido por `padronCsv.js` **y**
+`ParcelaFormModal.jsx:96` (grilla del formulario manual) — mismo patrón
+ya usado en ADR-028 para renombrar hcp/hcc.
+
+**Hallazgos adicionales de la data real** (analizada con `python`/csv,
+618 filas de Socios y 825 de Parcelas):
+
+- **`socio_dni`**: 0 filas vacías; **10 de 618 con 7 dígitos** (perdieron
+  el cero inicial — Excel trató la columna como numérica). Con DNI
+  requerido + regex de 8 dígitos, esas 10 filas quedarán inválidas al
+  reimportar — dato real a corregir en el Excel de origen, no un bug del
+  importador.
+- **`socio_dni` duplicados**: 0 en este archivo (el chequeo de 1e ya
+  existía desde antes, confirmado, no se dispara acá).
+- **`celular_socio`**: 618/618 con exactamente 9 dígitos — confirma que
+  1d ya estaba resuelto (regex `/^\d{9}$/` condicional,
+  `lib/validations/socios.js:25-30`, sin cambios).
+- **`socio_departamento`**: único valor en las 618 filas: "Cajamarca".
+  **Ya existe un catálogo completo de ubigeo** en el repo
+  (`lib/data/ubigeo_peru.json` + `lib/ubigeoData.js`, usado hoy por
+  `UbigeoSelect.jsx` en el formulario manual) con los 25 departamentos
+  oficiales **y también las ~196 provincias completas** — corrige 2
+  premisas del pedido original: no hacía falta crear ningún archivo
+  nuevo, y Provincia también podría validarse en el futuro sin inventar
+  ningún dataset (queda fuera de esta ronda a propósito, por instrucción
+  explícita).
+- **Hectáreas ≥1000**: máximo real observado es **30** (suma de las 7
+  columnas) — el aviso de 1g no se dispara con este archivo, diseño
+  validado para datos futuros.
+- **Integridad Parcelas→Socios**: de 616 `ID_Socio` únicos referenciados
+  por las 825 parcelas, **1 no existe**: literalmente el string `#N/D`
+  (error de fórmula de Excel, tipo VLOOKUP fallido, filtrado a la celda)
+  — evidencia real usada para diseñar el mensaje agrupado de 1h.
+
+**Conflicto real resuelto con el usuario antes de implementar (paso 1c):**
+`socio_fecha_nacimiento` no tenía ninguna validación de formato hasta
+ahora (confirmado, nada que duplicar). El pedido original pedía
+DD/MM/AAAA estricto, pero **478 de 544 fechas reales (88%) no matchean**
+ese formato — son M/D/AAAA sin ceros (ej. "4/29/1986" = 29 de abril,
+inequívoco porque 29 no puede ser mes). Implementar DD/MM/AAAA literal
+habría rechazado casi 9 de cada 10 filas con fecha real. Se preguntó
+explícitamente al usuario (`AskUserQuestion`) — eligió: **aceptar ambos
+formatos (D/M/AAAA o M/D/AAAA), sin exigir ceros, sin distinguir
+posicionalmente cuál parte es día y cuál es mes** (el campo es texto
+libre de display, nada lo parsea como fecha real en ningún lugar del
+repo hoy).
+
+### 6.1 Diseño y decisiones (puntos a-h del pedido)
+
+**a. "Columna dispareja" — Socios: retirado por completo.** No solo los
+campos listados explícitamente en el pedido (fecha_nacimiento,
+celular_socio, 8 flags, cert_org_estatus) — el pedido decía "TODOS los
+campos opcionales de Socios", así que `SOCIO_UNEVEN_CHECK_FIELDS` se
+eliminó entero (antes cubría también codigo_finca/socio_genero/
+socio_departamento/etc.). Parcelas sin cambios — confirmado en la
+investigación que `parcela_codigo`/`parcela_nombre` están 100% completos
+en las 825 filas reales, sin riesgo de falso positivo.
+
+**b. DNI obligatorio.** `dniRequerido = z.string().min(1,
+'Requerido').regex(/^\d{8}$/, ...)` — nueva constante separada de `dni`
+(que sigue opcional, usada solo por `conyuge_dni`) para no volver
+obligatorio el DNI del cónyuge por error.
+
+**c. Fecha de nacimiento — formato flexible (decisión confirmada con el
+usuario, ver arriba).** Regex `^(\d{1,2})/(\d{1,2})/(\d{4})$` +
+`.refine()`: acepta si `max(parte1, parte2) <= 31 && min(parte1, parte2)
+<= 12` (existe al menos una lectura día/mes válida). Vacío sigue siendo
+válido.
+
+**d. Celular — confirmado sin cambios.** `celular_socio` ya validaba
+`/^\d{9}$/` condicional desde antes; 618/618 valores reales lo cumplen.
+
+**e. DNI duplicado en archivo — confirmado ya existente.** `applyDuplicateChecks`
+ya incluía `socio_dni` en la lista de campos a chequear por duplicado
+interno del archivo (desde antes de esta ronda) — sin cambios de código,
+solo confirmación.
+
+**f. Departamento contra catálogo — reusa el catálogo real existente.**
+`applyDepartamentoCatalogCheck` (`lib/padronCsv.js`), nueva función,
+corre siempre (no depende de `supabase`, el catálogo es JSON estático).
+Comparación normalizada (NFD + strip de diacríticos, minúsculas) para
+tolerar mayúsculas/tildes. **Decisión de arquitectura importante:** el
+chequeo vive en `padronCsv.js`, **no** en `socioSchema` — `socioSchema`
+es compartido con el formulario manual (`SocioFormModal.jsx`), y
+`UbigeoSelect.jsx` ofrece deliberadamente una opción "Otro / no está en
+la lista" que guarda texto libre fuera del catálogo (su propio comentario:
+"un distrito real ausente del dataset NUNCA bloquea el alta de un socio
+real"). Si el chequeo viviera en `socioSchema`, elegir "Otro" en el
+formulario manual rompería el guardado — exactamente el caso que esa
+opción existe para evitar. Provincia queda deliberadamente sin validar
+(instrucción explícita del pedido), aunque el catálogo ya la tiene
+completa — candidato barato para una ronda futura.
+
+**g. Aviso no bloqueante de hectáreas ≥1000.** `findHectareRangeWarnings`
+— mismo patrón que `unrecognizedColumns` (ronda 2): array de strings ya
+formateados, no bloqueante. Extiende el contrato de retorno de
+`validateParcelaRows` con `hectareWarnings: string[]`.
+
+**h. Integridad referencial Parcelas→Socios — mensaje agrupado.**
+`applyParcelaDbChecks` ya rechazaba (por fila) toda parcela cuyo
+`ID_Socio` no existiera — confirmado, sin cambios en ese comportamiento.
+Se agregó agrupación: la función ahora también devuelve un `Map<socioId,
+número[]>` de líneas afectadas por cada `ID_Socio` faltante;
+`validateParcelaRows` lo formatea en `missingSocioWarnings: string[]` (1
+mensaje por `ID_Socio` distinto, con todas sus filas) — mismo patrón que
+`unrecognizedColumns`/`hectareWarnings`, no un mecanismo paralelo.
+
+### 6.2 Contrato de datos (extendido, no roto)
+
+```
+validateSocioRows(rows, supabase?, organizationId?)
+  -> Promise<{ rows: Array, unrecognizedColumns: string[] }>   // SIN CAMBIOS de forma
+
+validateParcelaRows(rows, supabase?, organizationId?)
+  -> Promise<{
+       rows: Array,
+       unrecognizedColumns: string[],
+       hectareWarnings: string[],       // NUEVO, ronda 3
+       missingSocioWarnings: string[],  // NUEVO, ronda 3
+     }>
+
+decodeCsvBuffer(buffer: ArrayBuffer) -> string   // NUEVO, ronda 3, exportada
+```
+
+Ningún campo existente cambió de tipo ni se eliminó — extensión aditiva,
+no breaking.
+
+### 6.3 Archivos tocados
+
+- `lib/validations/socios.js` — `dniRequerido`, `fechaNacimiento` +
+  `FECHA_NACIMIENTO_REGEX`, `socio_dni`/`socio_fecha_nacimiento` en
+  `socioSchema`, labels de `hip`/`hrp` en `HECTARE_FIELDS`.
+- `lib/padronCsv.js` — `decodeCsvBuffer` (nueva, exportada),
+  `applyDepartamentoCatalogCheck` + `normalizeForCatalogMatch` +
+  `DEPARTAMENTOS_NORMALIZADOS` (nuevas), `findHectareRangeWarnings`
+  (nueva), `applyParcelaDbChecks` extendida (agrupa missing socios),
+  `SOCIO_UNEVEN_CHECK_FIELDS`/`SOCIO_REQUIRED_FIELDS` eliminadas + su
+  invocación en `validateSocioRows`, `SOCIO_TEMPLATE_EXAMPLE.socio_fecha_nacimiento`
+  actualizado a formato slash, import de `getDepartamentos` desde
+  `./ubigeoData.js`.
+- `components/features/socios/ImportPadronModal.jsx` — `readFileAsText`
+  (usa `decodeCsvBuffer`), 2 banners nuevos (`missingSocioWarnings`,
+  `hectareWarnings`), estado nuevo.
+- `tests/test_padron_csv.mjs` — 13 tests existentes actualizados (DNI
+  ahora requerido en sus fixtures, 2 tests de "columna dispareja para
+  Socios" reescritos de "bloquea" a "NO bloquea"), ~30 tests nuevos.
+- `tests/test_socios_schema.mjs` — `validSocio()` helper actualizado con
+  DNI válido por defecto, 1 test reescrito (DNI vacío: de "acepta" a
+  "rechaza"), 3 tests nuevos (conyuge_dni sigue opcional,
+  fecha_nacimiento válida/inválida).
+- **No creado:** `lib/data/peru_departamentos.js` — el catálogo ya
+  existía (`lib/data/ubigeo_peru.json`), confirmado en la investigación
+  0.b antes de crear nada nuevo.
+
+### 6.4 Riesgos / notas para la reimportación real
+
+| Riesgo | Detalle |
+|---|---|
+| **10 de 618 socios reales quedarán inválidos por DNI de 7 dígitos** | No es un bug — Excel les comió el cero inicial. El usuario va a necesitar corregir esas 10 filas en el Excel de origen (agregar el 0) antes de que esos socios puedan importarse. |
+| **Reimportar un CSV exportado ANTES de esta ronda con hip/hrp** | El label viejo (Ha. Infraestructura Productiva/Ha. Reserva/Protección) ya no matchea `PARCELA_REVERSE_LABELS` → esas 2 columnas pasan a `unrecognizedColumns` (aviso no bloqueante desde la ronda 2, no bloquea) pero sus valores se pierden silenciosamente para esas filas si el usuario no nota el banner amarillo. |
+| **Los otros 3 archivos en `~/Downloads/`** (`Padron_Parcelas_20260818*.csv`, `Padron_Socios_20260818*.csv`, `Plantilla_Parcelas.csv`/`Plantilla_Socios.csv`) | No se analizaron en esta ronda (son exports/plantillas más viejos, sin relación con el reporte "5 columnas no reconocidas" que motivó esta tarea, que apuntaba específicamente a los archivos `_prueba`). Si el usuario los va a reimportar también, valen las mismas 2 filas de riesgo de arriba. |
+| **`socio_departamento` ahora rechaza fila si no matchea el catálogo** | Más estricto que el formulario manual (que tiene la opción "Otro"). Aceptado por diseño explícito del pedido — documentado en 6.1.f como asimetría consciente, no un descuido. |

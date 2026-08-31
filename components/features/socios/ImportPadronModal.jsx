@@ -7,6 +7,7 @@ import {
   validateParcelaRows,
   downloadSocioTemplate,
   downloadParcelaTemplate,
+  decodeCsvBuffer,
 } from '@/lib/padronCsv'
 import { createSocio, createParcela } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
@@ -26,11 +27,23 @@ import { getSupabaseClient } from '@/lib/supabaseClient'
 // columna (ver normalizeRowKeys en lib/padronCsv.js), así que un CSV
 // exportado con "Exportar Padrón" también sirve para reimportar.
 
+// `file.text()` decodifica SIEMPRE como UTF-8 -- esa era la causa raíz
+// real de "5 columnas no reconocidas, 0/825 filas válidas" en la primera
+// carga real (COOP-AROMAS-VALLE, mejoras_importador_padron_masivo.md
+// sección 0.a). `decodeCsvBuffer` (lib/padronCsv.js) hace la detección
+// UTF-8/windows-1252 real -- acá solo se obtiene el ArrayBuffer del
+// navegador, la lógica pura vive en padronCsv.js para ser testeable.
+async function readFileAsText(file) {
+  return decodeCsvBuffer(await file.arrayBuffer())
+}
+
 export default function ImportPadronModal({ organizationId, onClose, onImported }) {
   const [tab, setTab] = useState('socios')
   const [fileName, setFileName] = useState(null)
   const [validated, setValidated] = useState(null)
   const [unrecognizedColumns, setUnrecognizedColumns] = useState([])
+  const [hectareWarnings, setHectareWarnings] = useState([])
+  const [missingSocioWarnings, setMissingSocioWarnings] = useState([])
   const [validating, setValidating] = useState(false)
   const [parseError, setParseError] = useState(null)
   const [committing, setCommitting] = useState(false)
@@ -40,6 +53,8 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
     setFileName(null)
     setValidated(null)
     setUnrecognizedColumns([])
+    setHectareWarnings([])
+    setMissingSocioWarnings([])
     setParseError(null)
     setCommitSummary(null)
   }
@@ -56,7 +71,7 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
     setFileName(file.name)
     setValidating(true)
     try {
-      const text = await file.text()
+      const text = await readFileAsText(file)
       const rows = parseCsv(text)
       const supabase = getSupabaseClient()
       // Vista previa contra la BD en tiempo real (2026-08-19, pedido
@@ -64,16 +79,24 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
       // organización activa como inválidos ANTES de "Confirmar
       // Importación", no solo al fallar fila por fila después.
       //
-      // Mejoras importador (2026-08-31): validateSocioRows/validateParcelaRows
-      // devuelven { rows, unrecognizedColumns } -- las columnas no
-      // reconocidas ya no rechazan el archivo, se muestran como aviso no
-      // bloqueante (ver banner amarillo abajo).
-      const { rows: result, unrecognizedColumns: unrecognized } =
+      // Mejoras importador (2026-08-31, ronda 3): validateSocioRows/
+      // validateParcelaRows devuelven { rows, unrecognizedColumns } --
+      // Parcelas además trae hectareWarnings/missingSocioWarnings (mismo
+      // patrón de aviso no bloqueante, ver el modal más abajo). Socios no
+      // los trae (no aplican) -- valores por defecto [] al destructurar.
+      const {
+        rows: result,
+        unrecognizedColumns: unrecognized,
+        hectareWarnings: hectareW = [],
+        missingSocioWarnings: missingSocioW = [],
+      } =
         tab === 'socios'
           ? await validateSocioRows(rows, supabase, organizationId)
           : await validateParcelaRows(rows, supabase, organizationId)
       setValidated(result)
       setUnrecognizedColumns(unrecognized)
+      setHectareWarnings(hectareW)
+      setMissingSocioWarnings(missingSocioW)
     } catch (err) {
       setParseError(err?.message || 'No se pudo leer el archivo CSV.')
     } finally {
@@ -175,6 +198,32 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
           <p className="mb-3 rounded bg-amber-50 p-2 text-sm text-amber-800">
             {unrecognizedColumns.length} columna(s) no reconocida(s), fueron ignoradas: {unrecognizedColumns.join(', ')}
           </p>
+        )}
+
+        {missingSocioWarnings.length > 0 && (
+          <div className="mb-3 rounded bg-amber-50 p-2 text-sm text-amber-800">
+            <p className="font-semibold">
+              {missingSocioWarnings.length} Código(s) de Socio no encontrado(s) en la organización activa:
+            </p>
+            {missingSocioWarnings.map((w) => (
+              <p key={w} className="mt-1 text-xs">
+                {w}
+              </p>
+            ))}
+          </div>
+        )}
+
+        {hectareWarnings.length > 0 && (
+          <div className="mb-3 rounded bg-amber-50 p-2 text-sm text-amber-800">
+            <p className="font-semibold">
+              {hectareWarnings.length} parcela(s) con hectáreas fuera de rango típico (no bloquea la importación):
+            </p>
+            {hectareWarnings.map((w) => (
+              <p key={w} className="mt-1 text-xs">
+                {w}
+              </p>
+            ))}
+          </div>
         )}
 
         {validated && (

@@ -13,11 +13,16 @@ import {
   CERT_FLAG_FIELDS,
 } from '../lib/validations/socios.js'
 
+// socio_dni: '12345678' -- mejoras_importador_padron_masivo.md ronda 3
+// (2026-08-31): socio_dni pasó de opcional a requerido, así que un socio
+// "mínimo válido" ahora necesita uno (SOCIO_DEFAULT_VALUES.socio_dni
+// sigue siendo '' -- valor por defecto de formulario vacío, no cambia).
 function validSocio(overrides = {}) {
   return {
     ...SOCIO_DEFAULT_VALUES,
     ID_Socio: 'JS-00003',
     socio_nombre_completo: 'Juan Pérez',
+    socio_dni: '12345678',
     ...overrides,
   }
 }
@@ -57,9 +62,14 @@ test('socioSchema rechaza DNI con letras', () => {
   assert.equal(result.success, false)
 })
 
-test('socioSchema acepta DNI vacío (campo opcional)', () => {
+test('socioSchema rechaza DNI vacío (obligatorio desde la ronda 3, mejoras_importador_padron_masivo.md)', () => {
   const result = socioSchema.safeParse(validSocio({ socio_dni: '' }))
-  assert.equal(result.success, true)
+  assert.equal(result.success, false)
+})
+
+test('socioSchema.shape.conyuge_dni sigue aceptando vacío (opcional, a diferencia de socio_dni)', () => {
+  const result = socioSchema.safeParse(validSocio({ conyuge_dni: '' }))
+  assert.equal(result.success, true, JSON.stringify(result.success ? null : result.error.issues))
 })
 
 test('socioSchema valida el mismo formato de DNI para conyuge_dni', () => {
@@ -73,6 +83,19 @@ test('socioSchema acepta los 8 flags de certificación en "Sí"/"No"', () => {
     assert.equal(socioSchema.safeParse(validSocio({ [field]: 'No' })).success, true, field)
     assert.equal(socioSchema.safeParse(validSocio({ [field]: '' })).success, true, field)
   }
+})
+
+// mejoras_importador_padron_masivo.md ronda 3: socio_fecha_nacimiento
+// gana validación de formato (antes era string libre sin chequeo).
+test('socioSchema acepta socio_fecha_nacimiento en D/M/AAAA o M/D/AAAA, con o sin ceros', () => {
+  assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '4/29/1986' })).success, true)
+  assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '29/04/1986' })).success, true)
+  assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '' })).success, true)
+})
+
+test('socioSchema rechaza socio_fecha_nacimiento con formato inválido (ISO con guiones, o partes fuera de rango)', () => {
+  assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '1986-04-29' })).success, false)
+  assert.equal(socioSchema.safeParse(validSocio({ socio_fecha_nacimiento: '45/13/1990' })).success, false)
 })
 
 test('socioSchema rechaza un valor de flag de certificación fuera de Sí/No', () => {
