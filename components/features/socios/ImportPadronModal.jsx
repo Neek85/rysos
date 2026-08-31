@@ -30,6 +30,7 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
   const [tab, setTab] = useState('socios')
   const [fileName, setFileName] = useState(null)
   const [validated, setValidated] = useState(null)
+  const [unrecognizedColumns, setUnrecognizedColumns] = useState([])
   const [validating, setValidating] = useState(false)
   const [parseError, setParseError] = useState(null)
   const [committing, setCommitting] = useState(false)
@@ -38,6 +39,7 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
   function resetFile() {
     setFileName(null)
     setValidated(null)
+    setUnrecognizedColumns([])
     setParseError(null)
     setCommitSummary(null)
   }
@@ -61,11 +63,17 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
       // explícito): marca ID_Socio/DNI/códigos ya existentes en la
       // organización activa como inválidos ANTES de "Confirmar
       // Importación", no solo al fallar fila por fila después.
-      const result =
+      //
+      // Mejoras importador (2026-08-31): validateSocioRows/validateParcelaRows
+      // devuelven { rows, unrecognizedColumns } -- las columnas no
+      // reconocidas ya no rechazan el archivo, se muestran como aviso no
+      // bloqueante (ver banner amarillo abajo).
+      const { rows: result, unrecognizedColumns: unrecognized } =
         tab === 'socios'
           ? await validateSocioRows(rows, supabase, organizationId)
           : await validateParcelaRows(rows, supabase, organizationId)
       setValidated(result)
+      setUnrecognizedColumns(unrecognized)
     } catch (err) {
       setParseError(err?.message || 'No se pudo leer el archivo CSV.')
     } finally {
@@ -162,6 +170,12 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
         {validating && <p className="mb-3 text-xs text-gray-500">Validando contra la base de datos…</p>}
 
         {parseError && <p className="mb-3 rounded bg-red-50 p-2 text-sm text-red-600">{parseError}</p>}
+
+        {unrecognizedColumns.length > 0 && (
+          <p className="mb-3 rounded bg-amber-50 p-2 text-sm text-amber-800">
+            {unrecognizedColumns.length} columna(s) no reconocida(s), fueron ignoradas: {unrecognizedColumns.join(', ')}
+          </p>
+        )}
 
         {validated && (
           <div className="space-y-3">
