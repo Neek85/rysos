@@ -165,6 +165,85 @@ test('parseCsv(arrayToCsv(x)) es un roundtrip correcto', () => {
 })
 
 // ---------------------------------------------------------------
+// Soporte CSV delimitador flexible (spec soporte_csv_delimitador_flexible.md)
+// ---------------------------------------------------------------
+
+test('parseCsv con archivo 100% coma sigue funcionando igual que siempre (regresión, encabezados reales)', () => {
+  const rows = parseCsv('ID_Socio,socio_nombre_completo\nJS-01,Juan Pérez\nJS-02,Ana López')
+  assert.deepEqual(rows, [
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Juan Pérez' },
+    { ID_Socio: 'JS-02', socio_nombre_completo: 'Ana López' },
+  ])
+})
+
+test('parseCsv detecta y parsea un archivo 100% punto y coma', () => {
+  const rows = parseCsv('ID_Socio;socio_nombre_completo\nJS-01;Juan Pérez\nJS-02;Ana López')
+  assert.deepEqual(rows, [
+    { ID_Socio: 'JS-01', socio_nombre_completo: 'Juan Pérez' },
+    { ID_Socio: 'JS-02', socio_nombre_completo: 'Ana López' },
+  ])
+})
+
+test('parseCsv con ";" no confunde una coma embebida en un valor entre comillas con el delimitador', () => {
+  const rows = parseCsv('ID_Socio;socio_nombre_completo\nJS-01;"Pérez, Juan"')
+  assert.deepEqual(rows, [{ ID_Socio: 'JS-01', socio_nombre_completo: 'Pérez, Juan' }])
+})
+
+test('parseCsv ignora BOM UTF-8 con delimitador ";" (BOM presente)', () => {
+  const rows = parseCsv('﻿ID_Socio;socio_nombre_completo\nJS-01;Juan Pérez')
+  assert.deepEqual(rows, [{ ID_Socio: 'JS-01', socio_nombre_completo: 'Juan Pérez' }])
+})
+
+test('parseCsv con delimitador ";" y SIN BOM funciona igual (BOM ausente)', () => {
+  const rows = parseCsv('ID_Socio;socio_nombre_completo\nJS-01;Juan Pérez')
+  assert.deepEqual(rows, [{ ID_Socio: 'JS-01', socio_nombre_completo: 'Juan Pérez' }])
+})
+
+test('parseCsv rechaza el archivo COMPLETO si el número de columnas es inconsistente entre filas (delimitador mezclado)', () => {
+  // Cabecera sniffea ';' (2 ';' vs 0 ','), pero la 2da fila de datos en
+  // realidad usa ',' -- termina con menos columnas que la cabecera.
+  const csv = 'ID_Socio;socio_nombre_completo;socio_dni\nJS-01;Juan Pérez;11111111\nJS-02,Ana López,22222222'
+  assert.throws(() => parseCsv(csv), (err) => {
+    assert.ok(err.message.includes('número de columnas inconsistente'), err.message)
+    assert.ok(err.message.includes('3 columna(s)'), err.message) // la cabecera tiene 3
+    assert.ok(err.message.includes('fila 3'), err.message) // fila 1 = encabezado, fila 3 = 2da fila de datos
+    return true
+  })
+})
+
+test('parseCsv con una sola columna (sin "," ni ";" en ningún lado) sigue funcionando como siempre', () => {
+  const rows = parseCsv('nombre\nJuan\nAna')
+  assert.deepEqual(rows, [{ nombre: 'Juan' }, { nombre: 'Ana' }])
+})
+
+test('validateParcelaRows acepta hectáreas en formato "1,5" (coma decimal) bajo delimitador ";"', async () => {
+  const rows = parseCsv('ID_Parcela_Fija;ID_Socio;hcp\nP-01;JS-01;1,5')
+  const { rows: [result] } = await validateParcelaRows(rows)
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+  assert.equal(result.data.hcp, 1.5)
+})
+
+test('validateParcelaRows sigue aceptando hectáreas en formato "1.5" (punto decimal, sin cambios)', async () => {
+  const { rows: [result] } = await validateParcelaRows([{ ID_Parcela_Fija: 'P-01', ID_Socio: 'JS-01', hcp: '1.5' }])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+  assert.equal(result.data.hcp, 1.5)
+})
+
+test('validateParcelaRows con hectáreas mixtas "1,5"/"2"/vacío bajo ";" NO bloquea por columna dispareja (las 7 de hectárea siguen excluidas)', async () => {
+  const rows = parseCsv('ID_Parcela_Fija;ID_Socio;hcp;hcc\nP-01;JS-01;1,5;\nP-02;JS-01;2;3,5')
+  const { rows: results } = await validateParcelaRows(rows)
+  assert.equal(results.length, 2)
+  assert.ok(results.every((r) => r.valid), JSON.stringify(results.map((r) => r.errors)))
+  assert.equal(results[0].data.hcp, 1.5)
+  assert.equal(results[1].data.hcc, 3.5)
+})
+
+test('normalizeDecimalComma (vía validateParcelaRows): un valor con punto Y coma ("1.234,56", agrupación de miles) se deja tal cual y falla la coerción Zod', async () => {
+  const { rows: [result] } = await validateParcelaRows([{ ID_Parcela_Fija: 'P-01', ID_Socio: 'JS-01', hcp: '1.234,56' }])
+  assert.equal(result.valid, false)
+})
+
+// ---------------------------------------------------------------
 // validateSocioRows / validateParcelaRows
 // ---------------------------------------------------------------
 
