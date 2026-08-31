@@ -1,14 +1,16 @@
 # Spec — Mejoras al Importador de Padrón Masivo (CSV)
 
-- **Estado:** **Implementado** (ronda 5, 2026-09-01) — ver sección 8 para
-  el diseño/implementación de esta ronda (validación de Distrito, tercer
-  nivel de ubigeo). Rondas 1-4 (secciones 1-7) quedan cerradas, sin
-  reabrir.
+- **Estado:** **Implementado** (ronda 6, 2026-09-01) — ver sección 9 para
+  el diseño/implementación de esta ronda (tolerancia Sí/No, confirmación
+  de tildes en ubigeo, alias de label viejo hip/hrp, mensajes de error
+  legibles, distinción de error de fórmula de Excel en socio no
+  encontrado). Rondas 1-5 (secciones 1-8) quedan cerradas, sin reabrir.
 - **Fecha:** 2026-08-31 (ronda 1: diseño; ronda 2: cierre de decisiones +
   implementación; ronda 3, mismo día: hallazgos de la primera carga real
   de producción, COOP-AROMAS-VALLE, 618 socios / 825 parcelas); 2026-09-01
   (ronda 4: corrección de ambigüedad en fecha + extensión a Provincia;
-  ronda 5, mismo día: extensión a Distrito)
+  ronda 5, mismo día: extensión a Distrito; ronda 6, mismo día: más
+  hallazgos de la misma carga real + mensajes legibles)
 - **Contexto previo:** `ADR-027-certificaciones-normalizadas.md`,
   `specs/padron_certificaciones_normalizado.md` (diseño original de las
   columnas dinámicas y del rechazo por columna no reconocida, sección 6.1),
@@ -934,3 +936,178 @@ validación más dentro del mismo `applyUbigeoCatalogChecks`.
 |---|---|
 | **Falsos rechazos por dataset de Distrito incompleto** | Riesgo real y mayor que en Departamento/Provincia (ver 8.0.b) — el propio `_meta` del JSON lo advierte. Si aparece en producción, no es un bug del validador, es una omisión del dataset — corregible agregando el distrito faltante a `lib/data/ubigeo_peru.json` o contrastando contra el INEI. |
 | **Distrito más estricto que el formulario manual** | Misma asimetría ya aceptada para Departamento/Provincia (secciones 6.1.f/7.2) — `UbigeoSelect.jsx` sigue teniendo "Otro" en los 3 niveles, sin cambios. |
+
+---
+
+## 9. Ronda 6 (2026-09-01) — tolerancia Sí/No, confirmación de tildes, alias hip/hrp, mensajes legibles, error de fórmula de Excel
+
+5 hallazgos, todos con evidencia real ya confirmada por el usuario antes de esta ronda (no requirió investigación nueva de archivo).
+
+### 9.1 Flags de certificación — tolerancia Sí/No sin tilde
+
+**Evidencia real (dada, no investigada de nuevo):** el archivo real del
+usuario usa `"Si"` (sin tilde) y `"No"`, con la columna Rainforest
+Alliance usando `"SI"` en mayúsculas — `"Sí"` con tilde nunca aparece en
+los datos reales.
+
+**Verificación previa a implementar (pedido explícito del prompt, "verifica
+cuál es ese valor canónico real... antes de asumir 'Sí' con tilde"):**
+`lib/actions/sociosActions.js:322` — `syncSocioCertificaciones` decide
+qué certificaciones sincronizar con
+`CERT_FLAG_FIELDS.filter(({ field }) => parsed[field] === 'Sí')`,
+comparación **literal con tilde**. Confirmado: el canónico real que el
+resto del sistema ya espera es `'Sí'` **con** tilde, no `'Si'` sin tilde
+como sugería el prompt como posibilidad. Esto determinó la dirección de
+la normalización.
+
+**Fix:** `normalizeSiNo(value)` (`lib/padronCsv.js`) — reusa
+`normalizeForCatalogMatch` (NFD + strip de diacríticos + minúsculas, ya
+existente para ubigeo) para mapear cualquier variante
+(`Si`/`si`/`SI`/`Sí`/`sí`) al canónico `'Sí'`, y (`No`/`no`/`NO`) a
+`'No'`. Corre en `validateSocioRows`, sobre las 8 columnas de
+`CERT_FLAG_FIELDS`, **antes** de `socioSchema.safeParse` — mismo patrón
+exacto que `normalizeDecimalComma` para hectáreas (ronda "delimitador
+flexible"). Un valor que no matchea ninguna variante reconocible se deja
+pasar tal cual y lo rechaza el `siNo` de Zod (ver 9.4) con un mensaje
+legible.
+
+**Cambio de implementación en `socioSchema`:** `siNo` pasó de
+`z.enum(['Sí', 'No'])` a `.refine()` (`lib/validations/socios.js`) — Zod
+no ofrece una forma simple de fijar un mensaje propio para "valor fuera
+del enum" sin pelear con su `errorMap`; `.refine()` es el mismo idioma
+que ya usa el archivo para `fechaNacimiento`/la suma de hectáreas. Sin
+cambio de comportamiento para valores ya canónicos.
+
+**`sociosActions.js` no se tocó** — confirmado innecesario: normalizando
+antes de Zod, el payload que llega a `createSocio`/`syncSocioCertificaciones`
+ya tiene el valor canónico de siempre.
+
+### 9.2 Validación de ubigeo — confirmado que la tolerancia a tildes YA funcionaba
+
+Investigado antes de tocar código: `normalizeForCatalogMatch`
+(`lib/padronCsv.js`, desde la ronda 3) ya aplica `.normalize('NFD')` +
+strip de diacríticos + minúsculas a **ambos lados** de la comparación
+(valor del archivo Y valor del catálogo) desde que se implementó
+Departamento. El catálogo real (`lib/data/ubigeo_peru.json`) SÍ tiene
+tildes (`"Jaén"`, `"San José de Lourdes"`, confirmado con `getDistritos()`
+en vivo) — igual que el archivo real del usuario. **No se necesitó
+ningún cambio de código** — se agregaron tests con los valores reales
+exactos (`"Jaén"`, `"San José de Lourdes"`, y sus versiones sin tilde)
+para dejar la confirmación documentada y blindada contra una regresión
+futura, en vez de solo afirmarlo sin evidencia ejecutable.
+
+### 9.3 Alias del label viejo de hip/hrp
+
+Defensivo, pedido explícito por si queda algún archivo exportado con el
+label de ANTES de la corrección semántica de la ronda 3
+(`"Ha. Infraestructura Productiva"`/`"Ha. Reserva/Protección"`).
+`PARCELA_REVERSE_LABELS` (Map construido desde `PARCELA_FIELD_LABELS`,
+que solo tiene el label nuevo) recibe 2 entradas extra vía `.set()`
+después de construirse — el label viejo sigue resolviendo a `hip`/`hrp`,
+sin tocar `PARCELA_FIELD_LABELS` (que sigue siendo la única fuente de
+verdad para lo que se EXPORTA — el alias es solo de reconocimiento en
+import, nunca aparece en un CSV nuevo generado por el sistema).
+
+### 9.4 Mensajes de error legibles (Socios y Parcelas)
+
+**Antes:** `${i.path.join('.')}: ${i.message}` — ej. `"socio_dni: DNI
+debe tener 8 dígitos"`, `"hcp: El total de hectáreas debe ser mayor a
+0.00 ha."`.
+
+**Después:** `formatZodIssues(issues, labels)` (`lib/padronCsv.js`)
+traduce `i.path[0]` (la clave técnica) a su label humano vía
+`SOCIO_ERROR_LABELS` (= `SOCIO_FIELD_LABELS` + las 8 de
+`CERT_FLAG_FIELDS`, que no viven en `SOCIO_FIELD_LABELS` por ser
+columnas dinámicas del CSV) o `PARCELA_FIELD_LABELS` según corresponda.
+Los mensajes de Zod en sí también se reescribieron en
+`lib/validations/socios.js` para ser legibles de por sí:
+
+| Caso | Mensaje antes | Mensaje ahora |
+|---|---|---|
+| Campo requerido vacío (`ID_Socio`, `socio_nombre_completo`, `socio_dni`, `ID_Parcela_Fija`) | `Requerido` | `Este campo es obligatorio` |
+| DNI inválido | `DNI debe tener 8 dígitos` | `El DNI debe tener 8 dígitos` |
+| Celular inválido | `Celular debe tener 9 dígitos` | `El celular debe tener 9 dígitos` |
+| Fecha inválida | `Formato de fecha inválido (usar M/D/AAAA, mes primero, ej. 4/29/1986)` | `La fecha debe tener el formato M/D/AAAA (ej: 4/29/1986)` |
+| Flag de certificación inválido | *(mensaje de enum de Zod, técnico)* | `Debe ser Sí o No` |
+| Ubigeo fuera de catálogo (Departamento) | `El Departamento "X" no es un departamento válido de Perú.` | `"X" no se reconoce como Departamento válido de Perú.` |
+| Hectáreas en 0 | `hcp: El total de hectáreas debe ser mayor a 0.00 ha.` | `Ha. En Producción: El total de hectáreas debe ser mayor a 0.00 ha.` (mensaje sin cambios, solo el prefijo) |
+
+**Excepción deliberada, documentada en el propio código:**
+`parcelaSchema.ID_Socio` (el socio dueño de la parcela) conserva su
+mensaje contextual `"Selecciona un socio"` en vez de unificarse a
+"Este campo es obligatorio" — es específico del formulario manual (hay
+un dropdown real que seleccionar ahí), y en el importador CSV este campo
+casi nunca aparece vacío sin más contexto (rompe la relación
+Parcela→Socio) — cuando sí aparece un problema de socio, ya hay un
+mensaje más específico aparte (`applyParcelaDbChecks`/9.5). No es una
+inconsistencia accidental, es una decisión de diseño explícita.
+
+**Mensajes de Provincia/Distrito "no pertenece a X" (rondas 4-5) NO se
+reescribieron** al patrón genérico "no se reconoce como... válido de
+Perú" — se mantuvieron tal cual porque ya son más informativos (indican
+a qué departamento/provincia SÍ debería pertenecer), y el pedido daba
+esos mensajes como ejemplos de patrón, no como texto literal obligatorio
+para cada caso.
+
+### 9.5 Distinción de error de fórmula de Excel en "socio no encontrado"
+
+**Evidencia real (ronda 3):** 1 de 616 `ID_Socio` referenciados por las
+825 parcelas de la primera carga real era literalmente `"#N/D"` — un
+error de fórmula de Excel (VLOOKUP roto) filtrado a la celda, no un
+código de socio real mal tipeado.
+
+**Fix:** `isExcelFormulaError(value)` (`lib/padronCsv.js`) — Set de
+valores literales que Excel/Sheets escriben cuando una fórmula falla
+(`#N/D`, `#N/A`, `#REF!`, `#VALUE!`, `#DIV/0!`, `#NULL!`, `#NOMBRE?`,
+`#NUM!` — ninguno podría ser jamás un `ID_Socio` real). Aplicado tanto
+al mensaje **por fila** (`applyParcelaDbChecks`) como al **resumen
+agrupado** (`missingSocioWarnings`, ronda 3) — antes solo el resumen
+agrupado existía, el mensaje por fila seguía siendo el genérico
+"no existe en la organización activa" incluso para `"#N/D"`.
+
+```
+Antes:  El Código de Socio "#N/D" no existe en la organización activa (fila(s) 3, 4).
+Ahora:  Valor de socio inválido: "#N/D" — revisá esta celda en tu Excel de
+        origen (parece un error de fórmula, no un código real) (fila(s) 3, 4).
+```
+
+Un `ID_Socio` faltante REAL (no un error de fórmula) sigue con el
+mensaje genérico de siempre, sin cambios.
+
+### 9.6 Contrato de datos
+
+Sin cambios de forma en ninguna función — todos los cambios de esta ronda
+son de contenido de mensajes (texto de error) o de tolerancia de
+parseo/normalización, no de la estructura `{ rows, unrecognizedColumns,
+hectareWarnings, missingSocioWarnings }`.
+
+### 9.7 Archivos tocados
+
+- `lib/validations/socios.js` — `siNo` reescrito como `.refine()`;
+  mensajes de `dni`/`dniRequerido`/`celular`/`fechaNacimiento`/`ID_Socio`/
+  `socio_nombre_completo`/`ID_Parcela_Fija` (parcela) reescritos a texto
+  legible.
+- `lib/padronCsv.js` — `normalizeSiNo` (nueva) + aplicada en
+  `validateSocioRows`; `PARCELA_REVERSE_LABELS` extendido con los 2 alias
+  viejos de hip/hrp; `SOCIO_ERROR_LABELS` + `formatZodIssues` (nuevas),
+  reemplazan el `${path}: ${message}` crudo en `validateSocioRows`/
+  `validateParcelaRows`; `isExcelFormulaError` (nueva) + aplicada en
+  `applyParcelaDbChecks` (mensaje por fila) y `validateParcelaRows`
+  (mensaje agrupado); mensaje de Departamento fuera de catálogo
+  reescrito.
+- `components/features/socios/ImportPadronModal.jsx` — **sin cambios**:
+  los mensajes ya legibles fluyen automáticamente por el mismo
+  `r.errors.join('; ')` que ya existía, no hizo falta tocar la UI.
+- `lib/ubigeoData.js` — **sin cambios**: confirmado en 9.2 que la
+  tolerancia a tildes ya funcionaba correctamente.
+- `tests/test_padron_csv.mjs` — ~25 tests nuevos cubriendo los 5 puntos,
+  con valores reales exactos (`"Si"`, `"SI"`, `"Jaén"`, `"San José de
+  Lourdes"`, `"#N/D"`) donde aplica.
+
+### 9.8 Riesgos
+
+| Riesgo | Detalle |
+|---|---|
+| **Reimportar un CSV con `cert_org_estatus`/certificaciones ya en "Sí" con tilde** | Sin impacto — `normalizeSiNo` no toca un valor que ya es canónico (`stripped === 'si'` matchea tanto `"Si"` como `"Sí"`, ambos se normalizan al mismo `'Sí'`). |
+| **Un archivo con "Verdadero"/"Falso"/"1"/"0" en vez de Sí/No** | Fuera de alcance a propósito — no hay evidencia real de esas variantes; `normalizeSiNo` las deja pasar tal cual y el `.refine()` las rechaza con "Debe ser Sí o No", consistente con el resto del diseño (no adivinar más allá de la evidencia real confirmada). |
+| **Mensajes legibles cambiaron texto exacto que algún test/integración externa pudiera estar comparando** | Ningún consumidor fuera de este módulo compara el texto exacto de estos mensajes (confirmado: solo se muestran en `ImportPadronModal.jsx` vía `.join('; ')`, nunca se parsean de vuelta). |
