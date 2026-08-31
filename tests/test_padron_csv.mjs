@@ -18,6 +18,7 @@ import {
   validateParcelaRows,
   fetchSocioCertOrgEstatus,
   decodeCsvBuffer,
+  groupValidationErrors,
   SOCIO_FIELD_LABELS,
   PARCELA_FIELD_LABELS,
 } from '../lib/padronCsv.js'
@@ -902,24 +903,25 @@ test('decodeCsvBuffer con BOM UTF-8 (caso real: Plantilla_Socios_prueba.csv) dec
   assert.deepEqual(rows, [{ Código: 'val', x: 'y' }])
 })
 
-// ── 0.b/1: labels de hectárea hip/hrp corregidos ──
+// ── 0.b/1: labels de hectárea hip/hrp corregidos (ronda 3); hip corregido de nuevo en ronda 7 ("Inverna/Pasto" exacto, no "Invernadero/Pasto") ──
 
-test('HECTARE_FIELDS: hip/hrp usan los labels corregidos ("Invernadero/Pasto"/"Rastrojo/Purma"), no los viejos', () => {
+test('HECTARE_FIELDS: hip/hrp usan los labels corregidos ("Inverna/Pasto"/"Rastrojo/Purma"), no los viejos', () => {
   const hip = HECTARE_FIELDS.find((f) => f.field === 'hip')
   const hrp = HECTARE_FIELDS.find((f) => f.field === 'hrp')
-  assert.equal(hip.label, 'Ha. Invernadero/Pasto')
+  assert.equal(hip.label, 'Ha. Inverna/Pasto')
   assert.equal(hrp.label, 'Ha. Rastrojo/Purma')
 })
 
 test('PARCELA_FIELD_LABELS/buildParcelaTemplateCsv reflejan el label nuevo de hip/hrp (misma fuente que HECTARE_FIELDS)', () => {
-  assert.equal(PARCELA_FIELD_LABELS.hip, 'Ha. Invernadero/Pasto')
+  assert.equal(PARCELA_FIELD_LABELS.hip, 'Ha. Inverna/Pasto')
   assert.equal(PARCELA_FIELD_LABELS.hrp, 'Ha. Rastrojo/Purma')
   const csv = buildParcelaTemplateCsv(['JS-01'])
   const header = csv.split('\r\n')[0]
-  assert.ok(header.includes('Ha. Invernadero/Pasto'))
+  assert.ok(header.includes('Ha. Inverna/Pasto'))
   assert.ok(header.includes('Ha. Rastrojo/Purma'))
   assert.ok(!header.includes('Infraestructura Productiva'))
   assert.ok(!header.includes('Reserva/Protección'))
+  assert.ok(!header.includes('Invernadero'))
 })
 
 // ── 1b: DNI obligatorio ──
@@ -1248,12 +1250,22 @@ test('validateSocioRows: un archivo SIN tilde ("Jaen", "San Jose de Lourdes") ta
   assert.ok(results.every((r) => r.valid), JSON.stringify(results.map((r) => r.errors)))
 })
 
-// ── 9.3 (ronda 6): alias defensivo del label VIEJO de hip/hrp (además del nuevo) ──
+// ── 9.3/10.1 (rondas 6-7): alias defensivo de labels VIEJOS de hip/hrp (además del canónico actual) ──
+// hip tiene 2 alias (2 correcciones sucesivas sobre el mismo campo):
+// "Ha. Infraestructura Productiva" (original) y "Ha. Invernadero/Pasto"
+// (corrección de la ronda 3, que a su vez resultó tener el texto exacto
+// mal -- ronda 7 corrigió al canónico real "Ha. Inverna/Pasto").
 
-test('validateParcelaRows reconoce el label VIEJO de hip ("Ha. Infraestructura Productiva") como alias además del nuevo', async () => {
-  const rows = parseCsv(
-    'ID_Parcela_Fija,ID_Socio,Ha. Infraestructura Productiva\nP-01,JS-01,2.5'
-  )
+test('validateParcelaRows reconoce el label ORIGINAL de hip ("Ha. Infraestructura Productiva") como alias', async () => {
+  const rows = parseCsv('ID_Parcela_Fija,ID_Socio,Ha. Infraestructura Productiva\nP-01,JS-01,2.5')
+  const { rows: [result], unrecognizedColumns } = await validateParcelaRows(rows)
+  assert.deepEqual(unrecognizedColumns, [])
+  assert.equal(result.valid, true, JSON.stringify(result.errors))
+  assert.equal(result.data.hip, 2.5)
+})
+
+test('validateParcelaRows reconoce el label de la ronda 3 de hip ("Ha. Invernadero/Pasto", palabra completa -- ya no es el canónico) como alias', async () => {
+  const rows = parseCsv('ID_Parcela_Fija,ID_Socio,Ha. Invernadero/Pasto\nP-01,JS-01,2.5')
   const { rows: [result], unrecognizedColumns } = await validateParcelaRows(rows)
   assert.deepEqual(unrecognizedColumns, [])
   assert.equal(result.valid, true, JSON.stringify(result.errors))
@@ -1268,10 +1280,8 @@ test('validateParcelaRows reconoce el label VIEJO de hrp ("Ha. Reserva/Protecci�
   assert.equal(result.data.hrp, 1.5)
 })
 
-test('validateParcelaRows sigue reconociendo el label NUEVO de hip/hrp (no rompió el alias viejo)', async () => {
-  const rows = parseCsv(
-    'ID_Parcela_Fija,ID_Socio,Ha. Invernadero/Pasto,Ha. Rastrojo/Purma\nP-01,JS-01,2,3'
-  )
+test('validateParcelaRows reconoce el label CANÓNICO actual de hip ("Ha. Inverna/Pasto", texto exacto real) -- los valores se leen correctamente, no se pierden', async () => {
+  const rows = parseCsv('ID_Parcela_Fija,ID_Socio,Ha. Inverna/Pasto,Ha. Rastrojo/Purma\nP-01,JS-01,2,3')
   const { rows: [result], unrecognizedColumns } = await validateParcelaRows(rows)
   assert.deepEqual(unrecognizedColumns, [])
   assert.equal(result.valid, true, JSON.stringify(result.errors))
@@ -1403,4 +1413,77 @@ test('validateParcelaRows: un ID_Socio faltante REAL (no error de fórmula) sigu
 test('validateParcelaRows: sin supabase/organizationId, missingSocioWarnings queda vacío (mismo gating que applyParcelaDbChecks)', async () => {
   const { missingSocioWarnings } = await validateParcelaRows([{ ID_Parcela_Fija: 'P-01', ID_Socio: 'JS-INEXISTENTE', hcp: '2' }])
   assert.deepEqual(missingSocioWarnings, [])
+})
+
+// ---------------------------------------------------------------
+// groupValidationErrors (spec sección 10.2, ronda 7) -- resumen agrupado
+// de errores para el preview de importación (triage rápido).
+// ---------------------------------------------------------------
+
+test('groupValidationErrors agrupa filas con el mismo mensaje EXACTO en un solo grupo, con count y codes correctos', () => {
+  const results = [
+    { valid: false, index: 0, normalized: { ID_Socio: 'JS-01' }, errors: ['DNI: Este campo es obligatorio'] },
+    { valid: false, index: 1, normalized: { ID_Socio: 'JS-02' }, errors: ['DNI: Este campo es obligatorio'] },
+    { valid: true, index: 2, normalized: { ID_Socio: 'JS-03' }, errors: [] },
+  ]
+  const groups = groupValidationErrors(results, 'ID_Socio')
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0].message, 'DNI: Este campo es obligatorio')
+  assert.equal(groups[0].count, 2)
+  assert.deepEqual(groups[0].codes, ['JS-01', 'JS-02'])
+})
+
+test('groupValidationErrors: una fila con MÁS DE UN error aparece en cada grupo correspondiente (no se deduplica entre grupos)', () => {
+  const results = [
+    {
+      valid: false,
+      index: 0,
+      normalized: { ID_Socio: 'JS-01' },
+      errors: ['DNI: Este campo es obligatorio', 'Celular: El celular debe tener 9 dígitos'],
+    },
+  ]
+  const groups = groupValidationErrors(results, 'ID_Socio')
+  assert.equal(groups.length, 2)
+  assert.ok(groups.every((g) => g.codes.includes('JS-01')))
+})
+
+test('groupValidationErrors: filas válidas (sin error) no aportan a ningún grupo', () => {
+  const results = [{ valid: true, index: 0, normalized: { ID_Socio: 'JS-01' }, errors: [] }]
+  assert.deepEqual(groupValidationErrors(results, 'ID_Socio'), [])
+})
+
+test('groupValidationErrors: sin codeKey en la fila (vacío), cae al número de fila ("fila N")', () => {
+  const results = [{ valid: false, index: 0, normalized: { ID_Socio: '' }, errors: ['Código de Socio: Este campo es obligatorio'] }]
+  const groups = groupValidationErrors(results, 'ID_Socio')
+  assert.deepEqual(groups[0].codes, ['fila 2']) // fila 1 = encabezado
+})
+
+test('groupValidationErrors: grupos ordenados de mayor a menor cantidad de filas afectadas', () => {
+  const results = [
+    { valid: false, index: 0, normalized: { ID_Socio: 'A' }, errors: ['Error raro'] },
+    { valid: false, index: 1, normalized: { ID_Socio: 'B' }, errors: ['Error común'] },
+    { valid: false, index: 2, normalized: { ID_Socio: 'C' }, errors: ['Error común'] },
+    { valid: false, index: 3, normalized: { ID_Socio: 'D' }, errors: ['Error común'] },
+  ]
+  const groups = groupValidationErrors(results, 'ID_Socio')
+  assert.equal(groups[0].message, 'Error común')
+  assert.equal(groups[0].count, 3)
+  assert.equal(groups[1].message, 'Error raro')
+})
+
+test('groupValidationErrors: escenario real -- 28 filas con Provincia "Utcubamba" que no pertenece a "Cajamarca" quedan en un solo grupo', async () => {
+  const rows = Array.from({ length: 28 }, (_, i) => ({
+    ID_Socio: `COOP-AROMAS-VALLE-${String(i + 1).padStart(3, '0')}`,
+    socio_nombre_completo: `Socio ${i + 1}`,
+    socio_dni: `1000000${i}`.slice(-8),
+    socio_departamento: 'Cajamarca',
+    socio_provincia: 'Utcubamba', // provincia real, pero de Amazonas, no de Cajamarca
+  }))
+  const { rows: results } = await validateSocioRows(rows)
+  const groups = groupValidationErrors(results, 'ID_Socio')
+  const provinciaGroup = groups.find((g) => g.message.includes('Provincia') && g.message.includes('Utcubamba'))
+  assert.ok(provinciaGroup, JSON.stringify(groups))
+  assert.equal(provinciaGroup.count, 28)
+  assert.equal(provinciaGroup.codes.length, 28)
+  assert.equal(provinciaGroup.codes[0], 'COOP-AROMAS-VALLE-001')
 })

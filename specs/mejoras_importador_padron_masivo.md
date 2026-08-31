@@ -1,16 +1,18 @@
 # Spec — Mejoras al Importador de Padrón Masivo (CSV)
 
-- **Estado:** **Implementado** (ronda 6, 2026-09-01) — ver sección 9 para
-  el diseño/implementación de esta ronda (tolerancia Sí/No, confirmación
-  de tildes en ubigeo, alias de label viejo hip/hrp, mensajes de error
-  legibles, distinción de error de fórmula de Excel en socio no
-  encontrado). Rondas 1-5 (secciones 1-8) quedan cerradas, sin reabrir.
+- **Estado:** **Implementado** (ronda 7, 2026-09-01) — ver sección 10 para
+  el diseño/implementación de esta ronda (corrección del texto exacto del
+  label de `hip` + resumen agrupado de errores en el preview). Rondas 1-6
+  (secciones 1-9) quedan cerradas, sin reabrir salvo el label de `hip`
+  (10.1, corrige una corrección de la ronda 6/3).
 - **Fecha:** 2026-08-31 (ronda 1: diseño; ronda 2: cierre de decisiones +
   implementación; ronda 3, mismo día: hallazgos de la primera carga real
   de producción, COOP-AROMAS-VALLE, 618 socios / 825 parcelas); 2026-09-01
   (ronda 4: corrección de ambigüedad en fecha + extensión a Provincia;
   ronda 5, mismo día: extensión a Distrito; ronda 6, mismo día: más
-  hallazgos de la misma carga real + mensajes legibles)
+  hallazgos de la misma carga real + mensajes legibles; ronda 7, mismo
+  día: corrección del label exacto de `hip` + resumen agrupado de
+  errores)
 - **Contexto previo:** `ADR-027-certificaciones-normalizadas.md`,
   `specs/padron_certificaciones_normalizado.md` (diseño original de las
   columnas dinámicas y del rechazo por columna no reconocida, sección 6.1),
@@ -1111,3 +1113,126 @@ hectareWarnings, missingSocioWarnings }`.
 | **Reimportar un CSV con `cert_org_estatus`/certificaciones ya en "Sí" con tilde** | Sin impacto — `normalizeSiNo` no toca un valor que ya es canónico (`stripped === 'si'` matchea tanto `"Si"` como `"Sí"`, ambos se normalizan al mismo `'Sí'`). |
 | **Un archivo con "Verdadero"/"Falso"/"1"/"0" en vez de Sí/No** | Fuera de alcance a propósito — no hay evidencia real de esas variantes; `normalizeSiNo` las deja pasar tal cual y el `.refine()` las rechaza con "Debe ser Sí o No", consistente con el resto del diseño (no adivinar más allá de la evidencia real confirmada). |
 | **Mensajes legibles cambiaron texto exacto que algún test/integración externa pudiera estar comparando** | Ningún consumidor fuera de este módulo compara el texto exacto de estos mensajes (confirmado: solo se muestran en `ImportPadronModal.jsx` vía `.join('; ')`, nunca se parsean de vuelta). |
+
+---
+
+## 10. Ronda 7 (2026-09-01) — corrección del label exacto de `hip` + resumen agrupado de errores
+
+### 10.1 Fix urgente: label exacto de `hip` — "Ha. Inverna/Pasto", no "Ha. Invernadero/Pasto"
+
+**Corrección de una corrección:** la ronda 3 (2026-08-31) había cambiado
+el label de `hip` de `"Ha. Infraestructura Productiva"` a `"Ha.
+Invernadero/Pasto"` (palabra completa) por pedido explícito del usuario.
+El usuario indicó en esta ronda que ese texto seguía sin ser exacto — el
+real, con evidencia directa de su archivo, es `"Ha. Inverna/Pasto"`
+(abreviado).
+
+**Corroboración encontrada en el propio repo, no pedida:** `lib/gisLandUseStyles.js:18`
+(módulo de estilos de uso de suelo del mapa GIS — `EUDR_USO_SUELO`,
+completamente independiente del Padrón/CSV) **ya usaba** `'Inverna/Pasto'`
+como label de categoría (`{ key: 'inverna pasto', label: 'Inverna/Pasto',
+... }`), igual que `'Rastrojo/Purma'` en la línea siguiente. Este módulo
+no se tocó nunca en las rondas anteriores del importador — es evidencia
+independiente, ya existente en el código antes de esta tarea, que
+corrobora que `"Inverna/Pasto"` es la terminología real del sistema, no
+un texto inventado para esta corrección puntual.
+
+**Fix:** `HECTARE_FIELDS` (`lib/validations/socios.js`) — label de `hip`
+cambiado a `'Ha. Inverna/Pasto'` (única fuente de verdad, propaga
+automáticamente a `PARCELA_FIELD_LABELS`/CSV export/`ParcelaFormModal.jsx`,
+mismo mecanismo de siempre). `hrp` (`"Ha. Rastrojo/Purma"`) **no se
+tocó** — no fue parte de este pedido, y no hay evidencia de que esté mal.
+
+**Alias extendidos** (`PARCELA_REVERSE_LABELS`, `lib/padronCsv.js`): hip
+ahora reconoce **3** encabezados como equivalentes al mismo campo
+técnico:
+
+| Encabezado reconocido | Origen |
+|---|---|
+| `"Ha. Inverna/Pasto"` | Canónico actual (ronda 7) — el que se exporta/muestra |
+| `"Ha. Invernadero/Pasto"` | Alias — corrección de la ronda 3, resultó tener el texto exacto mal |
+| `"Ha. Infraestructura Productiva"` | Alias — label original, antes de la ronda 3 |
+
+Los 3 mapean a `hip`. `hrp` sigue con su único alias de la ronda 6
+(`"Ha. Reserva/Protección"`).
+
+### 10.2 Resumen agrupado de errores en el preview
+
+**Problema:** con un archivo real de cientos de filas, el usuario tenía
+que desplazarse fila por fila en la tabla del preview para entender qué
+tipos de error tenía el archivo — sin una vista agregada, un patrón como
+"28 filas con la misma Provincia mal declarada" no era visible de un
+vistazo.
+
+**Fix:** `groupValidationErrors(results, codeKey)` (`lib/padronCsv.js`,
+exportada, función pura) — agrupa las filas inválidas de `results` (el
+array `rows` que ya devuelven `validateSocioRows`/`validateParcelaRows`)
+por el **texto exacto** de cada mensaje de error. Mismo mensaje = mismo
+grupo, sin importar la fila. `codeKey` (`'ID_Socio'` o
+`'ID_Parcela_Fija'` según la entidad) determina qué campo de cada fila
+usar como "código" visible en la lista de afectados; si ese campo está
+vacío (puede pasar justo cuando ESE es el error), cae a `"fila N"`.
+
+**Una fila con más de un error aparece en cada grupo correspondiente**
+(pedido explícito) — `groupValidationErrors` itera `r.errors` completo
+por fila, no solo el primero, así que una fila con 2 errores distintos
+contribuye a 2 grupos distintos, cada uno con su propio conteo.
+
+**Orden:** grupos de mayor a menor cantidad de filas afectadas — decisión
+de diseño (el problema más extendido primero), no pedida literal pero
+razonable para el propósito de triage.
+
+**UI (`ImportPadronModal.jsx`):** un bloque nuevo arriba de la tabla,
+siempre visible cuando hay errores, mostrando por grupo: el mensaje
+completo, la cantidad de filas, y hasta 10 códigos (`MAX_CODES_PREVIEW`)
+seguidos de `"+N más"` si hay más. La tabla fila-por-fila que ya existía
+**no se eliminó** — quedó detrás de un toggle (`"Ver todas las filas
+(N)"` / `"Ocultar el detalle fila por fila"`), colapsada por defecto:
+el resumen es el triage rápido, la tabla sigue disponible para el
+detalle bajo demanda (una de las 2 opciones que daba el pedido —
+"debajo del resumen" o "detrás de un toggle" — se implementó el toggle,
+porque con cientos de filas mantener la tabla siempre visible además del
+resumen sería demasiado scroll).
+
+**Ejemplo real verificado con un test** (`"Utcubamba"` es una provincia
+real, pero de Amazonas, no de Cajamarca — confirmado contra
+`lib/ubigeoData.js` antes de escribir el test): 28 filas con
+`socio_provincia: 'Utcubamba'` y `socio_departamento: 'Cajamarca'`
+quedan agrupadas en un solo mensaje con `count: 28` y los 28 códigos de
+socio en `codes`.
+
+### 10.3 Contrato de datos
+
+`groupValidationErrors` es una función nueva, no modifica el retorno de
+`validateSocioRows`/`validateParcelaRows` — el modal la llama aparte,
+sobre el array `rows` ya obtenido.
+
+```
+groupValidationErrors(results: Array<{valid, index, normalized, errors}>, codeKey: string)
+  -> Array<{ message: string, count: number, codes: string[] }>
+```
+
+### 10.4 Archivos tocados
+
+- `lib/validations/socios.js` — label de `hip` en `HECTARE_FIELDS`
+  corregido a `'Ha. Inverna/Pasto'`.
+- `lib/padronCsv.js` — `PARCELA_REVERSE_LABELS` con el alias nuevo
+  (`'ha. invernadero/pasto'` -> `hip`); `groupValidationErrors` (nueva,
+  exportada).
+- `components/features/socios/ImportPadronModal.jsx` — import de
+  `groupValidationErrors`, estado `showAllRows` (toggle), bloque de
+  resumen agrupado arriba de la tabla, tabla existente detrás del toggle.
+- `tests/test_padron_csv.mjs` — tests de label/alias actualizados al
+  nuevo canónico (`"Ha. Inverna/Pasto"`) + alias viejo (`"Ha.
+  Invernadero/Pasto"`) confirmado como alias, no canónico; 6 tests
+  nuevos de `groupValidationErrors` (agrupación básica, fila con
+  múltiples errores en múltiples grupos, filas válidas no aportan,
+  fallback a `"fila N"`, orden por cantidad, escenario real de 28 filas).
+
+### 10.5 Riesgos
+
+| Riesgo | Detalle |
+|---|---|
+| **Reimportar un CSV exportado durante la ventana de la ronda 3-6 (con el label "Ha. Invernadero/Pasto")** | Sin impacto — ahora es un alias reconocido explícitamente, no cae en `unrecognizedColumns`. |
+| **Un tercer cambio de texto futuro para hip/hrp** | El patrón de alias ya está establecido (`PARCELA_REVERSE_LABELS.set(...)` después de construir el mapa) — extenderlo a un futuro label nuevo es una línea, no un rediseño. |
+| **El resumen agrupado no reemplaza los chequeos de calidad ya existentes** | Es puramente una vista de agregación sobre errores que YA se calculaban fila por fila (rondas 1-6) — no cambia qué se considera válido/inválido, solo cómo se presenta. |

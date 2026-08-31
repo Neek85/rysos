@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import {
   parseCsv,
   validateSocioRows,
@@ -8,6 +8,7 @@ import {
   downloadSocioTemplate,
   downloadParcelaTemplate,
   decodeCsvBuffer,
+  groupValidationErrors,
 } from '@/lib/padronCsv'
 import { createSocio, createParcela } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
@@ -48,6 +49,10 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
   const [parseError, setParseError] = useState(null)
   const [committing, setCommitting] = useState(false)
   const [commitSummary, setCommitSummary] = useState(null)
+  // Mejoras importador (spec sección 10.2, ronda 7): la tabla fila-por-fila
+  // queda detrás de este toggle -- el resumen agrupado de arriba es el
+  // triage rápido, la tabla es el detalle bajo demanda.
+  const [showAllRows, setShowAllRows] = useState(false)
 
   function resetFile() {
     setFileName(null)
@@ -57,6 +62,7 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
     setMissingSocioWarnings([])
     setParseError(null)
     setCommitSummary(null)
+    setShowAllRows(false)
   }
 
   function handleTabChange(next) {
@@ -106,6 +112,14 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
 
   const validRows = validated?.filter((r) => r.valid) ?? []
   const invalidRows = validated?.filter((r) => !r.valid) ?? []
+  // Mejoras importador (spec sección 10.2, ronda 7): agrupa las filas
+  // inválidas por el texto exacto del mensaje de error, para el resumen
+  // de triage rápido -- ver groupValidationErrors en lib/padronCsv.js.
+  const errorGroups = useMemo(
+    () => groupValidationErrors(validated ?? [], tab === 'socios' ? 'ID_Socio' : 'ID_Parcela_Fija'),
+    [validated, tab]
+  )
+  const MAX_CODES_PREVIEW = 10
 
   async function handleConfirmImport() {
     if (!organizationId) {
@@ -234,36 +248,68 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
               {validated.length} fila(s) totales.
             </p>
 
-            <div className="max-h-64 overflow-y-auto rounded-lg border border-gray-200">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-gray-50">
-                  <tr>
-                    <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Fila</th>
-                    <th className="px-2 py-1.5 text-left font-semibold text-gray-500">
-                      {tab === 'socios' ? 'ID_Socio' : 'ID_Parcela_Fija'}
-                    </th>
-                    <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Estado</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {validated.map((r) => (
-                    <tr key={r.index} className={r.valid ? '' : 'bg-red-50/50'}>
-                      <td className="px-2 py-1.5 text-gray-500">{r.index + 2}</td>
-                      <td className="px-2 py-1.5 font-mono text-gray-700">
-                        {r.normalized.ID_Socio || r.normalized.ID_Parcela_Fija || '—'}
-                      </td>
-                      <td className="px-2 py-1.5">
-                        {r.valid ? (
-                          <span className="text-emerald-700">✓ Válida</span>
-                        ) : (
-                          <span className="text-red-600">{r.errors.join('; ')}</span>
-                        )}
-                      </td>
-                    </tr>
+            {errorGroups.length > 0 && (
+              <div className="rounded-lg border border-red-200 bg-red-50/50 p-3">
+                <p className="mb-2 text-xs font-semibold text-red-700">
+                  Resumen de errores ({errorGroups.length} tipo{errorGroups.length === 1 ? '' : 's'} distinto
+                  {errorGroups.length === 1 ? '' : 's'}) — para el detalle fila por fila, usá el botón de abajo.
+                </p>
+                <div className="max-h-56 space-y-2 overflow-y-auto">
+                  {errorGroups.map((g) => (
+                    <div key={g.message} className="text-xs">
+                      <p className="text-red-700">
+                        <span className="font-semibold">{g.message}</span> ({g.count} fila{g.count === 1 ? '' : 's'})
+                      </p>
+                      <p className="font-mono text-[11px] text-gray-500">
+                        {g.codes.slice(0, MAX_CODES_PREVIEW).join(', ')}
+                        {g.codes.length > MAX_CODES_PREVIEW ? ` +${g.codes.length - MAX_CODES_PREVIEW} más` : ''}
+                      </p>
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowAllRows((v) => !v)}
+              className="text-xs font-semibold text-gray-500 underline hover:text-gray-700"
+            >
+              {showAllRows ? 'Ocultar el detalle fila por fila' : `Ver todas las filas (${validated.length})`}
+            </button>
+
+            {showAllRows && (
+              <div className="max-h-64 overflow-y-auto rounded-lg border border-gray-200">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-50">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Fila</th>
+                      <th className="px-2 py-1.5 text-left font-semibold text-gray-500">
+                        {tab === 'socios' ? 'ID_Socio' : 'ID_Parcela_Fija'}
+                      </th>
+                      <th className="px-2 py-1.5 text-left font-semibold text-gray-500">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {validated.map((r) => (
+                      <tr key={r.index} className={r.valid ? '' : 'bg-red-50/50'}>
+                        <td className="px-2 py-1.5 text-gray-500">{r.index + 2}</td>
+                        <td className="px-2 py-1.5 font-mono text-gray-700">
+                          {r.normalized.ID_Socio || r.normalized.ID_Parcela_Fija || '—'}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          {r.valid ? (
+                            <span className="text-emerald-700">✓ Válida</span>
+                          ) : (
+                            <span className="text-red-600">{r.errors.join('; ')}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {commitSummary && (
               <div
