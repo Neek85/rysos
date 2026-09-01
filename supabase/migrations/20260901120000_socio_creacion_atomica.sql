@@ -100,12 +100,46 @@ END;
 $$;
 
 -- No se usa SECURITY DEFINER: la función corre con el rol del llamador,
--- mismo criterio que fn_guardar_inspeccion_completa. Sin GRANT explícito
--- -- llamada solo desde lib/actions/sociosActions.js con la Service Role
--- Key (getSupabaseServerClient()), que ya bypasea privilegios de función
--- igual que bypasea RLS -- mismo patrón confirmado en
--- lib/actions/sociosActions.js::createParcela, que ya llama a
--- fn_sanitize_geometry (supabase/migrations/20260818_gis_core_sanitization.sql)
--- sin que esa migración tenga ningún GRANT tampoco.
+-- llamada solo desde lib/actions/sociosActions.js con la Service Role Key
+-- (getSupabaseServerClient()).
+--
+-- CORRECCIÓN (2026-09-01, hallazgo de seguridad pre-aplicación): el
+-- comentario original de este bloque decía "sin GRANT explícito... mismo
+-- criterio que fn_guardar_inspeccion_completa" -- eso es incorrecto.
+-- fn_guardar_inspeccion_completa SÍ tiene un GRANT EXECUTE explícito a
+-- anon/authenticated (20260818_inspecciones_atomic_save.sql) -- deliberado,
+-- porque INSPECCIONES/CAP_* ya son escribibles por anon (RLS
+-- FOR ALL USING(true), ver 20260818_fix_inspecciones_rls.sql), así que
+-- el GRANT no abre nada que las políticas no permitieran ya. PADRON_SOCIOS/
+-- SOCIO_CERTIFICACIONES son el caso opuesto: `anon` NO tiene política de
+-- escritura (por diseño deliberado, ver CLAUDE.md/docs/schema_live.md) --
+-- el único camino de escritura es la Service Role Key. Postgres otorga
+-- EXECUTE a PUBLIC por defecto en toda función nueva (CREATE FUNCTION no
+-- lo revoca solo) -- sin un REVOKE explícito, esta función queda
+-- alcanzable directo vía el endpoint RPC de PostgREST con solo la llave
+-- `anon` pública, dejando que cualquiera cree socios reales (y sus
+-- certificaciones) en el padrón de CUALQUIER organización, pasando por
+-- alto assertMatchesExistingOrg/assertSocioExists de
+-- lib/actions/sociosActions.js -- esas validaciones viven en la Server
+-- Action, no en la base, así que la RPC por sí sola no las hereda.
+--
+-- Nota honesta sobre severidad real (no fue posible confirmar en vivo
+-- contra pg_proc/information_schema desde este entorno, sin conexión
+-- Postgres directa -- ver CLAUDE.md): como esta función NO es
+-- SECURITY DEFINER, el INSERT interno corre con los privilegios del rol
+-- que llama. Si RLS en PADRON_SOCIOS/SOCIO_CERTIFICACIONES efectivamente
+-- deniega INSERT a `anon` hoy (no hay política de escritura para ese rol,
+-- solo para `authenticated`), es posible que RLS por sí sola ya bloqueara
+-- un intento de explotación incluso sin este REVOKE. Aun así, depender
+-- solo de RLS como única capa es frágil: si en el futuro se agrega
+-- cualquier política de escritura `anon` a estas tablas por otro motivo
+-- (como ya pasó con INSPECCIONES/CAP_*), esta función quedaría explotable
+-- en el acto sin que nadie lo note, porque el nivel de función ya estaba
+-- abierto de antes. El REVOKE/GRANT de abajo cierra la capa de función de
+-- forma explícita, independientemente de lo que haga RLS -- defensa en
+-- profundidad, no un parche puntual sobre un solo síntoma.
+REVOKE EXECUTE ON FUNCTION public.fn_crear_socio_con_certificaciones(text, text, jsonb, jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_crear_socio_con_certificaciones(text, text, jsonb, jsonb) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_crear_socio_con_certificaciones(text, text, jsonb, jsonb) TO service_role;
 
 COMMIT;

@@ -453,6 +453,98 @@ socios en producción; (2) aplicar el INSERT de `ORG-TEST-DEMO`; (3) con
 ambas cosas aplicadas, cargar `Socios.csv`/`Parcelas.csv` (generados con
 `node scripts/generar_padron_sintetico.mjs`) vía `/dashboard/socios` y
 documentar acá el resultado (filas válidas, atomicidad ante interrupción
-deliberada, progreso real); (4) commit/push a `staging` de este trabajo
-— no se hizo todavía porque el prompt pedía documentar el resultado de
-la carga real en el mismo commit, y esa carga sigue bloqueada.
+deliberada, progreso real).
+
+**Actualización 2026-09-01c:** por decisión del usuario, lo que ya
+estaba verde (spec, generador, `.gitignore`, este archivo) se commiteó y
+pusheó a `staging` sin esperar a que se destrabe la carga real — ver
+commit `cbc6ac3`. La carga real queda para cuando el usuario aplique las
+migraciones y avise.
+
+## 2026-09-01d — Hueco de seguridad cerrado en `20260901120000_socio_creacion_atomica.sql` (aún sin aplicar)
+
+**Tarea:** antes de que el usuario aplique la migración +el INSERT de
+`ORG-TEST-DEMO` en Supabase Studio, cerrar un hueco de seguridad real
+detectado en la función nueva y documentar 2 decisiones de diseño
+pendientes.
+
+**Hueco real (no hipotético):** `fn_crear_socio_con_certificaciones` se
+creó sin ningún `REVOKE`/`GRANT` explícito. Postgres otorga `EXECUTE` a
+`PUBLIC` por defecto en toda función nueva — sin revocarlo, la función
+queda alcanzable directo vía el endpoint RPC de PostgREST con solo la
+llave `anon` pública, permitiendo crear socios (con certificaciones) en
+el padrón de cualquier organización sin pasar por las validaciones
+multi-tenant de `lib/actions/sociosActions.js` (viven en la Server
+Action, no en la base). El comentario original del archivo justificaba
+la ausencia de `GRANT` comparándose con `fn_guardar_inspeccion_completa`
+— comparación incorrecta: esa otra función sí tiene `GRANT EXECUTE`
+explícito a `anon`/`authenticated`, deliberado, porque `INSPECCIONES`/
+`CAP_*` ya son escribibles por `anon` vía RLS. `PADRON_SOCIOS` es el
+caso opuesto (`anon` sin política de escritura, por diseño). Fix
+aplicado en el mismo archivo, antes del `COMMIT` final:
+```sql
+REVOKE EXECUTE ON FUNCTION public.fn_crear_socio_con_certificaciones(text, text, jsonb, jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_crear_socio_con_certificaciones(text, text, jsonb, jsonb) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_crear_socio_con_certificaciones(text, text, jsonb, jsonb) TO service_role;
+```
+
+**Severidad real, honestamente incierta:** no se pudo confirmar en vivo
+contra `pg_proc`/`information_schema.routine_privileges` si `PUBLIC` ya
+viene restringido por defecto en esta instancia de Supabase (sin
+conexión Postgres directa desde este entorno; las pruebas por REST con
+la anon key y la Service Role Key dieron el mismo `PGRST202` para varias
+funciones de prueba — PostgREST da ese mismo mensaje tanto para "no
+existe" como para "existe pero sin `EXECUTE`", así que no es una señal
+concluyente). Como la función NO es `SECURITY DEFINER`, si RLS en
+`PADRON_SOCIOS`/`SOCIO_CERTIFICACIONES` ya deniega `INSERT` a `anon` hoy
+(no hay política de escritura para ese rol), es posible que RLS por sí
+sola ya bloqueara la explotación real incluso sin este fix — pero
+depender solo de esa capa es frágil (ver detalle completo en
+`specs/organizacion_prueba_robustez_importador.md` sección 0.d). El
+`REVOKE`/`GRANT` se aplica como defensa en profundidad de todos modos.
+
+**Hallazgo colateral más amplio, NO tocado en esta tarea:** el mismo
+patrón (comentario que afirma "no se otorga a `anon`" sin ningún
+`REVOKE`/`GRANT` real) aparece también en
+`supabase/migrations/20260821_221221_fn_parcelas_vecinas_eudr.sql`. De
+16 migraciones con funciones nuevas, solo 2 (`fn_guardar_inspeccion_completa`
+y, ahora, `fn_crear_socio_con_certificaciones`) tienen `REVOKE`/`GRANT`
+reales — el resto no tiene ninguno. Se recomienda una auditoría
+dedicada de `GRANT`/`REVOKE` sobre todas las funciones RPC del proyecto
+antes de aplicar cualquier migración pendiente nueva — no se hizo acá
+porque el pedido era específicamente sobre esta migración, y tocar otras
+sin que el usuario lo pida es un cambio de alcance que merece su propia
+tarea.
+
+**2 decisiones de diseño documentadas** (`specs/organizacion_prueba_robustez_importador.md`
+secciones 9.a/9.b, sin cambio de código):
+- **9.a:** una certificación cuyo `codigo` no matchea el catálogo activo
+  se omite en silencio — a propósito, mismo criterio que
+  `cert_org_estatus` (ronda 1 del importador): un mismatch individual no
+  debe bloquear el alta del socio completo. No se agregó logging — el
+  catálogo es estable, se evalúa telemetría solo si aparece evidencia
+  real de un mismatch en producción.
+- **9.b:** la atomicidad es POR FILA (un socio + certificaciones por
+  invocación RPC), no de todo el archivo — el importador llama la RPC
+  una vez por fila en un bucle, sin transacción que envuelva el CSV
+  completo. Interrumpir la carga deja las filas ya procesadas
+  commiteadas completas y el resto sin procesar, no un rollback total.
+  Un reintento del archivo completo sigue siendo seguro en la práctica
+  porque `ImportPadronModal.jsx` detecta y omite duplicados — pero esa
+  es una propiedad del importador, no de la atomicidad de la RPC en sí.
+
+**Verificaciones repetidas (premisas del prompt):** uuid de `CACAO`
+re-confirmado con una consulta REST nueva en este momento (idéntico al
+ya usado, `9f7cc233-4563-427f-a6bd-6b9b775817a9`); `ORGANIZACIONES`
+sigue con una sola fila real. Grep completo de `components/`/`app/`/
+`lib/`: no existe ningún validador de formato de RUC en el repo — el
+placeholder `'N/A — organización sintética'` no rompe ninguna vista.
+
+**Verificado:** `node --test tests/*.mjs` — 677 passed, 0 failed (el
+cambio es solo SQL, no toca ningún módulo JS testeado). `npm run lint`
+sigue sin poder correr en este entorno (mismo límite ya documentado).
+
+**Qué falta:** el usuario/arquitecto revisa el diff del `REVOKE`/`GRANT`
+y las respuestas 9.a/9.b, y solo entonces aplica la migración corregida
++ el INSERT de `ORG-TEST-DEMO` en Supabase Studio — no se aplicó nada de
+forma autónoma en esta tarea.

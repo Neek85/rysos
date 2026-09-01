@@ -1,8 +1,9 @@
 # Spec — Organización de prueba para robustez del importador y demo comercial
 
-- **Estado:** En progreso — org y padrón sintético preparados; alta en
-  Supabase Studio y carga vía UI pendientes de que el usuario aplique un
-  bloqueante encontrado en el camino (ver sección 0.c).
+- **Estado:** En progreso — org y padrón sintético preparados; hueco de
+  seguridad en la migración pendiente cerrado (sección 0.d); alta en
+  Supabase Studio y carga vía UI siguen pendientes de que el usuario
+  aplique la migración corregida (ver sección 0.c).
 - **Fecha:** 2026-09-01.
 - **Contexto previo:** `docs/adr/ADR-008-etiqueta-organizacion-prueba-y-guardarail-e2e.md`,
   `docs/adr/ADR-030-convencion-codigo-organizaciones.md`,
@@ -57,8 +58,81 @@ disponible desde este entorno, ver `CLAUDE.md`) — **el paso 6 de esta
 tarea (cargar el CSV sintético vía el importador real y verificar
 atomicidad) queda bloqueado hasta que el usuario aplique esa migración**.
 La migración ya existe, es idempotente (`CREATE OR REPLACE FUNCTION`,
-envuelta en `BEGIN;`/`COMMIT;`) y no requiere ningún cambio — solo
-aplicarla.
+envuelta en `BEGIN;`/`COMMIT;`) — **ya no es cierto que "no requiere
+ningún cambio"**, ver 0.d, corregido antes de que se aplique.
+
+**d) Hueco de seguridad real encontrado y cerrado en la migración de
+0.c, antes de que se aplicara (2026-09-01, segunda pasada sobre este
+archivo).** `fn_crear_socio_con_certificaciones` se creó sin ningún
+`REVOKE`/`GRANT` explícito. Postgres otorga `EXECUTE` a `PUBLIC` por
+defecto en toda función nueva — sin revocarlo, la función queda
+alcanzable directo vía el endpoint RPC de PostgREST con solo la llave
+`anon` pública, dejando crear socios reales (con certificaciones) en el
+padrón de **cualquier organización**, sin pasar por
+`assertMatchesExistingOrg`/`assertSocioExists` de
+`lib/actions/sociosActions.js` (esas validaciones viven en la Server
+Action, no en la base — la RPC no las hereda). El comentario original
+del archivo justificaba la ausencia de `GRANT` citando
+`fn_guardar_inspeccion_completa` como "mismo criterio" — **eso era
+incorrecto**: esa otra función SÍ tiene un `GRANT EXECUTE` explícito a
+`anon`/`authenticated` (`20260818_inspecciones_atomic_save.sql`),
+deliberado, porque `INSPECCIONES`/`CAP_*` ya son escribibles por `anon`
+vía RLS (`FOR ALL USING(true)`) — el `GRANT` no abre nada que la
+política no permitiera ya. `PADRON_SOCIOS`/`SOCIO_CERTIFICACIONES` son
+el caso opuesto: `anon` no tiene ninguna política de escritura ahí, por
+diseño deliberado.
+
+**Fix aplicado** (`supabase/migrations/20260901120000_socio_creacion_atomica.sql`,
+antes del `COMMIT` final):
+```sql
+REVOKE EXECUTE ON FUNCTION public.fn_crear_socio_con_certificaciones(text, text, jsonb, jsonb) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.fn_crear_socio_con_certificaciones(text, text, jsonb, jsonb) FROM anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_crear_socio_con_certificaciones(text, text, jsonb, jsonb) TO service_role;
+```
+
+**Nota honesta sobre severidad real (para que el arquitecto la tenga al
+confirmar):** no fue posible confirmar en vivo contra
+`pg_proc`/`information_schema.routine_privileges` si `PUBLIC` ya viene
+restringido por defecto en esta instancia de Supabase específica (sin
+conexión Postgres directa desde este entorno, y las pruebas hechas vía
+REST con la anon key y con la Service Role Key dieron el mismo
+`PGRST202` "no encontrada" para varias funciones de prueba — PostgREST
+da ese mismo mensaje tanto para "no existe" como para "existe pero el
+rol no tiene `EXECUTE`", así que no es una señal concluyente sin poder
+probar la firma exacta). Como la función NO es `SECURITY DEFINER`, el
+`INSERT` interno corre con los privilegios del rol que llama — si RLS en
+`PADRON_SOCIOS`/`SOCIO_CERTIFICACIONES` ya deniega `INSERT` a `anon` hoy
+(no hay política de escritura para ese rol), es *posible* que RLS por sí
+sola ya bloqueara un intento de explotación real incluso sin este fix.
+Aun así, depender solo de RLS como única capa es frágil — si en el
+futuro se agrega cualquier política de escritura `anon` a estas tablas
+por otro motivo (como ya pasó con `INSPECCIONES`/`CAP_*`, ver
+`20260818_fix_inspecciones_rls.sql`), esta función habría quedado
+explotable en el acto sin que nadie lo note, porque la capa de función
+ya estaba abierta de antes. El `REVOKE`/`GRANT` es correcto como defensa
+en profundidad independientemente de esa ambigüedad.
+
+**Hallazgo colateral más amplio, fuera de alcance de esta tarea:** el
+mismo patrón — un comentario en el archivo que *afirma* "no se otorga a
+`anon`" sin ningún `REVOKE`/`GRANT` real que lo haga cumplir — aparece
+también en `supabase/migrations/20260821_221221_fn_parcelas_vecinas_eudr.sql`
+(línea 39: "NO usa... GRANT EXECUTE ... TO anon", pero cero sentencias
+`GRANT`/`REVOKE` reales en el archivo). Un grep sobre
+`supabase/migrations/*.sql` muestra que **solo 2 de 16 migraciones con
+funciones nuevas** (`fn_guardar_inspeccion_completa` y, ahora,
+`fn_crear_socio_con_certificaciones`) tienen `REVOKE`/`GRANT` reales;
+el resto (`fn_sanitize_geometry`, `fn_validar_topologia_eudr` ×2,
+`fn_cobertura_uso_suelo_parcela`, `fn_validar_codigo_parcela_unico` ×2,
+`fn_parcelas_vecinas_eudr`, `get_my_org_id`, `auth_org_id`,
+`fn_prevent_audit_log_mutation`) no tienen ninguno. No se auditó ni se
+tocó ninguna de ellas en esta tarea — el pedido original era
+específicamente sobre `20260901120000_socio_creacion_atomica.sql`, y
+tocar migraciones ya aplicadas (o potencialmente aplicadas) sin que el
+usuario lo pida es un cambio de alcance que merece su propia tarea y
+confirmación explícita, no un agregado de último momento acá. Se
+recomienda una auditoría dedicada de `GRANT`/`REVOKE` sobre todas las
+funciones RPC del proyecto antes de aplicar cualquier migración
+pendiente nueva.
 
 ## 1. Alcance
 
@@ -209,7 +283,70 @@ válidas, si la barra de progreso reflejó avance real, y si el aviso
 `beforeunload` apareció al intentar cerrar/navegar afuera a mitad de
 carga.
 
-## 9. Criterios de aceptación
+## 9. Decisiones de diseño de `fn_crear_socio_con_certificaciones`
+
+### 9.a — Certificación con `codigo` sin match en el catálogo: se omite en silencio, a propósito
+
+Dentro del `LOOP` de `p_certificaciones`, el `INSERT ... SELECT ... FROM
+CERTIFICACIONES_CATALOGO WHERE cat.codigo = r_cert.codigo AND cat.activo
+= true` no inserta ninguna fila si el `codigo` no matchea (catálogo
+desactualizado, o una certificación que se desactivó entre que el
+frontend cargó `CERT_FLAG_FIELDS` y que se llamó a la RPC) — no hay
+ningún `RAISE`/error por esto. **Es a propósito, mismo criterio ya
+documentado para `cert_org_estatus`/`syncSocioCertificaciones` en
+`specs/mejoras_importador_padron_masivo.md` (ronda 1):** una
+certificación individual que no matchea no debe bloquear el alta del
+socio completo — el socio y sus certificaciones válidas se guardan
+igual. **No se cambia a loguear/reportar el mismatch en esta tarea** —
+el prompt original preguntaba si convenía, y la respuesta es: no hace
+falta hoy, porque el catálogo (`CERTIFICACIONES_CATALOGO`) es un catálogo
+estable gestionado desde Supabase Studio, no algo que cambie con
+frecuencia suficiente para justificar telemetría dedicada; si en el
+futuro se observa un mismatch real en producción (mismo patrón que otros
+hallazgos de este proyecto — investigar cuando aparece evidencia real,
+no antes), ahí se evalúa agregar un `RAISE WARNING` o una fila de log,
+no antes.
+
+### 9.b — La atomicidad es POR FILA, no de todo el archivo
+
+`fn_crear_socio_con_certificaciones` envuelve **un solo socio + sus
+certificaciones** en una transacción implícita (la propia invocación
+RPC) — si algo falla a mitad de esa función, esa fila entera revierte.
+Pero el importador masivo (`ImportPadronModal.jsx`) llama a esta RPC
+**una vez por fila del CSV**, en un bucle — no hay ninguna transacción
+que envuelva el archivo completo. **Consecuencia explícita:** interrumpir
+la carga a mitad de camino (cerrar la pestaña, navegar afuera) deja las
+filas YA procesadas commiteadas tal cual (socio + certificaciones
+completos, nunca a medias) y el resto del archivo simplemente sin
+procesar — **no es un rollback total del archivo**, es un corte limpio
+en el punto exacto de la interrupción. Esto es la mejora real que trajo
+la ronda 9 sobre el comportamiento anterior (antes, un corte a mitad de
+UNA fila podía dejar un socio sin sus certificaciones; ahora eso no
+puede pasar, pero un corte entre filas sigue dejando el archivo
+parcialmente cargado, por diseño). **Se deja explícito acá para que
+nadie asuma más adelante que reintentar el mismo CSV completo es
+seguro sin revisar primero qué filas ya entraron** — el propio
+importador ya maneja el caso de fila duplicada (mensaje "se omite" en
+vez de error, ronda 9), así que un reintento del archivo completo SÍ es
+seguro en la práctica (las filas ya cargadas se detectan como duplicado
+y se saltan), pero eso es una propiedad de `ImportPadronModal.jsx`, no
+de la atomicidad de la RPC en sí — no confundir las dos capas.
+
+## 10. Verificaciones repetidas en esta tarea (premisas del prompt)
+
+- **uuid de `CACAO`:** re-confirmado con una consulta REST nueva contra
+  `PRODUCTOS` en el momento de esta tarea (no reutilizado de memoria del
+  turno anterior) — `9f7cc233-4563-427f-a6bd-6b9b775817a9`, idéntico al
+  ya usado. `ORGANIZACIONES` sigue con una sola fila real
+  (`COOP-AROMAS-VALLE`).
+- **Validación de formato de RUC en la UI:** grep sobre `components/`,
+  `app/`, `lib/` — **no existe ningún validador de formato de RUC en
+  todo el repo** (ni longitud, ni regex, ni chequeo de dígito
+  verificador). El placeholder `'N/A — organización sintética'` para
+  `RUC` (mismo criterio que `ADR-008` usó para `ORG-TEST-E2E`) no tiene
+  ninguna vista que pueda romper por esto.
+
+## 11. Criterios de aceptación
 
 - [ ] `ORG-TEST-DEMO` existe en `ORGANIZACIONES` con
       `es_organizacion_prueba = true` y 2 filas en
