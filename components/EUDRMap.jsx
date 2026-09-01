@@ -19,16 +19,22 @@ export default function EUDRMap({ records }) {
   const layersRef = useRef([])
 
   useEffect(() => {
-    let L
+    let cancelled = false
     let map
 
     async function init() {
       if (!containerRef.current || mapRef.current) return
 
       const leaflet = await import('leaflet')
-      L = leaflet.default
+      const L = leaflet.default
 
       await import('leaflet/dist/leaflet.css')
+
+      // React StrictMode double-invokes this effect in dev; the first pass's
+      // cleanup fires while these imports are still pending (before `map`
+      // is assigned), so without this check both passes would call
+      // L.map() on the same container.
+      if (cancelled || !containerRef.current || mapRef.current) return
 
       // Fix default marker icons broken by webpack
       delete L.Icon.Default.prototype._getIconUrl
@@ -51,6 +57,7 @@ export default function EUDRMap({ records }) {
     init()
 
     return () => {
+      cancelled = true
       map?.remove()
       mapRef.current = null
       layersRef.current = []
