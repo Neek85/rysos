@@ -80,20 +80,52 @@ const PARCELAS_FAKE = [
 
 test('fetchSocios: nunca devuelve un socio de otra organización (probe + query ya scopeados)', async () => {
   const supabase = createFakeSupabase({ PADRON_SOCIOS: SOCIOS_FAKE })
-  const { rows } = await fetchSocios(supabase, {})
+  const { rows, organizationId } = await fetchSocios(supabase, {})
   assert.equal(rows.length, 1, 'debe resolver una sola organización (la primera del probe) y traer solo sus filas')
   assert.equal(rows[0].ID_Organizacion, 'COOP-JS')
+  assert.equal(organizationId, 'COOP-JS', 'organizationId debe viajar en el retorno, no requerir re-derivarlo del caller')
   assert.ok(
     rows.every((r) => r.ID_Organizacion === rows[0].ID_Organizacion),
     'ninguna fila de otra organización debe colarse en el resultado'
   )
 })
 
-test('fetchSocios: con 0 socios activos, devuelve vacío sin lanzar (probe sin resultados)', async () => {
+// ---------------------------------------------------------------
+// Ronda 8 (mejoras_importador_padron_masivo.md) -- fallback de
+// organizationId cuando PADRON_SOCIOS está vacío para la organización
+// (caso real: una organización recién dada de alta, sin ningún socio
+// todavía -- root cause real de "No se pudo determinar la organización
+// activa" al confirmar la importación masiva).
+// ---------------------------------------------------------------
+
+test('fetchSocios: con PADRON_SOCIOS vacío pero el fallback resuelve una organización real, devuelve rows: [] con ese organizationId (no null)', async () => {
   const supabase = createFakeSupabase({ PADRON_SOCIOS: [] })
-  const { rows, total } = await fetchSocios(supabase, {})
+  const resolveOrganizationIdFallback = async () => 'COOP-AROMAS-VALLE'
+  const { rows, total, organizationId } = await fetchSocios(supabase, { resolveOrganizationIdFallback })
+  assert.deepEqual(rows, [], 'sigue sin haber filas -- la organización existe pero no tiene socios todavía')
+  assert.equal(total, 0)
+  assert.equal(organizationId, 'COOP-AROMAS-VALLE', 'a diferencia del bug original, organizationId NO debe quedar null')
+})
+
+test('fetchSocios: con PADRON_SOCIOS vacío y el fallback tampoco encuentra nada (sin ninguna organización real), devuelve organizationId: null sin lanzar', async () => {
+  const supabase = createFakeSupabase({ PADRON_SOCIOS: [] })
+  const resolveOrganizationIdFallback = async () => null
+  const { rows, total, organizationId } = await fetchSocios(supabase, { resolveOrganizationIdFallback })
   assert.deepEqual(rows, [])
   assert.equal(total, 0)
+  assert.equal(organizationId, null)
+})
+
+test('fetchSocios: con PADRON_SOCIOS con datos, el probe normal alcanza -- el fallback NO se invoca (evita el round-trip innecesario al Server Action)', async () => {
+  const supabase = createFakeSupabase({ PADRON_SOCIOS: SOCIOS_FAKE })
+  let fallbackCalled = false
+  const resolveOrganizationIdFallback = async () => {
+    fallbackCalled = true
+    return 'NO-DEBERIA-USARSE'
+  }
+  const { organizationId } = await fetchSocios(supabase, { resolveOrganizationIdFallback })
+  assert.equal(fallbackCalled, false, 'el fallback solo debe invocarse cuando el probe normal no encuentra nada')
+  assert.equal(organizationId, 'COOP-JS')
 })
 
 test('fetchParcelasBySocio: un ID_Socio que existe en DOS organizaciones (mismo código, distinto tenant tras la migración de PK) nunca mezcla las parcelas de la organización equivocada', async () => {

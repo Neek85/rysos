@@ -1,10 +1,11 @@
 # Spec — Mejoras al Importador de Padrón Masivo (CSV)
 
-- **Estado:** **Implementado** (ronda 7, 2026-09-01) — ver sección 10 para
-  el diseño/implementación de esta ronda (corrección del texto exacto del
-  label de `hip` + resumen agrupado de errores en el preview). Rondas 1-6
-  (secciones 1-9) quedan cerradas, sin reabrir salvo el label de `hip`
-  (10.1, corrige una corrección de la ronda 6/3).
+- **Estado:** **Implementado** (ronda 8, 2026-09-01) — ver sección 11
+  para el diseño/implementación de esta ronda ("No se pudo determinar la
+  organización activa" al confirmar la importación masiva -- bug de
+  arranque en la resolución de organización, no del CSV/importador en sí,
+  documentado acá porque es lo que bloqueaba terminar de probar todo lo
+  anterior). Rondas 1-7 (secciones 1-10) quedan cerradas, sin reabrir.
 - **Fecha:** 2026-08-31 (ronda 1: diseño; ronda 2: cierre de decisiones +
   implementación; ronda 3, mismo día: hallazgos de la primera carga real
   de producción, COOP-AROMAS-VALLE, 618 socios / 825 parcelas); 2026-09-01
@@ -12,7 +13,7 @@
   ronda 5, mismo día: extensión a Distrito; ronda 6, mismo día: más
   hallazgos de la misma carga real + mensajes legibles; ronda 7, mismo
   día: corrección del label exacto de `hip` + resumen agrupado de
-  errores)
+  errores; ronda 8, mismo día: fix de resolución de organización activa)
 - **Contexto previo:** `ADR-027-certificaciones-normalizadas.md`,
   `specs/padron_certificaciones_normalizado.md` (diseño original de las
   columnas dinámicas y del rechazo por columna no reconocida, sección 6.1),
@@ -1236,3 +1237,236 @@ groupValidationErrors(results: Array<{valid, index, normalized, errors}>, codeKe
 | **Reimportar un CSV exportado durante la ventana de la ronda 3-6 (con el label "Ha. Invernadero/Pasto")** | Sin impacto — ahora es un alias reconocido explícitamente, no cae en `unrecognizedColumns`. |
 | **Un tercer cambio de texto futuro para hip/hrp** | El patrón de alias ya está establecido (`PARCELA_REVERSE_LABELS.set(...)` después de construir el mapa) — extenderlo a un futuro label nuevo es una línea, no un rediseño. |
 | **El resumen agrupado no reemplaza los chequeos de calidad ya existentes** | Es puramente una vista de agregación sobre errores que YA se calculaban fila por fila (rondas 1-6) — no cambia qué se considera válido/inválido, solo cómo se presenta. |
+
+---
+
+## 11. Ronda 8 (2026-09-01) — fix de resolución de organización activa ("No se pudo determinar la organización activa")
+
+**Nota de alcance:** a diferencia de las rondas 1-7 (todas sobre parseo/
+validación del CSV), este bug es de un mecanismo COMPARTIDO por toda la
+página `/dashboard/socios` (importación masiva, alta manual de socio,
+listado) — se documenta en este mismo spec porque es lo que impedía
+seguir probando el importador con datos reales, no porque sea parte del
+diseño del importador en sí.
+
+### 11.0 Investigación
+
+**a. Origen exacto del mensaje.** Dos sitios distintos emiten el mismo
+texto, y hay que distinguirlos:
+- `components/features/socios/ImportPadronModal.jsx:125-128` — chequeo
+  del lado del cliente, al inicio de `handleConfirmImport()`: si
+  `organizationId` (prop) es falsy, corta ahí mismo con
+  `setParseError('No se pudo determinar la organización activa.')`,
+  **antes** de llamar a ningún Server Action. Este es el que el usuario
+  ve "al confirmar la importación".
+- `lib/actions/sociosActions.js:37-41` (`assertOrganizacion`) — el mismo
+  mensaje, pero lanzado DENTRO de `createSocio`/`createParcela` (Server
+  Action) si de alguna forma se lo llama sin `organizationId`. No es el
+  que se dispara acá (el chequeo del cliente corta antes), pero comparte
+  la causa raíz si algún día ese guard del cliente se quita.
+
+**b. Cómo se determina hoy la organización activa (antes del fix).**
+Confirmado: no hay sesión de Supabase Auth, no hay selector de UI, no hay
+variable de entorno, no hay `localStorage`/cookie, no hay parámetro de
+URL. El mecanismo real, encadenado:
+1. `app/dashboard/socios/page.jsx:50` (antes del fix): `organizationId =
+   resolveActiveOrganizationId(rows)` — una función pura
+   (`lib/sociosSearch.js`) que toma el array `rows` (la página actual de
+   socios YA cargada) y devuelve `rows[0]?.ID_Organizacion`, o `null` si
+   `rows` está vacío.
+2. `rows` viene de `fetchSocios()` (mismo archivo), que a su vez hace un
+   **probe** propio: `SELECT ID_Organizacion FROM PADRON_SOCIOS WHERE
+   activo = true LIMIT 1` — "primera organización encontrada", y recién
+   con ese id arma la consulta paginada real.
+
+Es decir: la "organización activa" de toda la página se infiere **100%
+de los datos que ya existen en `PADRON_SOCIOS`** — no hay ninguna fuente
+de verdad independiente de esos datos.
+
+**c. Por qué falla específicamente ahora — confirmado, no es un valor
+que apuntaba a una organización de prueba eliminada.** Ninguna de las 2
+funciones anteriores menciona `COOP-JS`/`COOP-ND` en ningún lado — no
+hay ningún ID hardcodeado. La causa real:
+
+- `specs/alta_organizacion_real.md` (runbook ya existente en el repo,
+  aplicado el 2026-08-27 para `COOP-AROMAS-VALLE`): el alta de una
+  organización real inserta **solo** en `ORGANIZACIONES` y
+  `ORGANIZACION_PRODUCTOS` — **nunca** en `PADRON_SOCIOS`/
+  `PADRON_PARCELAS`. Confirmado también que la limpieza de datos de
+  prueba vació `ORGANIZACIONES` (no solo `PADRON_SOCIOS`) antes de esa
+  alta.
+- Resultado: `PADRON_SOCIOS` está **genuinamente vacío** para
+  `COOP-AROMAS-VALLE` hasta que la primera carga masiva tenga éxito —
+  confirmado en vivo, la página muestra "Sin socios registrados" ahora
+  mismo (capturas de esta y la ronda anterior).
+- El probe de `fetchSocios` (`SELECT ... FROM PADRON_SOCIOS ...`) no
+  encuentra nada → `resolveActiveOrganizationId([])` devuelve `null` →
+  `organizationId` es `null` → el chequeo del cliente corta la
+  importación.
+- **Es un bug de arranque "huevo y gallina" real, no una referencia
+  obsoleta**: no se puede importar el primer socio porque no hay ningún
+  socio todavía del cual derivar a qué organización pertenece. Confirma
+  la hipótesis 2 del pedido ("bug que ya existía y nunca se había
+  probado con datos reales hasta ahora") — el HOTFIX "Multi-Tenant
+  Estricto" (2026-08-25) se escribió y probó exclusivamente contra
+  `COOP-JS`/`COOP-ND`, que YA tenían datos de prueba en `PADRON_SOCIOS`
+  desde antes — el camino "organización real, `PADRON_SOCIOS`
+  legítimamente vacío" nunca se ejercitó hasta esta semana.
+- Hallazgo adicional, no pedido explícitamente: el mismo `organizationId`
+  de página también alimenta el flujo de alta manual de un socio ("+
+  Nuevo Socio", `app/dashboard/socios/page.jsx:364-371`) — el mismo bug
+  bloqueaba también crear el primer socio a mano, uno por uno, no solo la
+  carga masiva.
+- **Restricción arquitectónica confirmada antes de diseñar el fix:**
+  `ORGANIZACIONES` (que sí tiene una fila desde el alta, independiente de
+  `PADRON_SOCIOS`) **no se puede leer directo desde el navegador** — `anon`
+  no tiene política `SELECT` ahí, solo `authenticated`
+  (`docs/schema_live.md`, "asimetría deliberada — Tarea 9.1"). Por eso el
+  HOTFIX original nunca la usó como fuente: no era un descuido, era la
+  única opción disponible con el cliente anon-key.
+
+### 11.1 Fix
+
+**No se abre ninguna política RLS `anon` nueva** (se descartó a
+propósito, ver 11.0.c — sería revertir una decisión de seguridad
+deliberada de otra tarea sin que nadie lo pidiera). En su lugar: un
+Server Action nuevo, con Service Role Key, que lee `ORGANIZACIONES`
+directo — mismo patrón ya establecido para escrituras
+(`lib/actions/sociosActions.js`) y para la otra lectura server-side ya
+existente de esa tabla (`lib/actions/qcActions.js::resolveRadioContextoM`,
+que lee `ORGANIZACIONES.Config`).
+
+`lib/actions/organizacionesActions.js` (nuevo archivo) —
+`resolveOrganizationId()`:
+```js
+export async function resolveOrganizationId() {
+  const supabase = getSupabaseServerClient()
+  const { data, error } = await supabase
+    .from('ORGANIZACIONES')
+    .select('ID')
+    .eq('es_organizacion_prueba', false)
+    .order('creado_en')
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  return data?.ID ?? null
+}
+```
+
+Dos decisiones defensivas encontradas al escribir esto, no pedidas
+explícitamente:
+- `.eq('es_organizacion_prueba', false)`: sin este filtro, la fila
+  `'ORG-TEST-E2E'` (sembrada en
+  `supabase/migrations/20260822_021532_es_organizacion_prueba.sql`, y
+  sin evidencia de que la limpieza de datos de prueba la haya tocado —
+  el pedido solo mencionó `COOP-JS`/`COOP-ND`) podría devolverse en vez
+  de la organización real si Postgres no garantiza el orden de fila sin
+  un `ORDER BY` explícito.
+- `.order('creado_en')`: hace determinístico cuál es la "primera" (la
+  más antigua) en vez de depender del orden físico de almacenamiento.
+
+`lib/sociosSearch.js::fetchSocios` — el probe contra `PADRON_SOCIOS`
+sigue siendo el camino rápido (sin round-trip extra) cuando ya hay datos;
+`resolveOrganizationId` corre **solo** como fallback cuando ese probe no
+encuentra nada:
+```js
+let organizationId = orgProbe?.[0]?.ID_Organizacion
+if (!organizationId) {
+  organizationId = await resolveOrganizationIdFallback() // inyectable, default = resolveOrganizationId real
+}
+if (!organizationId) return { rows: [], total: 0, pageSize: PAGE_SIZE, organizationId: null }
+...
+return { rows: data ?? [], total: count ?? 0, pageSize: PAGE_SIZE, organizationId }
+```
+
+`resolveOrganizationIdFallback` es un parámetro inyectable (default: la
+función real) específicamente para que
+`tests/test_sociossearch_multitenant.mjs` pueda testear el fallback sin
+depender de la Service Role Key real.
+
+`app/dashboard/socios/page.jsx`: `organizationId` pasa de una constante
+derivada (`resolveActiveOrganizationId(rows)`, recalculada en cada
+render) a un `useState` poblado con el `organizationId` que ya devuelve
+`fetchSocios()` — un solo cálculo, hecho una vez, en el mismo lugar
+donde ya se resuelve todo lo demás de la carga de página.
+`resolveActiveOrganizationId` (la función vieja) se retiró de
+`lib/sociosSearch.js` — quedaba sin ningún otro uso en el repo, y era
+literalmente la fuente del bug.
+
+**Sin cambio de esquema DB, sin nueva política RLS.**
+
+### 11.2 Parcelas — mismo mecanismo, confirmado sin problema aparte
+
+`ImportPadronModal` recibe un único prop `organizationId`
+(`page.jsx:399`), compartido por las pestañas Socios y Parcelas de la
+misma instancia del modal — arreglar la resolución una vez en
+`page.jsx` cubre ambas automáticamente, no hay un mecanismo separado que
+revisar para Parcelas. Tampoco hay una página `/dashboard/parcelas`
+independiente: la gestión de parcelas vive dentro del módulo de Socios
+(por-socio vía `ParcelaFormModal`, que ya usa el `ID_Organizacion` real
+del socio dueño — no afectado por este bug — y en bloque vía el mismo
+`ImportPadronModal`).
+
+### 11.3 Verificación
+
+**Automatizada** (`tests/test_sociossearch_multitenant.mjs`, 3 tests
+nuevos + 1 actualizado): `fetchSocios` con `PADRON_SOCIOS` vacío pero un
+fallback que resuelve una organización real → `organizationId` correcto,
+`rows: []`; con el fallback también vacío → `organizationId: null` sin
+lanzar; con `PADRON_SOCIOS` con datos → el fallback NO se invoca
+(confirma que no hay round-trip extra en el camino feliz).
+
+**En vivo, contra la base real** (ahora que `SUPABASE_SERVICE_ROLE_KEY`
+sí está configurada en este entorno — a diferencia de cuando se escribió
+`specs/padron_web_socios.md`): se cargó `/dashboard/socios` con
+`PADRON_SOCIOS` genuinamente vacío (confirmado, "Sin socios
+registrados") y se inspeccionaron las requests de red reales:
+
+```
+GET  .../PADRON_SOCIOS?select=ID_Organizacion&activo=eq.true&limit=1   -- el probe, encuentra 0 filas
+POST /dashboard/socios                                                  -- resolveOrganizationId (Server Action)
+GET  .../PADRON_SOCIOS?...&ID_Organizacion=eq.COOP-AROMAS-VALLE&...    -- la query real, YA scopeada
+```
+
+La query real quedó filtrada por `ID_Organizacion=eq.COOP-AROMAS-VALLE`
+— confirma que el fallback resolvió la organización real correctamente
+incluso con `PADRON_SOCIOS` vacío. No se completó una importación real
+de punta a punta (se evitó a propósito escribir filas de prueba en el
+padrón real compartido con otro repositorio — en vez de eso, se subió un
+archivo con una fila deliberadamente inválida, sin DNI, para que
+`validRows.length === 0` y ninguna escritura real ocurriera).
+
+### 11.4 Contrato de datos
+
+```
+fetchSocios(supabase, { page?, search?, filters?, resolveOrganizationIdFallback? })
+  -> Promise<{ rows: Array, total: number, pageSize: number, organizationId: string|null }>
+     // NUEVO: organizationId en el retorno (antes el caller lo re-derivaba de `rows`)
+
+resolveOrganizationId() -> Promise<string|null>   // NUEVO, lib/actions/organizacionesActions.js
+```
+
+`resolveActiveOrganizationId` (lib/sociosSearch.js) — **retirada**, sin
+reemplazo (su única responsabilidad quedó absorbida por `fetchSocios`).
+
+### 11.5 Archivos tocados
+
+- `lib/actions/organizacionesActions.js` (nuevo) — `resolveOrganizationId`.
+- `lib/sociosSearch.js` — `fetchSocios` con fallback + `organizationId`
+  en el retorno; `resolveActiveOrganizationId` eliminada.
+- `app/dashboard/socios/page.jsx` — `organizationId` como `useState`
+  poblado desde `fetchSocios()`, ya no derivado con
+  `resolveActiveOrganizationId(rows)`.
+- `tests/test_sociossearch_multitenant.mjs` — 1 test actualizado (ya no
+  asume `organizationId` ausente del retorno), 3 tests nuevos (fallback
+  resuelve, fallback también vacío, fallback NO se invoca si el probe ya
+  alcanza).
+
+### 11.6 Riesgos
+
+| Riesgo | Detalle |
+|---|---|
+| **`ORG-TEST-E2E` (u otra organización marcada de prueba) resuelta por error** | Mitigado explícitamente con `.eq('es_organizacion_prueba', false)` — ver 11.1. |
+| **Múltiples organizaciones reales en el futuro** | El fix NO asume una sola organización para siempre (pedido explícito) — sigue usando "primera encontrada" (ahora determinística por `creado_en`) porque no hay sesión real que elija entre varias; un selector de organización real es una feature aparte, no resuelta acá, y quedaría igual de necesaria con o sin este fix. |
+| **Round-trip extra al Server Action en cada carga de página mientras `PADRON_SOCIOS` esté vacío** | Aceptado — es exactamente el estado que había que arreglar (organización real sin datos todavía); una vez que la primera carga masiva tenga éxito, el probe normal vuelve a alcanzar y el fallback deja de invocarse (confirmado con test). |
+| **La resolución en vivo mostró status 503 en el panel de red de Chrome para el POST del Server Action, pero el log del propio servidor de desarrollo (`next dev`) registró 200 para las mismas requests** | Discrepancia entre la herramienta de inspección del navegador y el servidor real -- se tomó el log del servidor (autoritativo) y la query subsiguiente ya scopeada por `COOP-AROMAS-VALLE` como evidencia decisiva, no el status reportado por la herramienta. Documentado para que quede constancia de la discrepancia observada, no descartada sin más. |

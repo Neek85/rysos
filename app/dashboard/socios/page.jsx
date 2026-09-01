@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import { useEffect, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
-import { fetchSocios, resolveActiveOrganizationId } from '@/lib/sociosSearch'
+import { fetchSocios } from '@/lib/sociosSearch'
 import { CERT_FLAG_FIELDS } from '@/lib/validations/socios'
 import { deactivateSocio } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
@@ -35,19 +35,20 @@ export default function SociosPage() {
   const [deactivating, setDeactivating] = useState(false)
   const [showImport, setShowImport] = useState(false)
 
-  // HOTFIX (2026-08-25, "Multi-Tenant Estricto" -- ver lib/sociosSearch.js):
-  // fetchSocios ahora filtra por ID_Organizacion en la propia query (probe
-  // de organización + fetch scopeado, mismo patrón que
-  // components/gis/MapDashboard.jsx) -- `rows` ya viene de una única
-  // organización, así que `resolveActiveOrganizationId(rows)` deja de ser
-  // una heurística sobre datos mezclados y pasa a ser una lectura directa
-  // de esa organización. Se sigue usando (en vez de leer `rows[0]` a mano)
-  // solo por consistencia con el resto del módulo. Para EDITAR un socio o
-  // gestionar las parcelas de uno ya existente, se sigue prefiriendo
-  // `<registro>.ID_Organizacion` real (`editingSocio.ID_Organizacion` /
-  // `parcelasSocio.ID_Organizacion`, ver más abajo) — mismo criterio de
-  // siempre, no depender de esta variable de página para escrituras.
-  const organizationId = resolveActiveOrganizationId(rows)
+  // Ronda 8 (2026-09-01, mejoras_importador_padron_masivo.md):
+  // `organizationId` ahora viene directo del retorno de `fetchSocios`
+  // (con fallback vía Server Action cuando PADRON_SOCIOS está vacío para
+  // la organización -- caso real de una organización recién dada de
+  // alta, antes de su primera carga masiva) en vez de re-derivarse acá
+  // con `resolveActiveOrganizationId(rows)` (retirada de
+  // lib/sociosSearch.js -- esa era la causa real de "No se pudo
+  // determinar la organización activa": devolvía `null` apenas `rows`
+  // estaba vacío). Para EDITAR un socio o gestionar las parcelas de uno
+  // ya existente, se sigue prefiriendo `<registro>.ID_Organizacion` real
+  // (`editingSocio.ID_Organizacion` / `parcelasSocio.ID_Organizacion`,
+  // ver más abajo) — mismo criterio de siempre, no depender de esta
+  // variable de página para escrituras.
+  const [organizationId, setOrganizationId] = useState(null)
 
   async function load() {
     setLoading(true)
@@ -59,7 +60,12 @@ export default function SociosPage() {
       return
     }
     try {
-      const { rows: data, total: count, pageSize: size } = await fetchSocios(supabase, {
+      const {
+        rows: data,
+        total: count,
+        pageSize: size,
+        organizationId: orgId,
+      } = await fetchSocios(supabase, {
         page,
         search,
         filters: { certOrgEstatus, certFlags, departamento },
@@ -67,6 +73,7 @@ export default function SociosPage() {
       setRows(data)
       setTotal(count)
       setPageSize(size)
+      setOrganizationId(orgId)
     } catch (err) {
       setError(err?.message || 'Error al cargar el padrón de socios.')
     } finally {
