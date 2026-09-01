@@ -1,11 +1,12 @@
 # Spec — Mejoras al Importador de Padrón Masivo (CSV)
 
-- **Estado:** **Implementado** (ronda 8, 2026-09-01) — ver sección 11
-  para el diseño/implementación de esta ronda ("No se pudo determinar la
-  organización activa" al confirmar la importación masiva -- bug de
-  arranque en la resolución de organización, no del CSV/importador en sí,
-  documentado acá porque es lo que bloqueaba terminar de probar todo lo
-  anterior). Rondas 1-7 (secciones 1-10) quedan cerradas, sin reabrir.
+- **Estado:** **Implementado** (ronda 9, 2026-09-01) — ver sección 12
+  para el diseño/implementación de esta ronda (alta atómica de socio +
+  certificaciones vía RPC transaccional, indicador de progreso real,
+  aviso `beforeunload`, mensaje de duplicado-se-omite). La migración SQL
+  de esta ronda (`supabase/migrations/20260901120000_socio_creacion_atomica.sql`)
+  **está pendiente de aplicación manual en Supabase Studio** — ver 12.6.
+  Rondas 1-8 (secciones 1-11) quedan cerradas, sin reabrir.
 - **Fecha:** 2026-08-31 (ronda 1: diseño; ronda 2: cierre de decisiones +
   implementación; ronda 3, mismo día: hallazgos de la primera carga real
   de producción, COOP-AROMAS-VALLE, 618 socios / 825 parcelas); 2026-09-01
@@ -13,7 +14,9 @@
   ronda 5, mismo día: extensión a Distrito; ronda 6, mismo día: más
   hallazgos de la misma carga real + mensajes legibles; ronda 7, mismo
   día: corrección del label exacto de `hip` + resumen agrupado de
-  errores; ronda 8, mismo día: fix de resolución de organización activa)
+  errores; ronda 8, mismo día: fix de resolución de organización activa;
+  ronda 9, mismo día: atomicidad de alta de socio + progreso real +
+  beforeunload + mensaje de duplicado)
 - **Contexto previo:** `ADR-027-certificaciones-normalizadas.md`,
   `specs/padron_certificaciones_normalizado.md` (diseño original de las
   columnas dinámicas y del rechazo por columna no reconocida, sección 6.1),
@@ -1467,6 +1470,200 @@ reemplazo (su única responsabilidad quedó absorbida por `fetchSocios`).
 | Riesgo | Detalle |
 |---|---|
 | **`ORG-TEST-E2E` (u otra organización marcada de prueba) resuelta por error** | Mitigado explícitamente con `.eq('es_organizacion_prueba', false)` — ver 11.1. |
+
+## 12. Ronda 9 (2026-09-01) — atomicidad de alta de socio, progreso real, aviso al cerrar pestaña, mensaje de duplicado
+
+**Disparador:** antes de aprobar el resto de esta ronda, se pidió
+investigar (sin implementar todavía) si `createSocio`/`createParcela`
+escriben de forma atómica o en llamadas Supabase independientes
+vulnerables a una corrupción por corte a mitad de import, y si reintentar
+el mismo CSV tras un corte parcial es seguro (sin duplicar filas) aunque
+no repare el hueco dejado por la escritura parcial. Ver 12.1.
+
+### 12.1 Investigación de atomicidad (hallazgos)
+
+- **`createParcela`** ya era atómico de por sí: un solo
+  `.insert()` a `PADRON_PARCELAS`, sin pasos posteriores — no había nada
+  que corregir ahí.
+- **`createSocio`** (antes del fix) hacía 3 llamadas Supabase
+  independientes en secuencia, cada una su propia transacción implícita
+  de PostgREST, sin ninguna transacción que las envolviera:
+  1. `INSERT` a `PADRON_SOCIOS` (`.insert({...}).select('id')`).
+  2. `SELECT` a `CERTIFICACIONES_CATALOGO` (resolver codigo → id).
+  3. `INSERT` a `SOCIO_CERTIFICACIONES` (una fila por certificación "Sí").
+  - Un corte de red/proceso entre el paso 1 y el 3 deja un socio
+    persistido en `PADRON_SOCIOS` **sin ninguna de sus certificaciones**
+    — corrupción silenciosa, no un error visible.
+- **Reintentar el mismo CSV tras un corte así:** el guard de duplicado
+  exacto (`ID_Socio` ya existe → error de validación, fila se rechaza en
+  el preview) hace que el reintento **no duplique** el socio ya
+  persistido — pero tampoco **repara** el hueco: como la fila se
+  descarta por duplicada antes de llegar a `createSocio`, sus
+  certificaciones nunca se re-intentan. El bug no es de duplicación, es
+  de que el reintento no sana la escritura parcial previa.
+- **Precedente directo ya resuelto en el repo:** `fn_guardar_inspeccion_completa`
+  (módulo INSPECCIONES/CAP, ver migraciones de Fase 6) enfrenta el mismo
+  problema (múltiples tablas relacionadas, debe quedar todo o nada) y ya
+  lo resuelve con una función RPC de Postgres (`LANGUAGE plpgsql`, sin
+  `SECURITY DEFINER`, sin `GRANT EXECUTE` porque el Service Role Key
+  bypasea el chequeo de privilegios de ejecución) que envuelve sus
+  `INSERT`/`DELETE` en una sola transacción real. Esta ronda replica ese
+  mismo patrón para `createSocio`, en vez de inventar uno nuevo.
+
+### 12.2 Fix: `fn_crear_socio_con_certificaciones` (RPC transaccional)
+
+`supabase/migrations/20260901120000_socio_creacion_atomica.sql` — nueva
+función `public.fn_crear_socio_con_certificaciones(p_id_socio text,
+p_organizacion text, p_socio jsonb, p_certificaciones jsonb) RETURNS
+jsonb`, wrappeada en `BEGIN;`/`COMMIT;`, mismo patrón que
+`fn_guardar_inspeccion_completa`:
+
+- Guards: `RAISE EXCEPTION` si `p_organizacion` o `p_id_socio` vienen
+  nulos/vacíos (mismo mensaje `'No se pudo determinar la organización
+  activa.'` que ya usa `assertOrganizacion` en JS, para que
+  `friendlyDuplicateError`/el resto del flujo de errores no tenga que
+  distinguir origen).
+- `SELECT * INTO r_socio FROM jsonb_populate_record(NULL::public."PADRON_SOCIOS", p_socio)`
+  para tipar el payload sin casteos manuales columna por columna (patrón
+  ya usado en otras migraciones de este repo).
+- Un solo `INSERT INTO public."PADRON_SOCIOS" (...) VALUES (...) RETURNING id INTO v_socio_id`
+  con la lista exacta de columnas que ya escribe `socioPayload()`
+  (`lib/actions/sociosActions.js`) — verificada contra el código real
+  antes de escribir la migración, no reinventada.
+- Un loop `FOR r_cert IN SELECT * FROM jsonb_to_recordset(p_certificaciones) AS x(codigo text, estado text) LOOP`
+  que resuelve `codigo` → `id` contra `CERTIFICACIONES_CATALOGO`
+  (`activo = true`) **dentro de la misma transacción** y hace un
+  `INSERT` a `SOCIO_CERTIFICACIONES` por cada certificación marcada
+  "Sí" — mismo criterio de filtro/mapeo que ya usaba
+  `syncSocioCertificaciones` en JS.
+- **A diferencia de `fn_guardar_inspeccion_completa` (que hace
+  `DELETE`+`INSERT` porque también cubre edición), esta función NO tiene
+  ningún `DELETE`** — es solo para alta nueva, nunca hay filas previas en
+  `SOCIO_CERTIFICACIONES` para un `ID_Socio` que recién se está
+  insertando. `updateSocio` (edición) sigue usando
+  `syncSocioCertificaciones` tal cual, sin ningún cambio — no se toca a
+  propósito.
+- `RETURN jsonb_build_object('id', v_socio_id, 'id_socio', p_id_socio)`.
+- Sin `SECURITY DEFINER` (corre con el rol del llamador, igual que el
+  precedente) y sin `GRANT EXECUTE` (el Service Role Key ya bypasea el
+  modelo de privilegios de función, mismo criterio que
+  `fn_sanitize_geometry`).
+
+`createSocio` (`lib/actions/sociosActions.js`) ahora arma
+`certificaciones` (mismo filtro `CERT_FLAG_FIELDS`/mapeo
+`ORGANIC_CERT_CODES` que antes) y hace una sola llamada
+`supabase.rpc('fn_crear_socio_con_certificaciones', { p_id_socio,
+p_organizacion, p_socio: socioPayload(parsed), p_certificaciones })` en
+vez de las 3 llamadas anteriores. El error `23505` (duplicado) sigue
+propagándose igual desde la RPC, así que `friendlyDuplicateError` no
+necesitó cambios. `createParcela` no se tocó (ya era atómico, 12.1).
+
+**Pendiente:** la corrección en tiempo de ejecución solo se puede
+confirmar una vez que la migración se aplique manualmente en Supabase
+Studio y se pruebe una carga real — no hay conexión Postgres directa
+desde este entorno (ver `CLAUDE.md`). Ver 12.6.
+
+### 12.3 Mensaje de duplicado-se-omite
+
+`lib/padronCsv.js` exporta `DUPLICATE_SKIP_SUFFIX = '— se omite, no se
+vuelve a cargar.'`, usado como marcador compartido entre el sitio que
+arma el mensaje y la UI que lo agrupa. Los mensajes de duplicado
+**exacto** (mismo `ID_Socio`/`ID_Parcela_Fija` ya cargado antes —
+el caso típico de reintentar un CSV cortado a mitad de camino, ver 12.1)
+cambiaron a:
+
+- Socios: `Este socio ya está registrado (código "${id}" ya existe en
+  el sistema) — se omite, no se vuelve a cargar.`
+- Parcelas: `Esta parcela ya está registrada (código "${parcelaId}" ya
+  existe en el sistema) — se omite, no se vuelve a cargar.`
+
+Los otros mensajes de duplicado (DNI ya usado por OTRO socio,
+`codigo_finca`/`parcela_codigo` ya usado por otro registro) **no**
+cambiaron — representan un conflicto real con OTRO registro, no "esta
+fila exacta ya se cargó antes", y deben seguir viéndose como error de
+datos, no como aviso de reintento seguro.
+
+`ImportPadronModal.jsx` separa el resumen de errores en dos cajas:
+`duplicateSkipGroups` (filtro `message.includes(DUPLICATE_SKIP_SUFFIX)`,
+caja informativa) y `dataErrorGroups` (el resto, caja de error) —
+`groupValidationErrors` en sí no cambió, solo el texto que agrupa.
+
+### 12.4 Progreso real + aviso `beforeunload`
+
+`ImportPadronModal.jsx`, ambas pestañas (Socios y Parcelas):
+
+- Nuevo estado `commitProgress = { processed, total, created, failed }`,
+  actualizado al final de cada iteración del `for...of` que ya procesaba
+  las filas una por una de forma secuencial (no hizo falta cambiar la
+  arquitectura del loop, solo agregar el `setCommitProgress(...)` tras
+  cada `await`) — "Importando fila X de Y (Z%)" con barra de progreso
+  real y conteo de éxitos/errores en vivo, no una animación genérica.
+- `useEffect` con `window.addEventListener('beforeunload', ...)` +
+  `e.preventDefault(); e.returnValue = ''`, activo solo mientras
+  `committing === true` (dependencia `[committing]`); el cleanup del
+  propio `useEffect` desactiva el listener automáticamente al terminar
+  (éxito o error) o al desmontar, sin bookkeeping extra.
+
+### 12.5 Tests
+
+- `tests/test_socio_creacion_atomica.py` (nuevo) — 13 tests estáticos
+  sobre el TEXTO de la migración, mismo patrón que
+  `TestMigrationFileStatic` (ADR-027): transacción, firma, guards,
+  columnas exactas del `INSERT` a `PADRON_SOCIOS` (y ausencia de las
+  columnas congeladas de certificaciones/flags que `socioPayload()` ya
+  no escribe), ausencia de `DELETE`/`SECURITY DEFINER`/`GRANT EXECUTE`,
+  loop de certificaciones, `RETURNING`/`RETURN`. No requiere conexión a
+  Postgres — no puede validar que la función corra correctamente en
+  vivo (eso queda pendiente de 12.6).
+- `tests/test_certificaciones_sociosactions_code_sites.mjs` — reemplazado
+  el test que asumía el `.insert()` directo viejo por 3 tests nuevos:
+  `createSocio` llama a la RPC (no a `syncSocioCertificaciones` ni a un
+  insert directo), arma `certificaciones` con el mismo filtro/mapeo de
+  antes, y sigue traduciendo `23505` a mensaje legible desde el error de
+  la RPC. `updateSocio` verificado sin cambios (mismo test de siempre).
+- `tests/test_padron_csv.mjs` — el test de duplicado de parcela
+  (`ya existe en la BD`) asertaba el texto VIEJO
+  (`'ya existe en esta organización'`) y quedó desactualizado por 12.3;
+  corregido para verificar el mensaje nuevo + `DUPLICATE_SKIP_SUFFIX`.
+  Agregado un test análogo para el duplicado exacto de socio (no existía
+  antes uno específico para ese caso).
+- No se agregaron tests de `beforeunload` ni de la barra de progreso en
+  vivo — ambos requieren un navegador real; se verifican manualmente
+  (ver 12.6).
+
+**Conteo de test suite (antes de esta ronda → después):**
+- Node (`node --test tests/*.mjs`): 674 → **677 pass**, 0 fail.
+- Python (`python -m pytest tests/ -v --tb=short`): 443 pass, 36 skipped
+  (gate `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`, esperado sin
+  credenciales locales) → **456 pass**, 36 skipped, 0 fail.
+
+### 12.6 Pendiente de verificación manual / aplicación de migración
+
+- **La migración `supabase/migrations/20260901120000_socio_creacion_atomica.sql`
+  no está aplicada en ninguna base de datos.** No hay conexión Postgres
+  directa desde este entorno (ver `CLAUDE.md`) — debe aplicarse a mano en
+  el SQL Editor de Supabase Studio antes de poder probar un alta real de
+  socio con certificaciones desde `/dashboard/socios` o desde el
+  importador masivo.
+- Verificación manual pendiente en navegador (no depende de la
+  migración, se puede probar ya): que el aviso `beforeunload` aparezca
+  al intentar cerrar/recargar la pestaña durante un import activo y
+  desaparezca al terminar; que la barra de progreso y el conteo en vivo
+  se vean correctos en una carga real de varias filas.
+
+### 12.7 Archivos tocados
+
+- `supabase/migrations/20260901120000_socio_creacion_atomica.sql` (nuevo).
+- `lib/actions/sociosActions.js` — `createSocio` reescrito para usar la
+  RPC; `updateSocio` sin cambios.
+- `lib/padronCsv.js` — `DUPLICATE_SKIP_SUFFIX` (nuevo, exportado) +
+  mensajes de duplicado exacto de socio/parcela.
+- `components/features/socios/ImportPadronModal.jsx` — `commitProgress`,
+  barra de progreso, `beforeunload`, split de `duplicateSkipGroups`/`dataErrorGroups`.
+- `tests/test_socio_creacion_atomica.py` (nuevo).
+- `tests/test_certificaciones_sociosactions_code_sites.mjs` — 3 tests
+  nuevos, 1 obsoleto removido.
+- `tests/test_padron_csv.mjs` — 1 test corregido, 1 test nuevo.
 | **Múltiples organizaciones reales en el futuro** | El fix NO asume una sola organización para siempre (pedido explícito) — sigue usando "primera encontrada" (ahora determinística por `creado_en`) porque no hay sesión real que elija entre varias; un selector de organización real es una feature aparte, no resuelta acá, y quedaría igual de necesaria con o sin este fix. |
 | **Round-trip extra al Server Action en cada carga de página mientras `PADRON_SOCIOS` esté vacío** | Aceptado — es exactamente el estado que había que arreglar (organización real sin datos todavía); una vez que la primera carga masiva tenga éxito, el probe normal vuelve a alcanzar y el fallback deja de invocarse (confirmado con test). |
 | **La resolución en vivo mostró status 503 en el panel de red de Chrome para el POST del Server Action, pero el log del propio servidor de desarrollo (`next dev`) registró 200 para las mismas requests** | Discrepancia entre la herramienta de inspección del navegador y el servidor real -- se tomó el log del servidor (autoritativo) y la query subsiguiente ya scopeada por `COOP-AROMAS-VALLE` como evidencia decisiva, no el status reportado por la herramienta. Documentado para que quede constancia de la discrepancia observada, no descartada sin más. |

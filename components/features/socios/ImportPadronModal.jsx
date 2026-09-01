@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import {
   parseCsv,
   validateSocioRows,
@@ -9,6 +9,7 @@ import {
   downloadParcelaTemplate,
   decodeCsvBuffer,
   groupValidationErrors,
+  DUPLICATE_SKIP_SUFFIX,
 } from '@/lib/padronCsv'
 import { createSocio, createParcela } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
@@ -49,6 +50,10 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
   const [parseError, setParseError] = useState(null)
   const [committing, setCommitting] = useState(false)
   const [commitSummary, setCommitSummary] = useState(null)
+  // Mejoras importador (spec sección 12.2, ronda 9): avance REAL del loop
+  // de confirmación (no una animación genérica) -- se actualiza en cada
+  // iteración, ver handleConfirmImport.
+  const [commitProgress, setCommitProgress] = useState({ processed: 0, total: 0, created: 0, failed: 0 })
   // Mejoras importador (spec sección 10.2, ronda 7): la tabla fila-por-fila
   // queda detrás de este toggle -- el resumen agrupado de arriba es el
   // triage rápido, la tabla es el detalle bajo demanda.
@@ -63,12 +68,29 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
     setParseError(null)
     setCommitSummary(null)
     setShowAllRows(false)
+    setCommitProgress({ processed: 0, total: 0, created: 0, failed: 0 })
   }
 
   function handleTabChange(next) {
     setTab(next)
     resetFile()
   }
+
+  // Mejoras importador (spec sección 12.3, ronda 9): aviso nativo del
+  // navegador si el usuario intenta cerrar/recargar la pestaña mientras
+  // el loop de `handleConfirmImport` está en curso -- se activa solo
+  // mientras `committing` es true y se desactiva automáticamente al
+  // terminar (éxito o error), vía la función de limpieza del propio
+  // efecto, sin necesidad de un `removeEventListener` manual aparte.
+  useEffect(() => {
+    if (!committing) return
+    function handleBeforeUnload(e) {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [committing])
 
   async function handleFileChange(e) {
     const file = e.target.files?.[0]
@@ -119,6 +141,18 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
     () => groupValidationErrors(validated ?? [], tab === 'socios' ? 'ID_Socio' : 'ID_Parcela_Fija'),
     [validated, tab]
   )
+  // Mejoras importador (spec sección 12.4, ronda 9): separa los grupos de
+  // "ya existe, se omite -- esperable al reintentar una carga cortada" de
+  // los errores reales de datos, para que se vean claramente distintos en
+  // el resumen (bloque informativo aparte, no mezclado con el de errores).
+  const duplicateSkipGroups = useMemo(
+    () => errorGroups.filter((g) => g.message.includes(DUPLICATE_SKIP_SUFFIX)),
+    [errorGroups]
+  )
+  const dataErrorGroups = useMemo(
+    () => errorGroups.filter((g) => !g.message.includes(DUPLICATE_SKIP_SUFFIX)),
+    [errorGroups]
+  )
   const MAX_CODES_PREVIEW = 10
 
   async function handleConfirmImport() {
@@ -127,9 +161,15 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
       return
     }
     setCommitting(true)
+    const total = validRows.length
+    setCommitProgress({ processed: 0, total, created: 0, failed: 0 })
     let created = 0
     const failures = []
 
+    // El loop ya procesaba fila por fila, esperando cada Server Action
+    // antes de seguir con la siguiente -- `commitProgress` solo expone ese
+    // avance real a la UI (spec sección 12.2), no cambia el orden ni la
+    // secuencialidad de las llamadas.
     for (const row of validRows) {
       try {
         if (tab === 'socios') {
@@ -144,6 +184,7 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
           message: err instanceof SocioActionError ? err.message : err?.message || 'Error desconocido.',
         })
       }
+      setCommitProgress({ processed: created + failures.length, total, created, failed: failures.length })
     }
 
     setCommitting(false)
@@ -248,14 +289,36 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
               {validated.length} fila(s) totales.
             </p>
 
-            {errorGroups.length > 0 && (
+            {duplicateSkipGroups.length > 0 && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-3">
+                <p className="mb-2 text-xs font-semibold text-blue-700">
+                  {duplicateSkipGroups.reduce((sum, g) => sum + g.count, 0)} fila(s) ya cargadas anteriormente — se
+                  omiten, no se duplican (esperable si estás reintentando una carga que se cortó a mitad de camino).
+                </p>
+                <div className="max-h-40 space-y-2 overflow-y-auto">
+                  {duplicateSkipGroups.map((g) => (
+                    <div key={g.message} className="text-xs">
+                      <p className="text-blue-700">
+                        <span className="font-semibold">{g.message}</span> ({g.count} fila{g.count === 1 ? '' : 's'})
+                      </p>
+                      <p className="font-mono text-[11px] text-gray-500">
+                        {g.codes.slice(0, MAX_CODES_PREVIEW).join(', ')}
+                        {g.codes.length > MAX_CODES_PREVIEW ? ` +${g.codes.length - MAX_CODES_PREVIEW} más` : ''}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {dataErrorGroups.length > 0 && (
               <div className="rounded-lg border border-red-200 bg-red-50/50 p-3">
                 <p className="mb-2 text-xs font-semibold text-red-700">
-                  Resumen de errores ({errorGroups.length} tipo{errorGroups.length === 1 ? '' : 's'} distinto
-                  {errorGroups.length === 1 ? '' : 's'}) — para el detalle fila por fila, usá el botón de abajo.
+                  Resumen de errores ({dataErrorGroups.length} tipo{dataErrorGroups.length === 1 ? '' : 's'} distinto
+                  {dataErrorGroups.length === 1 ? '' : 's'}) — para el detalle fila por fila, usá el botón de abajo.
                 </p>
                 <div className="max-h-56 space-y-2 overflow-y-auto">
-                  {errorGroups.map((g) => (
+                  {dataErrorGroups.map((g) => (
                     <div key={g.message} className="text-xs">
                       <p className="text-red-700">
                         <span className="font-semibold">{g.message}</span> ({g.count} fila{g.count === 1 ? '' : 's'})
@@ -308,6 +371,30 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {committing && (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <p className="mb-1.5 text-xs font-semibold text-gray-700">
+                  Importando fila {commitProgress.processed} de {commitProgress.total}
+                  {commitProgress.total > 0
+                    ? ` (${Math.round((commitProgress.processed / commitProgress.total) * 100)}%)`
+                    : ''}
+                </p>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">
+                  <div
+                    className="h-full bg-green-700 transition-all"
+                    style={{
+                      width: `${commitProgress.total > 0 ? (commitProgress.processed / commitProgress.total) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-1.5 text-xs text-gray-500">
+                  <span className="font-semibold text-emerald-700">{commitProgress.created} bien</span> ·{' '}
+                  <span className="font-semibold text-red-600">{commitProgress.failed} con error</span> hasta el
+                  momento — no cierres ni recargues esta pestaña.
+                </p>
               </div>
             )}
 

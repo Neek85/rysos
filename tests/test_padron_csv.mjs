@@ -21,6 +21,7 @@ import {
   groupValidationErrors,
   SOCIO_FIELD_LABELS,
   PARCELA_FIELD_LABELS,
+  DUPLICATE_SKIP_SUFFIX,
 } from '../lib/padronCsv.js'
 import { HECTARE_FIELDS } from '../lib/validations/socios.js'
 
@@ -479,7 +480,7 @@ test('validateSocioRows NO marca inválido un ID_Socio/DNI que existe en OTRA or
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })
 
-test('validateParcelaRows marca inválido un ID_Parcela_Fija/parcela_codigo que ya existe en la BD', async () => {
+test('validateParcelaRows marca inválido un ID_Parcela_Fija/parcela_codigo que ya existe en la BD, con el mensaje de duplicado-se-omite (ronda 9)', async () => {
   const supabase = makeFakeSupabase({
     PADRON_PARCELAS: [{ ID_Parcela_Fija: 'COOP-JS-001', ID_Organizacion: 'COOP-JS', parcela_codigo: 'P-01' }],
     PADRON_SOCIOS: [{ ID_Socio: 'JS-01', ID_Organizacion: 'COOP-JS' }],
@@ -490,7 +491,20 @@ test('validateParcelaRows marca inválido un ID_Parcela_Fija/parcela_codigo que 
     'COOP-JS'
   )
   assert.equal(result.valid, false)
-  assert.ok(result.errors.some((e) => e.includes('ya existe en esta organización')))
+  assert.ok(result.errors.some((e) => e.includes('Esta parcela ya está registrada') && e.includes(DUPLICATE_SKIP_SUFFIX)))
+})
+
+test('validateSocioRows marca inválido un ID_Socio que ya existe en la BD, con el mensaje de duplicado-se-omite (ronda 9)', async () => {
+  const supabase = makeFakeSupabase({
+    PADRON_SOCIOS: [{ ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', socio_dni: null, codigo_finca: null }],
+  })
+  const { rows: [result] } = await validateSocioRows(
+    [{ ID_Socio: 'JS-00001', socio_nombre_completo: 'Repetido' }],
+    supabase,
+    'COOP-JS'
+  )
+  assert.equal(result.valid, false)
+  assert.ok(result.errors.some((e) => e.includes('Este socio ya está registrado') && e.includes(DUPLICATE_SKIP_SUFFIX)))
 })
 
 test('validateParcelaRows marca inválido un ID_Socio que no existe en la BD de la organización, con el mensaje pedido', async () => {

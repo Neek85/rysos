@@ -71,16 +71,40 @@ test('syncSocioCertificaciones copia cert_org_estatus como estado SOLO para las 
   )
 })
 
-test('createSocio llama a syncSocioCertificaciones con el id UUID recién creado, después del insert exitoso', () => {
+// Mejoras importador padrón masivo (spec sección 12.1, ronda 9):
+// createSocio dejó de usar syncSocioCertificaciones -- ahora es una sola
+// llamada RPC transaccional (fn_crear_socio_con_certificaciones,
+// supabase/migrations/20260901120000_socio_creacion_atomica.sql), para
+// que el alta del socio y sus certificaciones nunca queden a medio
+// escribir por un corte de red/proceso. updateSocio (edición) sigue
+// usando syncSocioCertificaciones tal cual, sin cambios -- ver el test
+// siguiente.
+test('createSocio llama a fn_crear_socio_con_certificaciones (RPC transaccional), NO a syncSocioCertificaciones ni a un insert directo', () => {
   const start = src.indexOf('export async function createSocio')
   const end = src.indexOf('export async function updateSocio')
   const block = src.slice(start, end)
-  assert.match(block, /\.insert\(\{ ID_Socio: parsed\.ID_Socio, ID_Organizacion: organizationId, \.\.\.socioPayload\(parsed\) \}\)\s*\n\s*\.select\('id'\)/)
-  assert.match(block, /await syncSocioCertificaciones\(supabase, data\[0\]\.id, organizationId, parsed\)/)
-  // El orden importa: syncSocioCertificaciones debe correr DESPUÉS del insert (necesita data[0].id).
-  const insertIdx = block.indexOf(".select('id')")
-  const syncIdx = block.indexOf('await syncSocioCertificaciones')
-  assert.ok(insertIdx > -1 && syncIdx > insertIdx, 'syncSocioCertificaciones debe llamarse después del insert')
+  assert.match(block, /supabase\.rpc\('fn_crear_socio_con_certificaciones', \{/)
+  assert.match(block, /p_id_socio: parsed\.ID_Socio,/)
+  assert.match(block, /p_organizacion: organizationId,/)
+  assert.match(block, /p_socio: socioPayload\(parsed\),/)
+  assert.match(block, /p_certificaciones: certificaciones,/)
+  assert.ok(!block.includes('await syncSocioCertificaciones'), 'createSocio ya no debe llamar a syncSocioCertificaciones')
+  assert.ok(!block.includes(".from('PADRON_SOCIOS')\n    .insert("), 'createSocio ya no debe insertar directo a PADRON_SOCIOS')
+})
+
+test('createSocio arma `certificaciones` con el mismo filtro/mapeo que syncSocioCertificaciones ya usaba (solo "Sí", estado solo para ORGANIC_CERT_CODES)', () => {
+  const start = src.indexOf('export async function createSocio')
+  const end = src.indexOf('export async function updateSocio')
+  const block = src.slice(start, end)
+  assert.match(block, /CERT_FLAG_FIELDS\.filter\(\(\{ field \}\) => parsed\[field\] === 'Sí'\)/)
+  assert.match(block, /estado: ORGANIC_CERT_CODES\.includes\(codigo\) \? parsed\.cert_org_estatus \|\| null : null,/)
+})
+
+test('createSocio sigue traduciendo el código 23505 (duplicado) a un mensaje legible, ahora desde el error de la RPC', () => {
+  const start = src.indexOf('export async function createSocio')
+  const end = src.indexOf('export async function updateSocio')
+  const block = src.slice(start, end)
+  assert.match(block, /friendlyDuplicateError\(error, 'un socio', parsed\.ID_Socio\)/)
 })
 
 test('updateSocio pide `id` además de `ID_Socio` en el .select() del UPDATE, y llama a syncSocioCertificaciones con ese id', () => {
