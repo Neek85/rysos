@@ -109,7 +109,22 @@ function makeFakeSupabase(tableData, { rpcResponses = {} } = {}) {
 // ---------------------------------------------------------------
 // fetchPendingRecords — normalización (tagRecords) + enriquecimiento
 // (enrichWithParcelaInfo)
+//
+// Reescrito (2026-09-01, ver AI_STATE.md "Reemplazo SECURITY DEFINER
+// para lecturas de PADRON_SOCIOS/PADRON_PARCELAS"): enrichWithParcelaInfo
+// ya no consulta PADRON_PARCELAS directo con el `supabase` pasado --
+// llama a fn_enriquecer_parcela_qc (SECURITY DEFINER). `fetchPendingRecords`
+// acepta un `fetchEnrich` inyectable (2do parámetro, `{ fetchEnrich }`)
+// para poder seguir testeando el enriquecimiento sin depender de la
+// Service Role Key real -- `makeFakeEnrich` abajo simula esa función,
+// filtrando por organización igual que se espera de la función SQL real.
 // ---------------------------------------------------------------
+
+/** Fake de fn_enriquecer_parcela_qc -- filtra por organización + ID_Parcela_Fija, igual que la función SQL real. */
+function makeFakeEnrich(padronParcelasRows) {
+  return async (organizationId, ids) =>
+    padronParcelasRows.filter((r) => r.ID_Organizacion === organizationId && ids.includes(r.ID_Parcela_Fija))
+}
 
 test('fetchPendingRecords etiqueta poligonos/puntos, deriva clasificacion desde tipo_uso/tipo_infra, y arma key desde registro_id', async () => {
   const supabase = makeFakeSupabase({
@@ -126,10 +141,12 @@ test('fetchPendingRecords etiqueta poligonos/puntos, deriva clasificacion desde 
       },
     ],
     vw_monitoreo_puntos: [],
-    PADRON_PARCELAS: [{ ID_Parcela_Fija: 'COOP-JS-001', parcela_codigo: 'P-01', parcela_nombre: 'Finca Alta' }],
   })
+  const fetchEnrich = makeFakeEnrich([
+    { ID_Organizacion: 'COOP-JS', ID_Parcela_Fija: 'COOP-JS-001', parcela_codigo: 'P-01', parcela_nombre: 'Finca Alta' },
+  ])
 
-  const [record] = await fetchPendingRecords(supabase)
+  const [record] = await fetchPendingRecords(supabase, { fetchEnrich })
   assert.equal(record.tipo_geometria, 'poligono')
   assert.equal(record.clasificacion, 'CULTIVO')
   assert.equal(record.key, 'EUDR_USO_SUELO:3')
@@ -149,10 +166,10 @@ test('fetchPendingRecords resuelve id_origen = id_monitoreo para EUDR_MONITOREO 
         estado_revision: PENDING_STATE,
       },
     ],
-    PADRON_PARCELAS: [],
   })
+  const fetchEnrich = makeFakeEnrich([])
 
-  const [record] = await fetchPendingRecords(supabase)
+  const [record] = await fetchPendingRecords(supabase, { fetchEnrich })
   assert.equal(record.id_origen, 'uuid-1')
   assert.equal(record.clasificacion, null) // EUDR_MONITOREO nunca tiene clasificación de campo
 })
@@ -172,10 +189,10 @@ test('fetchPendingRecords resuelve id_origen real para EUDR_INSTALACIONES en pun
         estado_revision: PENDING_STATE,
       },
     ],
-    PADRON_PARCELAS: [],
   })
+  const fetchEnrich = makeFakeEnrich([])
 
-  const [record] = await fetchPendingRecords(supabase)
+  const [record] = await fetchPendingRecords(supabase, { fetchEnrich })
   assert.equal(record.id_origen, '4')
 })
 
@@ -193,10 +210,10 @@ test('fetchPendingRecords deja id_origen undefined para EUDR_INSTALACIONES si la
         estado_revision: PENDING_STATE,
       },
     ],
-    PADRON_PARCELAS: [],
   })
+  const fetchEnrich = makeFakeEnrich([])
 
-  const [record] = await fetchPendingRecords(supabase)
+  const [record] = await fetchPendingRecords(supabase, { fetchEnrich })
   assert.equal(record.id_origen, undefined)
 })
 
@@ -214,10 +231,12 @@ test('fetchPendingRecords enriquece con parcela_codigo/parcela_nombre reales ví
       },
     ],
     vw_monitoreo_puntos: [],
-    PADRON_PARCELAS: [{ ID_Parcela_Fija: 'COOP-JS-001', parcela_codigo: 'P-01', parcela_nombre: 'Finca Alta' }],
   })
+  const fetchEnrich = makeFakeEnrich([
+    { ID_Organizacion: 'COOP-JS', ID_Parcela_Fija: 'COOP-JS-001', parcela_codigo: 'P-01', parcela_nombre: 'Finca Alta' },
+  ])
 
-  const [record] = await fetchPendingRecords(supabase)
+  const [record] = await fetchPendingRecords(supabase, { fetchEnrich })
   assert.equal(record.parcela_codigo, 'P-01')
   assert.equal(record.parcela_nombre, 'Finca Alta')
 })
@@ -226,10 +245,15 @@ test('fetchPendingRecords no explota sin ID_Parcela_Fija en ningún registro (ev
   const supabase = makeFakeSupabase({
     vw_monitoreo_poligonos: [],
     vw_monitoreo_puntos: [],
-    PADRON_PARCELAS: [],
   })
-  const records = await fetchPendingRecords(supabase)
+  let called = false
+  const fetchEnrich = async () => {
+    called = true
+    return []
+  }
+  const records = await fetchPendingRecords(supabase, { fetchEnrich })
   assert.deepEqual(records, [])
+  assert.equal(called, false, 'sin ID_Parcela_Fija en ningún registro, no debe llamar a fn_enriquecer_parcela_qc')
 })
 
 test('fetchPendingRecords aísla por organización — nunca devuelve PENDIENTE de otra organización (gap real cerrado, ver specs/qc_visualization_panel_update.md)', async () => {
@@ -255,10 +279,10 @@ test('fetchPendingRecords aísla por organización — nunca devuelve PENDIENTE 
       },
     ],
     vw_monitoreo_puntos: [],
-    PADRON_PARCELAS: [],
   })
+  const fetchEnrich = makeFakeEnrich([])
 
-  const records = await fetchPendingRecords(supabase)
+  const records = await fetchPendingRecords(supabase, { fetchEnrich })
   assert.equal(records.length, 1)
   assert.equal(records[0].ID_Organizacion, 'COOP-JS')
 })

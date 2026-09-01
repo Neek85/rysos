@@ -78,7 +78,7 @@ export default function SociosPage() {
         total: count,
         pageSize: size,
         organizationId: orgId,
-      } = await fetchSocios(supabase, {
+      } = await fetchSocios({
         page,
         search,
         filters: { certOrgEstatus, certFlags, departamento },

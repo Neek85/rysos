@@ -1,16 +1,28 @@
 // Aislamiento cruzado de lib/sociosSearch.js — hotfix 2026-08-25
 // ("Multi-Tenant Estricto", docs/RYZOS_ORQUESTADOR_V3.1.md sección 5).
 //
-// A diferencia del resto de tests/*.mjs de este repo (que solo verifican
-// texto/estructura de archivos), acá se llama a las funciones EXPORTADAS
-// reales (fetchSocios/fetchParcelasBySocio) contra un cliente Supabase
-// falso -- no una consulta de solo-lectura contra un objeto estático, sino
-// el mismo objeto `supabase` que la app inyecta, con un query builder
-// mínimo que replica el subconjunto real de la API encadenada
-// (.from/.select/.eq/.order/.range/.limit, awaitable como el real
-// PostgrestFilterBuilder) y filtra filas fake exactamente como lo haría
-// Postgres+RLS. Esto prueba el comportamiento real de aislamiento, no solo
-// que el texto fuente contenga ".eq('ID_Organizacion', ...)" en algún lado.
+// Reescrito (2026-09-01, ver AI_STATE.md "Reemplazo SECURITY DEFINER
+// para lecturas de PADRON_SOCIOS/PADRON_PARCELAS"): antes fetchSocios/
+// fetchParcelasBySocio consultaban PADRON_SOCIOS/PADRON_PARCELAS directo
+// con un cliente Supabase falso que replicaba el query builder
+// encadenado (.from/.select/.eq/...). Ahora delegan a
+// lib/actions/padronReadActions.js (Server Actions -> funciones SQL
+// SECURITY DEFINER) -- el filtro real por organización vive DENTRO de
+// esas funciones SQL, no en JS, así que ya no es algo que un test de
+// Node pueda ejercitar directo sin una conexión real a Postgres. Este
+// archivo ahora inyecta una función fake `listarPadronSocios`/
+// `listarParcelasPorSocio` (mismo criterio que ya usa
+// `resolveOrganizationIdFallback`) que simula el comportamiento
+// ESPERADO de la función SQL real (filtra por organización) para seguir
+// probando que fetchSocios/fetchParcelasBySocio pasan el parámetro
+// correcto y nunca mezclan el resultado de dos organizaciones del lado
+// de JS.
+//
+// La prueba de aislamiento CONTRA LA FUNCIÓN SQL REAL vive en
+// tests/test_padron_read_functions_live.mjs (gateada por
+// SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY + que la migración
+// 20260901160000 ya esté aplicada -- se salta sola hasta entonces,
+// mismo patrón que el resto de tests "Live" del repo).
 //
 // Ejecutar con: node --test tests/test_sociossearch_multitenant.mjs
 
@@ -18,59 +30,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { fetchSocios, fetchParcelasBySocio } from '../lib/sociosSearch.js'
 
-/**
- * Cliente Supabase falso mínimo: cada tabla es un array de filas. Soporta
- * el subconjunto de la API encadenada que sociosSearch.js realmente usa.
- * El objeto builder es "thenable" (implementa .then), igual que el
- * PostgrestFilterBuilder real de supabase-js, así que `await` funciona
- * exactamente igual que contra un cliente real.
- */
-function createFakeSupabase(tables) {
-  return {
-    from(table) {
-      const state = { table, eqFilters: [], orFilter: null, limit: null, range: null, withCount: false }
-      const builder = {
-        select(_cols, opts) {
-          state.withCount = opts?.count === 'exact'
-          return builder
-        },
-        eq(col, val) {
-          state.eqFilters.push([col, val])
-          return builder
-        },
-        or() {
-          // No usado por los tests de este archivo -- basta con no romper la cadena.
-          return builder
-        },
-        order() {
-          return builder
-        },
-        range(from, to) {
-          state.range = [from, to]
-          return builder
-        },
-        limit(n) {
-          state.limit = n
-          return builder
-        },
-        then(resolve) {
-          let rows = (tables[state.table] ?? []).filter((row) =>
-            state.eqFilters.every(([col, val]) => row[col] === val)
-          )
-          const count = rows.length
-          if (state.range) rows = rows.slice(state.range[0], state.range[1] + 1)
-          if (state.limit != null) rows = rows.slice(0, state.limit)
-          resolve({ data: rows, error: null, count: state.withCount ? count : null })
-        },
-      }
-      return builder
-    },
-  }
-}
-
 const SOCIOS_FAKE = [
-  { ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', activo: true, socio_nombre_completo: 'Socio Org A' },
-  { ID_Socio: 'ND-00001', ID_Organizacion: 'COOP-ND', activo: true, socio_nombre_completo: 'Socio Org B' },
+  { ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', activo: true, socio_nombre_completo: 'Socio Org A', total_count: 1 },
+  { ID_Socio: 'ND-00001', ID_Organizacion: 'COOP-ND', activo: true, socio_nombre_completo: 'Socio Org B', total_count: 1 },
 ]
 
 const PARCELAS_FAKE = [
@@ -78,81 +40,80 @@ const PARCELAS_FAKE = [
   { ID_Parcela_Fija: 'P-B-1', ID_Organizacion: 'COOP-ND', ID_Socio: 'JS-00001', activo: true, parcela_codigo: 'B1' },
 ]
 
-test('fetchSocios: nunca devuelve un socio de otra organización (probe + query ya scopeados)', async () => {
-  const supabase = createFakeSupabase({ PADRON_SOCIOS: SOCIOS_FAKE })
-  const { rows, organizationId } = await fetchSocios(supabase, {})
-  assert.equal(rows.length, 1, 'debe resolver una sola organización (la primera del probe) y traer solo sus filas')
+/** Fake de fn_listar_padron_socios -- filtra por organización, igual que se espera de la función SQL real. */
+function fakeListarPadronSocios(organizationId) {
+  const rows = SOCIOS_FAKE.filter((r) => r.ID_Organizacion === organizationId)
+  return Promise.resolve(rows)
+}
+
+/** Fake de fn_listar_padron_parcelas_por_socio -- filtra por organización + socio. */
+function fakeListarParcelasPorSocio(organizationId, socioId) {
+  const rows = PARCELAS_FAKE.filter((r) => r.ID_Organizacion === organizationId && r.ID_Socio === socioId)
+  return Promise.resolve(rows)
+}
+
+test('fetchSocios: nunca devuelve un socio de otra organización (la función SQL filtra, fetchSocios no agrega ninguna fila propia)', async () => {
+  const resolveOrganizationIdFallback = async () => 'COOP-JS'
+  const { rows, organizationId } = await fetchSocios({
+    resolveOrganizationIdFallback,
+    listarPadronSocios: fakeListarPadronSocios,
+  })
+  assert.equal(rows.length, 1)
   assert.equal(rows[0].ID_Organizacion, 'COOP-JS')
-  assert.equal(organizationId, 'COOP-JS', 'organizationId debe viajar en el retorno, no requerir re-derivarlo del caller')
-  assert.ok(
-    rows.every((r) => r.ID_Organizacion === rows[0].ID_Organizacion),
-    'ninguna fila de otra organización debe colarse en el resultado'
-  )
+  assert.equal(organizationId, 'COOP-JS')
+  assert.equal(rows[0].total_count, undefined, 'total_count debe despojarse de cada fila antes de devolverla (es un detalle interno de paginación)')
 })
 
-// ---------------------------------------------------------------
-// Ronda 8 (mejoras_importador_padron_masivo.md) -- fallback de
-// organizationId cuando PADRON_SOCIOS está vacío para la organización
-// (caso real: una organización recién dada de alta, sin ningún socio
-// todavía -- root cause real de "No se pudo determinar la organización
-// activa" al confirmar la importación masiva).
-// ---------------------------------------------------------------
-
-test('fetchSocios: con PADRON_SOCIOS vacío pero el fallback resuelve una organización real, devuelve rows: [] con ese organizationId (no null)', async () => {
-  const supabase = createFakeSupabase({ PADRON_SOCIOS: [] })
-  const resolveOrganizationIdFallback = async () => 'COOP-AROMAS-VALLE'
-  const { rows, total, organizationId } = await fetchSocios(supabase, { resolveOrganizationIdFallback })
-  assert.deepEqual(rows, [], 'sigue sin haber filas -- la organización existe pero no tiene socios todavía')
-  assert.equal(total, 0)
-  assert.equal(organizationId, 'COOP-AROMAS-VALLE', 'a diferencia del bug original, organizationId NO debe quedar null')
-})
-
-test('fetchSocios: con PADRON_SOCIOS vacío y el fallback tampoco encuentra nada (sin ninguna organización real), devuelve organizationId: null sin lanzar', async () => {
-  const supabase = createFakeSupabase({ PADRON_SOCIOS: [] })
+test('fetchSocios: sin organización resuelta (fallback devuelve null), devuelve rows: [] y organizationId: null sin llamar a listarPadronSocios', async () => {
   const resolveOrganizationIdFallback = async () => null
-  const { rows, total, organizationId } = await fetchSocios(supabase, { resolveOrganizationIdFallback })
+  let called = false
+  const listarPadronSocios = async () => {
+    called = true
+    return []
+  }
+  const { rows, total, organizationId } = await fetchSocios({ resolveOrganizationIdFallback, listarPadronSocios })
   assert.deepEqual(rows, [])
   assert.equal(total, 0)
   assert.equal(organizationId, null)
-})
-
-test('fetchSocios: con PADRON_SOCIOS con datos, el probe normal alcanza -- el fallback NO se invoca (evita el round-trip innecesario al Server Action)', async () => {
-  const supabase = createFakeSupabase({ PADRON_SOCIOS: SOCIOS_FAKE })
-  let fallbackCalled = false
-  const resolveOrganizationIdFallback = async () => {
-    fallbackCalled = true
-    return 'NO-DEBERIA-USARSE'
-  }
-  const { organizationId } = await fetchSocios(supabase, { resolveOrganizationIdFallback })
-  assert.equal(fallbackCalled, false, 'el fallback solo debe invocarse cuando el probe normal no encuentra nada')
-  assert.equal(organizationId, 'COOP-JS')
+  assert.equal(called, false, 'sin organización no hay ninguna razón para llamar a la función SQL')
 })
 
 // ---------------------------------------------------------------
 // Ronda de robustez del importador contra ORG-TEST-DEMO (2026-09-01f,
 // ver AI_STATE.md) -- organizationIdOverride TEMPORAL para poder apuntar
 // /dashboard/socios a una organización de prueba distinta de la que el
-// probe normal resolvería (que hoy siempre es COOP-AROMAS-VALLE, la
-// única con filas reales en PADRON_SOCIOS).
+// fallback normal resolvería.
 // ---------------------------------------------------------------
 
-test('fetchSocios: con organizationIdOverride, usa ese valor directo y NUNCA corre el probe de PADRON_SOCIOS', async () => {
-  const supabase = createFakeSupabase({ PADRON_SOCIOS: SOCIOS_FAKE })
-  const { rows, organizationId } = await fetchSocios(supabase, { organizationIdOverride: 'ORG-TEST-DEMO' })
+test('fetchSocios: con organizationIdOverride, usa ese valor directo y NUNCA llama a resolveOrganizationIdFallback', async () => {
+  let fallbackCalled = false
+  const resolveOrganizationIdFallback = async () => {
+    fallbackCalled = true
+    return 'NO-DEBERIA-USARSE'
+  }
+  const { rows, organizationId } = await fetchSocios({
+    resolveOrganizationIdFallback,
+    organizationIdOverride: 'ORG-TEST-DEMO',
+    listarPadronSocios: fakeListarPadronSocios,
+  })
   assert.equal(organizationId, 'ORG-TEST-DEMO')
+  assert.equal(fallbackCalled, false, 'con override no hace falta resolver nada')
   assert.deepEqual(rows, [], 'ORG-TEST-DEMO no tiene filas en el fake -- el override no debe traer filas de COOP-JS/COOP-ND')
 })
 
-test('fetchSocios: organizationIdOverride null/undefined preserva el comportamiento normal (probe de siempre)', async () => {
-  const supabase = createFakeSupabase({ PADRON_SOCIOS: SOCIOS_FAKE })
-  const { organizationId } = await fetchSocios(supabase, { organizationIdOverride: null })
-  assert.equal(organizationId, 'COOP-JS', 'sin override, sigue resolviendo por el probe normal')
+test('fetchSocios: organizationIdOverride null/undefined preserva el comportamiento normal (usa el fallback)', async () => {
+  const resolveOrganizationIdFallback = async () => 'COOP-JS'
+  const { organizationId } = await fetchSocios({
+    resolveOrganizationIdFallback,
+    organizationIdOverride: null,
+    listarPadronSocios: fakeListarPadronSocios,
+  })
+  assert.equal(organizationId, 'COOP-JS', 'sin override, sigue resolviendo por el fallback normal')
 })
 
-test('fetchParcelasBySocio: un ID_Socio que existe en DOS organizaciones (mismo código, distinto tenant tras la migración de PK) nunca mezcla las parcelas de la organización equivocada', async () => {
-  const supabase = createFakeSupabase({ PADRON_PARCELAS: PARCELAS_FAKE })
-  const rowsOrgA = await fetchParcelasBySocio(supabase, 'JS-00001', 'COOP-JS')
-  const rowsOrgB = await fetchParcelasBySocio(supabase, 'JS-00001', 'COOP-ND')
+test('fetchParcelasBySocio: un ID_Socio que existe en DOS organizaciones (mismo código, distinto tenant) nunca mezcla las parcelas de la organización equivocada', async () => {
+  const rowsOrgA = await fetchParcelasBySocio('JS-00001', 'COOP-JS', fakeListarParcelasPorSocio)
+  const rowsOrgB = await fetchParcelasBySocio('JS-00001', 'COOP-ND', fakeListarParcelasPorSocio)
 
   assert.equal(rowsOrgA.length, 1)
   assert.equal(rowsOrgA[0].ID_Parcela_Fija, 'P-A-1')
@@ -167,8 +128,13 @@ test('fetchParcelasBySocio: un ID_Socio que existe en DOS organizaciones (mismo 
   )
 })
 
-test('fetchParcelasBySocio: sin organizationId, devuelve vacío en vez de traer todas las organizaciones', async () => {
-  const supabase = createFakeSupabase({ PADRON_PARCELAS: PARCELAS_FAKE })
-  const rows = await fetchParcelasBySocio(supabase, 'JS-00001', undefined)
+test('fetchParcelasBySocio: sin organizationId, devuelve vacío sin llamar a la función SQL', async () => {
+  let called = false
+  const listarParcelasPorSocio = async () => {
+    called = true
+    return []
+  }
+  const rows = await fetchParcelasBySocio('JS-00001', undefined, listarParcelasPorSocio)
   assert.deepEqual(rows, [], 'sin organizationId no hay forma segura de scopear -- debe devolver vacío, no todo')
+  assert.equal(called, false)
 })

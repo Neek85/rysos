@@ -1,5 +1,5 @@
 # ESTADO DEL PROYECTO RYZOS
-*Última actualización: 26 de agosto, 2026*
+*Última actualización: 1 de septiembre, 2026*
 
 > Este documento es la "bitácora" del proyecto. Aquí se anota qué se hizo, qué falta y qué decisiones están pendientes. No contiene reglas técnicas fijas (esas viven en el prompt orquestador RYZOS V3.1) — esto es solo el día a día.
 
@@ -109,6 +109,32 @@
   `specs/alta_organizacion_real.md`, con la convención de código
   (`TIPO-SLUG`) fijada en
   [ADR-030](adr/ADR-030-convencion-codigo-organizaciones.md).
+
+- **(2026-09-01) Incidente de seguridad real cerrado — lectura de
+  `PADRON_SOCIOS`/`PADRON_PARCELAS` sin aislamiento vía la llave `anon`
+  pública:** una política RLS agregada el 2026-08-18 para el
+  autocompletado de Inspecciones (`USING ("ID_Organizacion" IS NOT
+  NULL)`) resultó ser, en la práctica, sin ninguna restricción real —
+  cualquiera con la llave `anon` (pública por diseño, embebida en el
+  sitio) podía leer el padrón completo de **cualquier** organización sin
+  sesión. Confirmado en vivo antes de corregir: 618 socios reales de
+  `COOP-AROMAS-VALLE` alcanzables (DNI, nombre, celular incluidos), no
+  una hipótesis. Cerrado bloqueando esa lectura directa (`USING
+  (false)`) y reemplazando los 6 caminos reales del código que dependían
+  de ella (listado de socios, parcelas por socio, autocompletado de
+  Inspecciones y de la Consola QC, importador masivo, enriquecimiento de
+  parcela en QC) por 10 funciones `SECURITY DEFINER` parametrizadas por
+  organización, con `REVOKE`/`GRANT EXECUTE` explícito a `service_role`
+  únicamente desde el día uno. Verificado end-to-end contra producción
+  (686/686 tests, 6/6 tests de aislamiento cruzado real, verificación
+  manual en `/dashboard/socios`). Ver
+  [ADR-031](adr/ADR-031-lecturas-padron-security-definer.md). **Fase 2
+  del mismo incidente, ya dimensionada pero sin aplicar:**
+  `INSPECCIONES`/`CAP_*` tienen el mismo defecto de política (más
+  severo — incluye escritura y borrado), con migraciones de contención
+  preparadas y esperando revisión antes de aplicarse — el contenido real
+  expuesto ahí hoy es mínimo (2 filas sin datos sensibles), a diferencia
+  del caso de `PADRON_SOCIOS`.
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

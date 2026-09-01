@@ -569,6 +569,26 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
 | `public.fn_validar_topologia_eudr(p_tabla_origen text, p_registro_id text)` | `jsonb` | **Nuevo (2026-08-20), actualizada el mismo día.** Validación topológica bajo demanda (`ST_IsValid`/`ST_IsSimple`/solapamiento contra otros `APROBADO` de la misma org/`fn_calcular_area_ha`) para un registro `EUDR_MONITOREO`/`EUDR_USO_SUELO` — rechaza `EUDR_INSTALACIONES` (siempre puntual). Sin `SECURITY DEFINER`; se llama solo desde `app/api/qc/validate-spatial/route.js` con el Service Role Key. El campo `deforestacion` cruza contra `EUDR_COBERTURA_BOSCOSA_2020` SI esa tabla tiene filas (`anio_perdida > 2020` + `ST_Intersects`) — mientras siga vacía (estado por defecto), sigue devolviendo `{disponible:false,...}` igual que su primera versión. |
 | `public.fn_parcelas_vecinas_eudr(p_organizacion_id text, p_geom geometry, p_radio_m numeric DEFAULT 500, p_excluir_id uuid DEFAULT NULL, p_limite integer DEFAULT 25)` | `TABLE(id uuid, geom geometry, codigo_socio text, total_encontrados integer, total_devueltos integer)` | **Nuevo (2026-08-21), pendiente de aplicación manual.** Capa de contexto de parcelas vecinas (`EUDR_MONITOREO` `APROBADO` dentro de un radio, `ST_DWithin` sobre `::geography`) para la Consola QC — ver `docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md`. Sin `SECURITY DEFINER`; se llama solo desde `lib/actions/qcActions.js::fetchParcelasVecinas` con el Service Role Key (nunca expuesta a `anon` — `p_organizacion_id` lo decide el llamador, exponerla abriría fuga cross-tenant). |
 | `public.fn_set_producto_predominante_uso_suelo()` | `trigger` | **Nuevo (2026-08-26, ADR-028), pendiente de aplicación manual.** `BEFORE INSERT` sobre `EUDR_USO_SUELO` (`trg_set_producto_predominante_uso_suelo`) — resuelve `id_parcela` (GUID QField) → `EUDR_MONITOREO.qfield_relation_id` → `ID_Parcela_Fija` → `PADRON_PARCELAS.id_producto_predominante`, copiándolo a `NEW.id_producto_predominante`. Nunca lanza excepción: si la cadena no resuelve, deja `NULL` y el `INSERT` continúa. |
+| `public.fn_crear_socio_con_certificaciones(p_id_socio text, p_organizacion text, p_socio jsonb, p_certificaciones jsonb)` | `jsonb` (`{id, id_socio}`) | **Aplicada (2026-09-01, ADR previo sin número asignado en este archivo — retroactivo, faltaba documentar).** Alta atómica de un socio nuevo + sus certificaciones (`PADRON_SOCIOS` + `SOCIO_CERTIFICACIONES`) en una sola invocación — reemplaza 3 llamadas independientes del importador masivo. Sin `SECURITY DEFINER` (corre con el rol del llamador) — `EXECUTE` revocado de `PUBLIC`/`anon`/`authenticated`, `GRANT` único a `service_role`. Llamada desde `lib/actions/sociosActions.js::createSocio()` con la Service Role Key. |
+| `public.fn_listar_padron_socios(p_organizacion text, p_search text DEFAULT NULL, p_cert_org_estatus text DEFAULT NULL, p_departamento text DEFAULT NULL, p_cert_flags text[] DEFAULT NULL, p_page int DEFAULT 0, p_page_size int DEFAULT 15)` | `TABLE(...)` — todas las columnas de `PADRON_SOCIOS` que ya exponía `SOCIO_COLUMNS` (incluye `socio_fecha_nacimiento`/`socio_fecha_ingreso` como `date`, no `text` — bug real corregido en el hotfix, ver abajo) + `activo boolean` + `total_count bigint` (paginación en una sola llamada, `COUNT(*) OVER()`) | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`, `SET search_path = public`, `EXECUTE` solo para `service_role`. Reemplaza `lib/sociosSearch.js::fetchSocios` leyendo `PADRON_SOCIOS` directo con `anon` (RLS efectivamente sin restricción — ver ADR-031). Llamada desde `lib/actions/padronReadActions.js::fnListarPadronSocios`. **Hotfix aplicado el mismo día** (`20260901161000_fix_fecha_columns_fn_listar_padron_socios.sql`): la versión original declaraba esas 2 columnas como `text`, Postgres real las tiene como `date` — `DROP FUNCTION` + `CREATE` (no se puede cambiar el tipo de retorno con `REPLACE`), repite el `REVOKE`/`GRANT` completo porque un `DROP` los resetea. |
+| `public.fn_listar_padron_parcelas_por_socio(p_organizacion text, p_socio_id text)` | `TABLE(ID_Parcela_Fija, ID_Organizacion, ID_Socio, parcela_codigo, parcela_nombre, hcp, hcc, ho, hip, hrp, hbp, otros_cultivo, totalh, geom, activo, id_producto_predominante)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Reemplaza `lib/sociosSearch.js::fetchParcelasBySocio`. |
+| `public.fn_buscar_padron_socios(p_organizacion text, p_query text)` | `TABLE(ID_Socio, ID_Organizacion, codigo_finca, socio_nombre_completo, socio_dni)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Autocompletado — reemplaza `lib/padronSearch.js::searchSocios` (usado por Inspecciones **y** por el editor vectorial de la Consola QC, `VectorEditorTools.jsx`). |
+| `public.fn_buscar_padron_parcelas(p_organizacion text, p_socio_id text DEFAULT NULL, p_query text DEFAULT NULL)` | `TABLE(ID_Parcela_Fija, ID_Organizacion, ID_Socio, parcela_codigo, parcela_nombre, totalh)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Reemplaza `lib/padronSearch.js::searchParcelas`. |
+| `public.fn_padron_socios_existentes(p_organizacion text, p_id_socios text[] DEFAULT '{}', p_dnis text[] DEFAULT '{}', p_codigos_finca text[] DEFAULT '{}')` | `TABLE(ID_Socio, socio_dni, codigo_finca)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Detección de duplicados en el preview de importación masiva — reemplaza 3 consultas paralelas de `lib/padronCsv.js::applySocioDbChecks` con 1 sola llamada. |
+| `public.fn_padron_parcelas_existentes(p_organizacion text, p_ids text[] DEFAULT '{}', p_codigos text[] DEFAULT '{}')` | `TABLE(ID_Parcela_Fija, parcela_codigo)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Mismo propósito que la anterior, para `lib/padronCsv.js::applyParcelaDbChecks`. |
+| `public.fn_padron_socios_ids_todos(p_organizacion text)` | `TABLE(ID_Socio)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Todos los `ID_Socio` (activos e inactivos) de la organización, para calcular el siguiente código libre en la plantilla descargable de Socios (`lib/padronCsv.js::downloadSocioTemplate`). |
+| `public.fn_padron_socios_sample_activos(p_organizacion text, p_limit int DEFAULT 2)` | `TABLE(ID_Socio)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. `ID_Socio` reales y activos de ejemplo para la plantilla de Parcelas (`lib/padronCsv.js::downloadParcelaTemplate`). |
+| `public.fn_padron_parcelas_codigos_e_ids(p_organizacion text)` | `TABLE(parcela_codigo, ID_Parcela_Fija)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Códigos/IDs de parcela ya usados, para calcular los siguientes libres en la plantilla de Parcelas. |
+| `public.fn_enriquecer_parcela_qc(p_organizacion text, p_ids text[])` | `TABLE(ID_Parcela_Fija, parcela_codigo, parcela_nombre)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Reemplaza `lib/eudrQcActions.js::enrichWithParcelaInfo` (Consola QC, enriquecimiento de registros `PENDIENTE`) — **la versión anterior no filtraba por organización en absoluto**, hallazgo real encontrado durante el refactor, no solo el defecto ya conocido de `PADRON_SOCIOS`. |
+
+**Nota sobre las 10 funciones de ADR-031:** todas comparten el mismo
+patrón — `SECURITY DEFINER` + `SET search_path = public` + `REVOKE
+EXECUTE` explícito de `PUBLIC`/`anon`/`authenticated` + `GRANT` único a
+`service_role`, consumidas exclusivamente vía
+`lib/actions/padronReadActions.js` (Server Actions, nunca directo desde
+un componente `'use client'`). Confirmado en vivo: `anon` recibe `42501
+permission denied` al intentar llamarlas (no solo "función no
+encontrada") — ver `tests/test_padron_read_functions_live.mjs`.
 
 ## Tablas nuevas fuera del núcleo EUDR/Padrón
 
@@ -635,11 +655,30 @@ Supabase Auth** (`signInWithPassword` no aparece en ningún archivo del repo).
 Las políticas `authenticated`-only de Tarea 9.1 sobre `EUDR_*`/`PADRON_*`
 **no aplican** al tráfico real del frontend — ese tráfico funciona porque las
 vistas (`vw_monitoreo_web`, etc.) corren con el privilegio de su dueño
-(`postgres`), no del rol que realmente consulta (`anon`). Un `SELECT` directo
-a `PADRON_PARCELAS` con la anon key devuelve 0 filas. El módulo de
+(`postgres`), no del rol que realmente consulta (`anon`). El módulo de
 Inspecciones (`INSPECCIONES` + `CAP_*`) sí escribe directo con la anon key, y
 por eso tiene políticas `anon`-abiertas explícitas (`fix_inspecciones_rls`,
 2026-08-18) — ver ese archivo para el razonamiento de seguridad completo.
+**Ese mismo patrón (`anon`-abierto) resultó ser un incidente real de
+seguridad cuando se replicó para lectura en `PADRON_SOCIOS`/`PADRON_PARCELAS`
+— ver ADR-031 y la corrección abajo.**
+
+> **Corrección (2026-09-01, ADR-031):** el párrafo original de esta
+> sección decía "un `SELECT` directo a `PADRON_PARCELAS` con la anon key
+> devuelve 0 filas" — **eso era falso desde el 2026-08-18** (fecha en que
+> se agregó `rls_anon_select_padron_socios`/`_parcelas` para el
+> autocompletado de Inspecciones): la condición real de esas políticas,
+> `USING ("ID_Organizacion" IS NOT NULL)`, es efectivamente sin
+> restricción — un `SELECT` directo con la anon key devolvía el padrón
+> **completo** de **todas** las organizaciones (confirmado en vivo:
+> 618 socios reales de `COOP-AROMAS-VALLE`, incluido DNI/nombre/celular,
+> alcanzables sin sesión). Cerrado bloqueando esas 2 políticas a
+> `USING (false)` para `anon` y reemplazando los 6 caminos de lectura
+> reales por las 10 funciones `SECURITY DEFINER` de la sección
+> "Funciones" arriba — ver ADR-031 para el detalle completo. Hoy sí es
+> cierto que un `SELECT` directo devuelve 0 filas, pero por el motivo
+> correcto (política `USING (false)`), no por el que decía este párrafo
+> originalmente.
 
 ### Auditoría RLS Multi-Tenant (2026-08-18, `20260818_rls_multi_tenant_fortification.sql`)
 
@@ -654,7 +693,7 @@ Zero-Trust y por qué — **riesgo aceptado por diseño, no un descuido**:
 |---|---|
 | `INSPECCIONES` | Frontend escribe con anon key sin sesión real; política exige solo `ID_Organizacion IS NOT NULL`, no coincidencia contra JWT (no hay JWT real que comparar). |
 | `CAP_DATOS_SOCIO`, `CAP_MIC`, `CAP_CONSERVACION`, `CAP_BIENESTAR`, `CAP_RIESGOS`, `CAP_GESTION` | No tienen columna `ID_Organizacion` propia (dependen de `ID_Inspeccion → INSPECCIONES`); política `USING (true)` para `anon`+`authenticated`. |
-| `PADRON_SOCIOS` / `PADRON_PARCELAS` (solo la política `anon` de lectura) | Habilitada para autocompletado del formulario de Inspecciones; la escritura sigue exclusiva de `authenticated` + `auth_org_id()` desde Tarea 9.1, sin cambios. |
+| ~~`PADRON_SOCIOS` / `PADRON_PARCELAS` (solo la política `anon` de lectura)~~ | **CERRADO (2026-09-01, ADR-031)** — la política `anon` de lectura habilitada para el autocompletado de Inspecciones resultó ser un incidente real (`USING` efectivamente sin restricción, padrón completo de cualquier organización legible sin sesión). Reemplazada por `USING (false)` + 10 funciones `SECURITY DEFINER`, ver sección "Funciones" arriba. La escritura sigue igual que siempre (exclusiva de `authenticated`/Service Role Key, sin cambios). |
 
 Cerrar este riesgo requiere implementar Supabase Auth real (sesión con JWT
 que lleve el claim `ID_Organizacion`) — no está en el alcance de ninguna

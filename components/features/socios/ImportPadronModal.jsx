@@ -120,7 +120,7 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
       } =
         tab === 'socios'
           ? await validateSocioRows(rows, supabase, organizationId)
-          : await validateParcelaRows(rows, supabase, organizationId)
+          : await validateParcelaRows(rows, organizationId)
       setValidated(result)
       setUnrecognizedColumns(unrecognized)
       setHectareWarnings(hectareW)

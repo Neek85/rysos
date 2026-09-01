@@ -397,13 +397,14 @@ test('validateSocioRows no confunde filas distintas sin valores repetidos', asyn
   assert.equal(results[1].valid, true)
 })
 
-// ---------------------------------------------------------------
-// Pre-validación contra la BD en la vista previa (supabase/organizationId
-// opcionales) — mock mínimo, sin red: un builder encadenable
-// .from().select().eq().in() que resuelve como una promesa (thenable),
-// igual de forma que lo usa applySocioDbChecks/applyParcelaDbChecks.
-// ---------------------------------------------------------------
-
+// Mock mínimo de Supabase, sin red: un builder encadenable
+// .from().select().eq().in() que resuelve como una promesa (thenable).
+// Sigue en uso para CERTIFICACIONES_CATALOGO/SOCIO_CERTIFICACIONES
+// (fetchSocioCertOrgEstatus más abajo) -- esas 2 tablas NO son parte del
+// reemplazo SECURITY DEFINER (solo PADRON_SOCIOS/PADRON_PARCELAS lo son,
+// ver AI_STATE.md "Reemplazo SECURITY DEFINER para lecturas de
+// PADRON_SOCIOS/PADRON_PARCELAS") -- siguen leyéndose directo con la
+// llave `anon` tal cual, sin cambios.
 function makeFakeSupabase(tableData) {
   return {
     from(table) {
@@ -429,90 +430,129 @@ function makeFakeSupabase(tableData) {
   }
 }
 
+// ---------------------------------------------------------------
+// Pre-validación contra la BD en la vista previa (organizationId
+// opcional) — reescrito 2026-09-01 (ver AI_STATE.md "Reemplazo SECURITY
+// DEFINER para lecturas de PADRON_SOCIOS/PADRON_PARCELAS"):
+// applySocioDbChecks/applyParcelaDbChecks ya no consultan las tablas
+// directo con un query builder falso -- llaman a
+// fn_padron_socios_existentes/fn_padron_parcelas_existentes (SECURITY
+// DEFINER). Acá se inyecta un fake de esas 2 funciones (mismo shape que
+// la función SQL real: recibe organizationId + arrays, devuelve las
+// filas que matchean DENTRO de esa organización) para seguir probando
+// que validateSocioRows/validateParcelaRows arman los mensajes de error
+// correctos a partir de lo que la función devuelve -- el aislamiento
+// multi-tenant REAL (que la función SQL nunca devuelva una fila de otra
+// organización aunque el JS se lo pidiera) se prueba contra la función
+// real en tests/test_padron_read_functions_live.mjs.
+// ---------------------------------------------------------------
+
+/** Fake de fn_padron_socios_existentes -- filtra por organización, igual que la función SQL real. */
+function makeFakeSociosExistentes(rows) {
+  return async (organizationId, { idSocios = [], dnis = [], codigosFinca = [] } = {}) =>
+    rows.filter(
+      (r) =>
+        r.ID_Organizacion === organizationId &&
+        (idSocios.includes(r.ID_Socio) || dnis.includes(r.socio_dni) || codigosFinca.includes(r.codigo_finca))
+    )
+}
+
+/** Fake de fn_padron_parcelas_existentes -- misma lógica, para PADRON_PARCELAS. */
+function makeFakeParcelasExistentes(rows) {
+  return async (organizationId, { ids = [], codigos = [] } = {}) =>
+    rows.filter((r) => r.ID_Organizacion === organizationId && (ids.includes(r.ID_Parcela_Fija) || codigos.includes(r.parcela_codigo)))
+}
+
 test('validateSocioRows marca inválido un ID_Socio que ya existe en la BD de la organización activa', async () => {
-  const supabase = makeFakeSupabase({
-    PADRON_SOCIOS: [{ ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', socio_dni: null, codigo_finca: null }],
-  })
+  const fetchSociosExistentes = makeFakeSociosExistentes([
+    { ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', socio_dni: null, codigo_finca: null },
+  ])
   const { rows: [result] } = await validateSocioRows(
     [{ ID_Socio: 'JS-00001', socio_nombre_completo: 'Ya Existe' }],
-    supabase,
-    'COOP-JS'
+    null,
+    'COOP-JS',
+    { fetchSociosExistentes }
   )
   assert.equal(result.valid, false)
   assert.ok(result.errors.some((e) => e.includes('ya existe')))
 })
 
 test('validateSocioRows marca inválido un DNI que ya existe en la BD, con el mensaje pedido', async () => {
-  const supabase = makeFakeSupabase({
-    PADRON_SOCIOS: [{ ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', socio_dni: '12345678', codigo_finca: null }],
-  })
+  const fetchSociosExistentes = makeFakeSociosExistentes([
+    { ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', socio_dni: '12345678', codigo_finca: null },
+  ])
   const { rows: [result] } = await validateSocioRows(
     [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Nuevo', socio_dni: '12345678' }],
-    supabase,
-    'COOP-JS'
+    null,
+    'COOP-JS',
+    { fetchSociosExistentes }
   )
   assert.equal(result.valid, false)
   assert.ok(result.errors.some((e) => e.includes('El DNI 12345678 ya existe en esta organización')))
 })
 
 test('validateSocioRows marca inválido un codigo_finca que ya existe en la BD', async () => {
-  const supabase = makeFakeSupabase({
-    PADRON_SOCIOS: [{ ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', socio_dni: null, codigo_finca: 'F-001' }],
-  })
+  const fetchSociosExistentes = makeFakeSociosExistentes([
+    { ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', socio_dni: null, codigo_finca: 'F-001' },
+  ])
   const { rows: [result] } = await validateSocioRows(
     [{ ID_Socio: 'JS-00099', socio_nombre_completo: 'Nuevo', codigo_finca: 'F-001' }],
-    supabase,
-    'COOP-JS'
+    null,
+    'COOP-JS',
+    { fetchSociosExistentes }
   )
   assert.equal(result.valid, false)
   assert.ok(result.errors.some((e) => e.includes('El Código de Finca "F-001" ya existe')))
 })
 
 test('validateSocioRows NO marca inválido un ID_Socio/DNI que existe en OTRA organización (aislamiento multi-tenant)', async () => {
-  const supabase = makeFakeSupabase({
-    PADRON_SOCIOS: [{ ID_Socio: 'JS-00001', ID_Organizacion: 'OTRA-COOP', socio_dni: '12345678', codigo_finca: null }],
-  })
+  const fetchSociosExistentes = makeFakeSociosExistentes([
+    { ID_Socio: 'JS-00001', ID_Organizacion: 'OTRA-COOP', socio_dni: '12345678', codigo_finca: null },
+  ])
   const { rows: [result] } = await validateSocioRows(
     [{ ID_Socio: 'JS-00001', socio_nombre_completo: 'Nuevo', socio_dni: '12345678' }],
-    supabase,
-    'COOP-JS'
+    null,
+    'COOP-JS',
+    { fetchSociosExistentes }
   )
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })
 
 test('validateParcelaRows marca inválido un ID_Parcela_Fija/parcela_codigo que ya existe en la BD, con el mensaje de duplicado-se-omite (ronda 9)', async () => {
-  const supabase = makeFakeSupabase({
-    PADRON_PARCELAS: [{ ID_Parcela_Fija: 'COOP-JS-001', ID_Organizacion: 'COOP-JS', parcela_codigo: 'P-01' }],
-    PADRON_SOCIOS: [{ ID_Socio: 'JS-01', ID_Organizacion: 'COOP-JS' }],
-  })
+  const fetchParcelasExistentes = makeFakeParcelasExistentes([
+    { ID_Parcela_Fija: 'COOP-JS-001', ID_Organizacion: 'COOP-JS', parcela_codigo: 'P-01' },
+  ])
+  const fetchSociosExistentes = makeFakeSociosExistentes([{ ID_Socio: 'JS-01', ID_Organizacion: 'COOP-JS' }])
   const { rows: [result] } = await validateParcelaRows(
     [{ ID_Parcela_Fija: 'COOP-JS-001', ID_Socio: 'JS-01', hcp: '2' }],
-    supabase,
-    'COOP-JS'
+    'COOP-JS',
+    { fetchParcelasExistentes, fetchSociosExistentes }
   )
   assert.equal(result.valid, false)
   assert.ok(result.errors.some((e) => e.includes('Esta parcela ya está registrada') && e.includes(DUPLICATE_SKIP_SUFFIX)))
 })
 
 test('validateSocioRows marca inválido un ID_Socio que ya existe en la BD, con el mensaje de duplicado-se-omite (ronda 9)', async () => {
-  const supabase = makeFakeSupabase({
-    PADRON_SOCIOS: [{ ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', socio_dni: null, codigo_finca: null }],
-  })
+  const fetchSociosExistentes = makeFakeSociosExistentes([
+    { ID_Socio: 'JS-00001', ID_Organizacion: 'COOP-JS', socio_dni: null, codigo_finca: null },
+  ])
   const { rows: [result] } = await validateSocioRows(
     [{ ID_Socio: 'JS-00001', socio_nombre_completo: 'Repetido' }],
-    supabase,
-    'COOP-JS'
+    null,
+    'COOP-JS',
+    { fetchSociosExistentes }
   )
   assert.equal(result.valid, false)
   assert.ok(result.errors.some((e) => e.includes('Este socio ya está registrado') && e.includes(DUPLICATE_SKIP_SUFFIX)))
 })
 
 test('validateParcelaRows marca inválido un ID_Socio que no existe en la BD de la organización, con el mensaje pedido', async () => {
-  const supabase = makeFakeSupabase({ PADRON_SOCIOS: [], PADRON_PARCELAS: [] })
+  const fetchParcelasExistentes = makeFakeParcelasExistentes([])
+  const fetchSociosExistentes = makeFakeSociosExistentes([])
   const { rows: [result] } = await validateParcelaRows(
     [{ ID_Parcela_Fija: 'COOP-JS-099', ID_Socio: 'JS-INVENTADO', hcp: '2' }],
-    supabase,
-    'COOP-JS'
+    'COOP-JS',
+    { fetchParcelasExistentes, fetchSociosExistentes }
   )
   assert.equal(result.valid, false)
   assert.ok(
@@ -523,14 +563,12 @@ test('validateParcelaRows marca inválido un ID_Socio que no existe en la BD de 
 })
 
 test('validateParcelaRows con ID_Socio real en la BD no marca error de "no existe"', async () => {
-  const supabase = makeFakeSupabase({
-    PADRON_SOCIOS: [{ ID_Socio: 'JS-01', ID_Organizacion: 'COOP-JS' }],
-    PADRON_PARCELAS: [],
-  })
+  const fetchParcelasExistentes = makeFakeParcelasExistentes([])
+  const fetchSociosExistentes = makeFakeSociosExistentes([{ ID_Socio: 'JS-01', ID_Organizacion: 'COOP-JS' }])
   const { rows: [result] } = await validateParcelaRows(
     [{ ID_Parcela_Fija: 'COOP-JS-099', ID_Socio: 'JS-01', hcp: '2' }],
-    supabase,
-    'COOP-JS'
+    'COOP-JS',
+    { fetchParcelasExistentes, fetchSociosExistentes }
   )
   assert.equal(result.valid, true, JSON.stringify(result.errors))
 })
@@ -1375,18 +1413,16 @@ test('validateSocioRows no trae hectareWarnings/missingSocioWarnings (no aplican
 // ── 1h: mensaje agrupado de ID_Socio no encontrado ──
 
 test('validateParcelaRows: agrupa los ID_Socio no encontrados en missingSocioWarnings, con las filas donde aparecen (caso real: "#N/D" de una fórmula de Excel rota)', async () => {
-  const supabase = makeFakeSupabase({
-    PADRON_SOCIOS: [{ ID_Socio: 'JS-01', ID_Organizacion: 'COOP-JS' }],
-    PADRON_PARCELAS: [],
-  })
+  const fetchSociosExistentes = makeFakeSociosExistentes([{ ID_Socio: 'JS-01', ID_Organizacion: 'COOP-JS' }])
+  const fetchParcelasExistentes = makeFakeParcelasExistentes([])
   const { rows, missingSocioWarnings } = await validateParcelaRows(
     [
       { ID_Parcela_Fija: 'P-01', ID_Socio: 'JS-01', hcp: '2' },
       { ID_Parcela_Fija: 'P-02', ID_Socio: '#N/D', hcp: '3' },
       { ID_Parcela_Fija: 'P-03', ID_Socio: '#N/D', hcp: '1' },
     ],
-    supabase,
-    'COOP-JS'
+    'COOP-JS',
+    { fetchSociosExistentes, fetchParcelasExistentes }
   )
   assert.equal(rows[0].valid, true, JSON.stringify(rows[0].errors))
   assert.equal(rows[1].valid, false)
@@ -1399,11 +1435,12 @@ test('validateParcelaRows: agrupa los ID_Socio no encontrados en missingSocioWar
 // ── 9.5 (ronda 6): "#N/D" y otros errores de fórmula de Excel se identifican como tales, no como "socio no encontrado" genérico ──
 
 test('validateParcelaRows: "#N/D" en ID_Socio se reporta como error de fórmula de Excel, no como "socio no encontrado" genérico (ni en missingSocioWarnings ni en el error de fila)', async () => {
-  const supabase = makeFakeSupabase({ PADRON_SOCIOS: [], PADRON_PARCELAS: [] })
+  const fetchSociosExistentes = makeFakeSociosExistentes([])
+  const fetchParcelasExistentes = makeFakeParcelasExistentes([])
   const { rows, missingSocioWarnings } = await validateParcelaRows(
     [{ ID_Parcela_Fija: 'P-01', ID_Socio: '#N/D', hcp: '2' }],
-    supabase,
-    'COOP-JS'
+    'COOP-JS',
+    { fetchSociosExistentes, fetchParcelasExistentes }
   )
   assert.equal(rows[0].valid, false)
   assert.ok(rows[0].errors.some((e) => e.includes('error de fórmula')), JSON.stringify(rows[0].errors))
@@ -1412,11 +1449,12 @@ test('validateParcelaRows: "#N/D" en ID_Socio se reporta como error de fórmula 
 })
 
 test('validateParcelaRows: un ID_Socio faltante REAL (no error de fórmula) sigue con el mensaje genérico de siempre', async () => {
-  const supabase = makeFakeSupabase({ PADRON_SOCIOS: [], PADRON_PARCELAS: [] })
+  const fetchSociosExistentes = makeFakeSociosExistentes([])
+  const fetchParcelasExistentes = makeFakeParcelasExistentes([])
   const { rows, missingSocioWarnings } = await validateParcelaRows(
     [{ ID_Parcela_Fija: 'P-01', ID_Socio: 'JS-INVENTADO', hcp: '2' }],
-    supabase,
-    'COOP-JS'
+    'COOP-JS',
+    { fetchSociosExistentes, fetchParcelasExistentes }
   )
   assert.equal(rows[0].valid, false)
   assert.ok(rows[0].errors.some((e) => e.includes('no existe en la organización activa')), JSON.stringify(rows[0].errors))

@@ -791,3 +791,755 @@ por qué hicieron falta 3 intentos):
   regenerar con `node scripts/generar_padron_sintetico.mjs --count N
   --seed <nuevo>` contra una `ORG-TEST-DEMO` recién vaciada (o una
   organización de prueba nueva), no reutilizar este estado tal cual.
+
+## 2026-09-01g — Investigación: exportSociosCsv/exportParcelasCsv sin scope de organización — CRÍTICO, más grave de lo que parecía
+
+**Tarea:** solo investigación (sin fix) del hallazgo colateral de la
+tarea anterior. Conclusión adelantada: **no es un bug de un botón de
+exportar — es una política RLS real que expone PADRON_SOCIOS/
+PADRON_PARCELAS completas (todas las organizaciones) a cualquiera con
+la llave `anon` pública, sin login, sin sesión, sin pasar por
+`/dashboard/socios` en absoluto.**
+
+**Corrección de premisa:** el prompt asumía que las funciones viven en
+`lib/actions/` — no es así. `exportSociosCsv`/`exportParcelasCsv` están
+en `lib/padronCsv.js` (no `'use server'`, no Server Actions) y corren
+**client-side**, con el mismo cliente Supabase de llave `anon` que usa
+el resto de la página (`getSupabaseClient()`, `lib/supabaseClient.js`).
+Esto importa para el punto 4 de abajo: no hay ninguna capa de servidor
+entre el botón y la base.
+
+### 1. Query real (textual, confirmada leyendo `lib/padronCsv.js:1383-1434`)
+
+```js
+// exportSociosCsv (línea 1383)
+supabase
+  .from('PADRON_SOCIOS')
+  .select([...SOCIO_EXPORT_COLUMNS, 'id'].join(','))
+  .eq('activo', true)
+  .order('socio_nombre_completo')
+// + SOCIO_CERTIFICACIONES vía socioIds, + fetchSocioCertOrgEstatus
+
+// exportParcelasCsv (línea 1425)
+supabase
+  .from('PADRON_PARCELAS')
+  .select(PARCELA_EXPORT_COLUMNS.join(','))
+  .eq('activo', true)
+  .order('parcela_codigo')
+```
+
+**Ningún `.eq('ID_Organizacion', ...)` en ninguna de las dos** — ni un
+filtro real ni un hardcode a `COOP-AROMAS-VALLE`. Ninguna de las dos
+funciones recibe `organizationId` como parámetro (`exportSociosCsv(supabase)`,
+`exportParcelasCsv(supabase)` — la única entrada es el cliente). El
+botón del tooltip ya lo admite textualmente: *"Exporta todo el padrón
+de socios activos, no solo esta página."*
+
+### 2 y 3. Reproducción con y sin `?org=ORG-TEST-DEMO` — resultado IDÉNTICO (confirmado, no supuesto)
+
+Como ninguna función lee `organizationId` en absoluto, el override de
+la tarea anterior no tiene ningún efecto sobre el export — con o sin
+`?org=` en la URL, la query que se dispara es exactamente la misma.
+Confirmado en vivo reproduciendo la query real (misma forma exacta que
+`exportSociosCsv`) contra la instancia, con la llave **`anon` pública**
+(la misma que usa el navegador, sin sesión):
+
+```
+GET .../rest/v1/PADRON_SOCIOS?select=...&activo=eq.true
+-> 685 filas totales
+   COOP-AROMAS-VALLE: 618
+   ORG-TEST-DEMO:      67
+
+GET .../rest/v1/PADRON_PARCELAS?select=...&activo=eq.true
+-> 858 filas totales
+   COOP-AROMAS-VALLE: 821
+   ORG-TEST-DEMO:      37
+```
+
+**Confirmado que trae datos reales, no solo códigos** (sin reproducir
+los valores reales acá — evidencia de presencia, no de contenido):
+muestra de 5 filas de `COOP-AROMAS-VALLE` vía la query real de
+`exportSociosCsv`, `socio_dni`/`socio_nombre_completo`/`celular_socio`
+**poblados (no vacíos/NULL) en las 5** — DNI, nombre completo y celular
+reales de personas reales, exportables en un solo CSV mezclado con
+datos de cualquier otra organización, incluida una de prueba.
+`exportParcelasCsv` expone menos PII directa (`PARCELA_EXPORT_COLUMNS`
+no incluye `socio_dni`/nombre — sí incluye `ID_Socio`, que permite
+cruzar contra el export de Socios).
+
+### 4. Alcance real — NO limitado a staff interno con acceso a `/dashboard/socios`
+
+**La causa raíz no es el botón de exportar — es la política RLS.**
+`supabase/migrations/20260818_fix_inspecciones_rls.sql` líneas 142-148:
+
+```sql
+CREATE POLICY "rls_anon_select_padron_socios" ON public."PADRON_SOCIOS"
+FOR SELECT TO anon
+USING ("ID_Organizacion" IS NOT NULL);
+
+CREATE POLICY "rls_anon_select_padron_parcelas" ON public."PADRON_PARCELAS"
+FOR SELECT TO anon
+USING ("ID_Organizacion" IS NOT NULL);
+```
+
+`USING ("ID_Organizacion" IS NOT NULL)` es, en la práctica, **sin
+condición real** — es verdadero para prácticamente cualquier fila con
+ese campo cargado, de cualquier organización. Esta política se agregó
+deliberadamente (fix Inspecciones, 2026-08-18) para habilitar el
+autocompletado del formulario de Inspecciones contra el padrón — pero
+otorga acceso de lectura total a la tabla completa, no solo lo que
+Inspecciones necesita. El único motivo por el que `fetchSocios` (la
+lista que se ve en pantalla en `/dashboard/socios`) SÍ queda scopeada
+por organización es que **el código de esa función agrega su propio
+`.eq('ID_Organizacion', organizationId)` a la query** — la RLS no lo
+exige, es disciplina de código, no una barrera real de la base.
+
+**Consecuencia directa:** no hace falta pasar por `/dashboard/socios`,
+ni por ningún botón, ni ser staff con acceso a nada. Cualquiera que
+tenga la llave `anon` — que es, por diseño de Supabase, pública,
+embebida en el bundle de JavaScript del sitio en producción, nunca un
+secreto — puede hacer exactamente la misma consulta HTTP de arriba
+directo contra el endpoint REST de Supabase, sin login, sin sesión, sin
+tocar la UI de RYZOS en absoluto, y recibir el DNI, nombre completo,
+celular, fecha de nacimiento y ubicación (departamento/provincia/
+distrito/localidad) de los 618 socios reales de `COOP-AROMAS-VALLE`.
+Esto es estructural: **cualquier código futuro (o cualquier cliente
+externo) que consulte `PADRON_SOCIOS`/`PADRON_PARCELAS` con la llave
+`anon` y no agregue manualmente el filtro de organización hereda esta
+misma exposición** — no es exclusivo de estas 2 funciones, es una
+propiedad de la política RLS tal como está escrita hoy.
+
+### Resumen para que el arquitecto priorice con los otros 2 hallazgos abiertos
+
+1. Auditoría `GRANT`/`REVOKE` sobre funciones RPC (ver entrada `2026-09-01d`).
+2. Selector de organización real en `/dashboard/socios` (ver entrada `2026-09-01f`).
+3. **Este hallazgo — el más severo de los 3 con evidencia real de PII
+   expuesta hoy, sin necesitar ninguna sesión ni acceso interno.** Dos
+   capas de fix posibles, no excluyentes: (a) acotar
+   `rls_anon_select_padron_socios`/`rls_anon_select_padron_parcelas`
+   para que no sea `IS NOT NULL` sino algo realmente scopeado (difícil
+   sin sesión real de Supabase Auth — no hay claim de organización que
+   comparar, ver el mismo problema que ya documentó ADR-025); (b)
+   agregar el filtro de organización que falta a `exportSociosCsv`/
+   `exportParcelasCsv` (fix rápido, cierra el síntoma del botón, pero
+   no cierra el acceso directo por REST con la llave `anon`, que seguiría
+   expuesto para cualquier otro consumidor). Ninguno de los dos se
+   aplicó en esta tarea — investigación pura, según lo pedido.
+
+**No se modificó ningún código de producción en esta tarea** — solo
+`AI_STATE.md`.
+
+## 2026-09-01h — Auditoría completa de superficie `anon` (RLS + GRANT) — reemplaza/amplía la auditoría GRANT/REVOKE pendiente
+
+**Tarea:** solo investigación y diseño, nada aplicado en Supabase. El
+alcance real es mucho más amplio que `PADRON_SOCIOS`/`PADRON_PARCELAS`
+— **hay una tabla con acceso `anon` de lectura+escritura+borrado
+totalmente sin restricción que contiene PII socioeconómica sensible
+(ingresos, discapacidad, discriminación, cuentas bancarias), más severa
+que el hallazgo original.**
+
+### 1. TODAS las políticas `anon` en `supabase/migrations/` con condición efectivamente siempre verdadera
+
+Grep completo de `TO anon` + `GRANT ... TO anon` en las 12 migraciones
+que mencionan `anon` (5 son solo comentarios sin política/grant real —
+`20260818_rls_multi_tenant_fortification.sql`,
+`20260820_fn_validar_topologia_eudr.sql`,
+`20260823_155621_fn_cobertura_uso_suelo_parcela.sql`,
+`20260823_200000_fn_validar_codigo_parcela_unico.sql`,
+`20260825201351_pk_surrogate_multiorganizacion.sql` — descartadas).
+
+| Tabla | Política real (`anon`) | Operación | Condición |
+|---|---|---|---|
+| `INSPECCIONES` | `rls_anon_all_inspecciones` | **FOR ALL** (select+insert+update+delete) | `"ID_Organizacion" IS NOT NULL OR ...` — como `ID_Organizacion` es `NOT NULL` obligatorio por la misma política, esto es **efectivamente sin restricción** para cualquier fila real |
+| `CAP_DATOS_SOCIO` | `rls_anon_all_cap_datos_socio` | **FOR ALL** | `USING (true) WITH CHECK (true)` — **sin ninguna restricción, ni siquiera de organización** |
+| `CAP_MIC` | `rls_anon_all_cap_mic` | **FOR ALL** | `USING (true) WITH CHECK (true)` |
+| `CAP_CONSERVACION` | `rls_anon_all_cap_conservacion` | **FOR ALL** | `USING (true) WITH CHECK (true)` |
+| `CAP_BIENESTAR` | `rls_anon_all_cap_bienestar` | **FOR ALL** | `USING (true) WITH CHECK (true)` |
+| `CAP_RIESGOS` | `rls_anon_all_cap_riesgos` | **FOR ALL** | `USING (true) WITH CHECK (true)` |
+| `CAP_GESTION` | `rls_anon_all_cap_gestion` | **FOR ALL** | `USING (true) WITH CHECK (true)` |
+| `PADRON_SOCIOS` | `rls_anon_select_padron_socios` | SELECT | `"ID_Organizacion" IS NOT NULL` |
+| `PADRON_PARCELAS` | `rls_anon_select_padron_parcelas` | SELECT | `"ID_Organizacion" IS NOT NULL` |
+| `vw_parcelas_web` (VIEW, `security_invoker=true`, hereda RLS de `PADRON_PARCELAS`) | GRANT directo, sin política propia | **DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE** | Ninguna — hereda la de `PADRON_PARCELAS` vía `security_invoker`, pero el `GRANT` en sí es más amplio de lo que cualquier consumidor real necesita |
+| `SOCIO_CERTIFICACIONES` | `rls_anon_select_socio_certificaciones` | SELECT | `id_organizacion IS NOT NULL` |
+| `PARCELA_CERTIFICACIONES` | `rls_anon_select_parcela_certificaciones` | SELECT | `id_organizacion IS NOT NULL` |
+| `ORGANIZACION_CERTIFICACIONES` | `rls_anon_select_organizacion_certificaciones` | SELECT | `id_organizacion IS NOT NULL` |
+| `ORGANIZACION_PRODUCTOS` | `rls_anon_select_organizacion_productos` | SELECT | `id_organizacion IS NOT NULL` |
+| `CERTIFICACIONES_CATALOGO` | `rls_anon_select_certificaciones_catalogo` | SELECT | `USING (true)` — catálogo global, sin PII, a propósito |
+| `AGENCIAS_CERTIFICADORAS` | `rls_anon_select_agencias_certificadoras` | SELECT | `USING (true)` — catálogo global (`id, nombre, activo, creado_en`), sin PII, a propósito |
+| `PRODUCTOS` | `rls_anon_select_productos` | SELECT | `USING (true)` — catálogo global, sin PII, a propósito |
+
+### 2. Qué es accesible HOY vía REST directo con la llave `anon` pública, sin sesión — confirmado en vivo (sin reproducir PII real)
+
+| Tabla/vista | Filas totales (`anon`, sin filtro) | Organizaciones mezcladas | PII real confirmada |
+|---|---|---|---|
+| `PADRON_SOCIOS` | 685 | `COOP-AROMAS-VALLE` (618) + `ORG-TEST-DEMO` (67) | **Sí** — DNI, nombre completo, celular poblados y confirmados (ver entrada `2026-09-01g`) |
+| `PADRON_PARCELAS` | 858 | `COOP-AROMAS-VALLE` (821) + `ORG-TEST-DEMO` (37) | Código/nombre de parcela, hectáreas, `ID_Socio` — sin DNI/nombre poblado en la práctica hoy (las columnas denormalizadas `socio_dni`/`socio_nombre_completo` existen en el schema pero están vacías en los datos reales actuales) |
+| `vw_parcelas_web` | 858 (idéntico a `PADRON_PARCELAS`, mismo filtro nulo) | Idem | Expone explícitamente `socio_dni`/`socio_nombre_completo` en su `SELECT` (aunque hoy vengan vacíos) — **si esas columnas se llegan a poblar en el futuro, esta vista las expone de inmediato sin que nadie tenga que tocar nada más**. `geom` confirmado vacío en la práctica también. No referenciada por ningún archivo `.js`/`.jsx` del repo — superficie de ataque activa sin ningún beneficio funcional actual. |
+| `INSPECCIONES`/`CAP_*` | **No se probó leer/escribir contenido real en esta tarea** — el alcance de la política (`FOR ALL`, sin restricción) se confirmó por lectura de código, no se ejecutó ninguna consulta ni escritura real contra estas tablas (habría significado tocar formularios socioeconómicos reales de producción, fuera de lo que esta tarea de solo-investigación debía hacer). Si el arquitecto quiere confirmación empírica de contenido, es un paso aparte, explícito. |
+| `SOCIO_CERTIFICACIONES` / `PARCELA_CERTIFICACIONES` / `ORGANIZACION_CERTIFICACIONES` / `ORGANIZACION_PRODUCTOS` | No verificado con conteo en esta tarea (confirmado solo por lectura de política) | — | Sin PII directa (uuid + estado/booleano) — `SOCIO_CERTIFICACIONES.id_socio` es cruzable contra el `PADRON_SOCIOS` ya expuesto, pero no agrega una superficie nueva por sí sola |
+| `CERTIFICACIONES_CATALOGO` / `AGENCIAS_CERTIFICADORAS` / `PRODUCTOS` | Catálogos, `USING(true)` a propósito | — | Sin PII — no requieren acción |
+
+**El hallazgo más severo de los 3 documentados hasta ahora no es
+`PADRON_SOCIOS` — es `INSPECCIONES` + los 6 `CAP_*`:** acceso `FOR ALL`
+(lectura, alta, modificación Y BORRADO) sin ninguna restricción real
+para cualquiera con la llave `anon`, sobre datos que — según el schema
+real de `CAP_DATOS_SOCIO`/`CAP_BIENESTAR` (`docs/schema_live.md`,
+`supabase/migrations/20260818_inspecciones_atomic_save.sql`) — incluyen
+DNI, nombre completo, cónyuge, cuenta bancaria y entidad, porcentaje de
+ingresos por fuente, composición familiar (menores de 14/15-18),
+discapacidad, acceso a centro de salud, prácticas discriminatorias, y
+denuncias de trabajo infantil. No solo es legible sin autenticación —
+**es modificable y borrable** sin ninguna traza de quién lo hizo (no
+hay sesión real que loguear).
+
+### 3. Migración propuesta para `PADRON_SOCIOS`/`PADRON_PARCELAS` (diseñada, NO aplicada, NO creada como archivo todavía — el contrato de esta tarea es solo `AI_STATE.md`)
+
+Nombre propuesto si se decide aplicar:
+`supabase/migrations/20260901140000_lock_anon_select_padron.sql`
+
+```sql
+-- PROPUESTA, NO APLICADA. No edita 20260818_fix_inspecciones_rls.sql
+-- (ya aplicada) -- migración nueva que reemplaza las 2 políticas.
+BEGIN;
+
+DROP POLICY IF EXISTS "rls_anon_select_padron_socios"   ON public."PADRON_SOCIOS";
+DROP POLICY IF EXISTS "rls_anon_select_padron_parcelas" ON public."PADRON_PARCELAS";
+
+CREATE POLICY "rls_anon_select_padron_socios" ON public."PADRON_SOCIOS"
+FOR SELECT TO anon
+USING (false);
+
+CREATE POLICY "rls_anon_select_padron_parcelas" ON public."PADRON_PARCELAS"
+FOR SELECT TO anon
+USING (false);
+
+COMMIT;
+```
+
+**Nota de diseño:** `USING (false)` en vez de `DROP POLICY` sin
+reemplazo — con RLS habilitado (`ENABLE ROW LEVEL SECURITY`, ya
+aplicado desde antes) y CERO políticas `SELECT` para `anon`, el
+resultado es el mismo (deniega todo), pero dejar la política explícita
+con `USING (false)` documenta la intención en el propio schema (visible
+en `pg_policies`) en vez de depender de la ausencia de algo — más fácil
+de auditar después.
+
+### 4. Qué depende hoy de leer estas 2 tablas con la llave `anon` — quién se rompe con `USING (false)`
+
+Grep completo de `.from('PADRON_SOCIOS'`/`.from('PADRON_PARCELAS'` fuera
+de `lib/actions/*.js` (que usa Service Role, no afectado):
+
+| Consumidor | Archivo | ¿Ya scopea por `ID_Organizacion` en el código? | ¿Se rompe con `USING (false)`? |
+|---|---|---|---|
+| Listado de socios (`/dashboard/socios`) | `lib/sociosSearch.js::fetchSocios` | Sí (`.eq('ID_Organizacion', ...)`) | **Sí — rompe del todo.** La página completa deja de poder listar ningún socio de ninguna organización, no solo deja de filtrar mal. |
+| Parcelas de un socio | `lib/sociosSearch.js::fetchParcelasBySocio` | Sí | **Sí — rompe del todo** (el botón "Parcelas" en la tabla queda vacío siempre). |
+| Export CSV Socios | `lib/padronCsv.js::exportSociosCsv` | **No** (el hallazgo original) | Se rompe — pero rompe la ÚNICA forma legítima de exportar el padrón real de una organización también, no solo cierra el hueco. |
+| Export CSV Parcelas | `lib/padronCsv.js::exportParcelasCsv` | **No** | Idem. |
+| Duplicados en preview de importación CSV | `lib/padronCsv.js` (`applySocioDbChecks`/`applyParcelaDbChecks`, líneas ~923-1003) | Sí | **Sí — rompe.** El importador masivo deja de poder detectar duplicados antes de escribir (seguiría funcionando el rechazo por duplicado real, porque ESO pasa por la RPC con Service Role, pero el aviso previo en el preview del navegador desaparece). |
+| Plantilla de Parcelas (ID_Socio de ejemplo) | `lib/padronCsv.js::fetchSampleSocioIds` | Sí | **Sí — rompe** (la plantilla descargable cae al ID de respaldo fijo en vez de uno real de la organización). |
+| Autocompletado de Inspecciones | `lib/padronSearch.js::searchSocios`/`searchParcelas` | Sí | **Sí — rompe.** El formulario de Inspecciones (`/dashboard/inspecciones`) deja de poder autocompletar socio/parcela — invariante documentado en el propio archivo (`lib/padronSearch.js:4-10`): sin esta política, "el buscador simplemente no encuentra nada". |
+| Enriquecimiento de código/nombre de parcela en Consola QC | `lib/eudrQcActions.js::enrichWithParcelaInfo` (línea 160, sin ningún filtro de organización tampoco — otro caso del mismo patrón) | **No** | Se rompe parcialmente — `parcela_codigo`/`parcela_nombre` quedan `null` para los registros `PENDIENTE` de la Consola QC (`/dashboard/qc`), degradación visible pero no un error duro. |
+| Validación cruce de organización (código de parcela/socio ya usado por otra org) | `lib/eudrQcActions.js` (la función con `.neq('ID_Organizacion', ...)`, deliberadamente cross-tenant por diseño) | N/A (por diseño necesita leer otras orgs) | **No se rompe** — corre server-side con Service Role Key vía `/api/qc/validar-organizacion-socio-parcela` (confirmado leyendo el Route Handler), nunca con la llave `anon`. |
+| `lib/actions/gisActions.js`, `lib/actions/sociosActions.js` | — | N/A | **No se rompe** — Service Role Key, bypasea RLS por diseño. |
+| Vistas consolidadas (`vw_monitoreo_web`, `view_eudr_dashboard_aprobados`, etc.) | — | N/A | **No se rompen** — corren con privilegios del dueño (`postgres`), no dependen de la RLS de `anon` sobre la tabla base (patrón ya documentado en `docs/schema_live.md`). |
+
+**Conclusión del punto 4:** aplicar `USING (false)` tal cual, sin nada
+más, **rompe 6 caminos legítimos reales** (listado de socios completo,
+parcelas por socio, import CSV con detección de duplicados, plantilla
+de parcelas, autocompletado de Inspecciones, enriquecimiento en QC) —
+no son solo los 2 exports. El listado de socios (`fetchSocios`) es
+probablemente el más grave de romper: sin él, `/dashboard/socios`
+directamente no puede mostrar ningún socio de ninguna organización real,
+tampoco `COOP-AROMAS-VALLE`.
+
+### 5. Mecanismo de reemplazo propuesto (diseño, no implementado)
+
+Mismo patrón ya usado del lado de escritura
+(`fn_crear_socio_con_certificaciones`,
+`supabase/migrations/20260901120000_socio_creacion_atomica.sql`, con su
+`REVOKE`/`GRANT` correspondiente): funciones `SECURITY DEFINER` (o
+`SECURITY INVOKER` ejecutadas por un rol con privilegio real, a
+confirmar cuál encaja mejor con el resto del proyecto — `postgres` no
+tiene RLS que lo filtre) que reciben el código de organización como
+**parámetro explícito de la función**, no como un filtro opcional que
+el código JS puede omitir. `EXECUTE` revocado de `PUBLIC`/`anon`
+directo salvo la firma exacta que cada consumidor necesita — incluso
+ahí, el punto real es que la función SIEMPRE filtra, el llamador nunca
+puede pedir "todo".
+
+Reemplazos necesarios, uno por cada fila que "Sí" rompe arriba:
+
+1. **`fn_listar_padron_socios(p_organizacion text, p_search text DEFAULT NULL, p_page int DEFAULT 0, p_page_size int DEFAULT 15, ...)`**
+   — reemplaza `fetchSocios`. Necesita replicar el `.or(...)` de
+   búsqueda y los filtros de certificación/departamento — la pieza más
+   grande de las 6, porque `fetchSocios` es la que más lógica de query
+   tiene hoy.
+2. **`fn_listar_padron_parcelas_por_socio(p_organizacion text, p_socio_id text)`**
+   — reemplaza `fetchParcelasBySocio`, trivial (misma forma que ya
+   tiene, solo movida a SQL).
+3. **`fn_exportar_padron_socios(p_organizacion text)`** /
+   **`fn_exportar_padron_parcelas(p_organizacion text)`** — reemplazan
+   los 2 exports; devuelven el mismo shape de columnas que
+   `SOCIO_EXPORT_COLUMNS`/`PARCELA_EXPORT_COLUMNS` esperan, para no
+   tener que tocar `buildSociosCsv`/`buildParcelasCsv` del lado de JS.
+4. **`fn_buscar_socios_autocompletado(p_organizacion text, p_query text)`**
+   / **`fn_buscar_parcelas_autocompletado(p_organizacion text, p_socio_id text, p_query text)`**
+   — reemplazan `lib/padronSearch.js`.
+5. **Duplicados de import (`applySocioDbChecks`/`applyParcelaDbChecks`)
+   y plantilla (`fetchSampleSocioIds`)** — candidatos a reusar la MISMA
+   función del punto 1/2 en vez de crear funciones nuevas dedicadas
+   (ya reciben `organizationId` explícito del lado de JS, el cambio es
+   solo de `.from(...)` a `.rpc(...)`).
+6. **`fn_enriquecer_parcela_qc(p_organizacion text, p_ids text[])`** —
+   reemplaza `enrichWithParcelaInfo`. Nota: acá el organizationId real
+   con el que filtrar debe salir del propio registro EUDR que la
+   Consola QC ya tiene en mano (`record.ID_Organizacion`), no de una
+   variable de página — verificar esto al implementar, es una capa
+   distinta a las otras 5.
+
+**No implementado en esta tarea** — el pedido era diseñar el mecanismo,
+no escribir las 6 funciones. Escribirlas es la tarea siguiente lógica,
+ya con el alcance completo (esta entrada) como base, no una sorpresa
+a mitad de camino.
+
+### Auditoría de superficie `anon` — estado consolidado (reemplaza la auditoría GRANT/REVOKE de la entrada `2026-09-01d`)
+
+Para que el arquitecto priorice con toda la evidencia real junta:
+
+1. **`INSPECCIONES` + 6 `CAP_*` sin ninguna restricción, lectura+escritura+borrado** (esta entrada, punto 1-2) — el más severo, no cuantificado empíricamente todavía (a propósito, ver nota del punto 2).
+2. **`PADRON_SOCIOS`/`PADRON_PARCELAS`/`vw_parcelas_web` — PII real de 618 socios reales, expuesta hoy sin ninguna sesión** (entrada `2026-09-01g` + esta entrada) — migración de bloqueo diseñada arriba, mecanismo de reemplazo diseñado, ninguno de los 2 aplicado.
+3. **Funciones RPC sin `REVOKE`/`GRANT` explícito** (entrada `2026-09-01d`) — `fn_parcelas_vecinas_eudr` y otras 8 funciones más, todavía sin auditar una por una.
+4. **`SOCIO_CERTIFICACIONES`/`PARCELA_CERTIFICACIONES`/`ORGANIZACION_CERTIFICACIONES`/`ORGANIZACION_PRODUCTOS`** — mismo patrón `id_organizacion IS NOT NULL`, severidad baja-media (sin PII directa), no priorizado en esta entrada pero mismo defecto estructural.
+
+**No se aplicó nada en Supabase en esta tarea.**
+
+## 2026-09-01i — Bloqueo de emergencia INSPECCIONES/CAP_* — impacto exacto + 2 migraciones listas, ninguna aplicada
+
+**Tarea:** máxima prioridad del proyecto según el usuario. Solo
+investigación + preparar (sin aplicar) 2 migraciones de contención.
+**Hallazgo clave que cambia la urgencia relativa: el contenido real
+expuesto hoy en estas 7 tablas es mínimo — 2 filas en `INSPECCIONES`,
+0 en las 6 `CAP_*`** (ver punto 5) — muy distinto del caso
+`PADRON_SOCIOS` (618 personas reales expuestas ya). El defecto de
+diseño es igual de real y grave, pero el daño concreto hoy es mucho
+menor. Reportado con evidencia exacta para que el arquitecto priorice
+con datos, no con la gravedad asumida del mecanismo en abstracto.
+
+### 1. RLS habilitado en las 7 tablas — confirmado
+
+```sql
+-- supabase/migrations/20260818_fix_inspecciones_rls.sql líneas 65-71
+ALTER TABLE public."INSPECCIONES"     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."CAP_DATOS_SOCIO"  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."CAP_MIC"          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."CAP_CONSERVACION" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."CAP_BIENESTAR"    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."CAP_RIESGOS"      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public."CAP_GESTION"      ENABLE ROW LEVEL SECURITY;
+```
+
+RLS está habilitado en las 7 — **no es el problema más grave posible**
+(RLS deshabilitado por completo habría sido peor, ignoraría cualquier
+política). El problema real es que las políticas que sí existen son
+efectivamente sin restricción (`USING (true)` / condición siempre
+verdadera), documentado en la entrada `2026-09-01h`.
+
+### 2. ¿El submit real de `/dashboard/inspecciones` escribe directo contra estas 7 tablas con la llave `anon`? **SÍ, confirmado con evidencia de código.**
+
+- `components/features/inspecciones/useInspeccionForm.js:7,45,88` —
+  `import { getSupabaseClient } from '@/lib/supabaseClient'`, y el
+  submit real llama a `saveInspeccion(supabase, values, {...})` con ese
+  cliente (llave `anon`, sin sesión).
+- `lib/inspeccionesActions.js:570,580` — `saveInspeccion` llama a
+  `supabase.rpc('fn_guardar_inspeccion_completa', {...})`.
+- `supabase/migrations/20260818_inspecciones_atomic_save.sql` — esa RPC
+  **NO es `SECURITY DEFINER`** (comentario propio del archivo, línea
+  245-250: "corre con el rol del llamador... igual que las 7 llamadas
+  REST que reemplaza"), así que el `INSERT`/`DELETE`+`INSERT` que hace
+  contra las 7 tablas corre literalmente como `anon` — depende por
+  completo de que las políticas `FOR ALL ... USING(true)` de hoy lo
+  permitan.
+
+**Consecuencia directa, la más importante de este reporte:** las 2
+migraciones que preparé abajo, si se aplican, **rompen el guardado de
+inspecciones (alta Y edición, la misma RPC sirve para las dos)** hasta
+que exista un reemplazo `SECURITY DEFINER`. No hay forma de "solo
+cerrar la escritura anónima" sin romper el único camino de escritura
+que existe hoy — no hay un camino `authenticated` real de respaldo (sin
+sesión Supabase Auth, ver `CLAUDE.md`).
+
+### 3. Todo lo demás que depende de acceso `anon` a estas 7 tablas
+
+Único archivo del repo que consulta estas 7 tablas directo (grep
+completo, fuera de migraciones): `lib/inspeccionesActions.js`.
+
+| Función | Tablas | Operación | Llamada desde | ¿Scopea por organización en el código? |
+|---|---|---|---|---|
+| `fetchInspecciones` | `INSPECCIONES` | SELECT (listado) | `app/dashboard/inspecciones/page.jsx` (llave `anon`) | **No** — sin `.eq('ID_Organizacion', ...)`, mismo defecto que los exports de `PADRON_SOCIOS` (entrada `2026-09-01g`): el listado ya mezcla todas las organizaciones hoy. |
+| `fetchInspeccionDetalle` | `INSPECCIONES` + las 6 `CAP_*` | SELECT (ver/editar una inspección) | `useInspeccionForm.js` (llave `anon`) | Scopeado por `ID_Inspeccion` (un registro puntual) — no mezcla organizaciones, pero cualquiera que conozca/enumere un `ID_Inspeccion` de otra organización puede abrirlo igual. |
+| `saveInspeccion` → RPC `fn_guardar_inspeccion_completa` | Las 7 | INSERT/UPDATE/DELETE | `useInspeccionForm.js` (llave `anon`) | Verificación multi-tenant existe pero es **solo en JS del lado del cliente** (compara `organizationId` vs `existingOrganizationId`, comentario propio del archivo) — no es una barrera real, un llamado directo a la RPC con otros valores la evita por completo. |
+
+**No hay ningún otro consumidor** (ni vista, ni otra función, ni otro
+componente) — a diferencia de `PADRON_SOCIOS`/`PADRON_PARCELAS` (6
+consumidores reales), acá son solo estos 3, todos en el mismo archivo.
+El autocompletado de Inspecciones (`lib/padronSearch.js`, ya documentado
+en la entrada `2026-09-01h`) lee `PADRON_SOCIOS`/`PADRON_PARCELAS`, no
+estas 7 tablas — mencionado acá solo para no dejarlo fuera del cuadro
+completo, no es un consumidor nuevo de esta tarea.
+
+### 4. Dos migraciones preparadas — ARCHIVOS CREADOS EN EL REPO, NO APLICADAS EN SUPABASE
+
+**a) Mitigación parcial** — `supabase/migrations/20260901150000_lock_anon_write_inspecciones_cap.sql`:
+quita solo INSERT/UPDATE/DELETE de `anon` en las 7 tablas, deja SELECT
+igual. **Rompe el guardado de inspecciones (punto 2) — no rompe el
+listado ni la vista de detalle.**
+
+```sql
+-- (contenido completo del archivo, ver supabase/migrations/20260901150000_lock_anon_write_inspecciones_cap.sql)
+BEGIN;
+
+DROP POLICY IF EXISTS "rls_anon_all_inspecciones" ON public."INSPECCIONES";
+
+CREATE POLICY "rls_select_inspecciones_anon" ON public."INSPECCIONES"
+FOR SELECT TO anon
+USING (
+  "ID_Organizacion" IS NOT NULL
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+);
+
+CREATE POLICY "rls_all_inspecciones_authenticated" ON public."INSPECCIONES"
+FOR ALL TO authenticated
+USING (
+  "ID_Organizacion" IS NOT NULL
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+)
+WITH CHECK (
+  "ID_Organizacion" IS NOT NULL
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+);
+
+-- (mismo patrón repetido para CAP_DATOS_SOCIO, CAP_MIC, CAP_CONSERVACION,
+--  CAP_BIENESTAR, CAP_RIESGOS, CAP_GESTION -- USING(true)/WITH CHECK(true)
+--  original preservado, solo separado por rol -- ver el archivo completo)
+
+COMMIT;
+```
+
+**b) Contención completa** — `supabase/migrations/20260901150100_lock_anon_all_inspecciones_cap.sql`:
+quita TODO acceso `anon` (SELECT incluido). Diseñada para ser
+**independiente de (a)** — hace `DROP POLICY IF EXISTS` de los nombres
+de política de las 2 versiones posibles (la original de `20260818` y la
+parcial de arriba) y recrea la política de `authenticated` desde cero
+en ambos casos, para no perder ese acceso si se aplica esta migración
+sin pasar por (a) primero. **Rompe además el listado y la vista de
+detalle (punto 3) — el módulo completo de Inspecciones queda
+inutilizable desde el navegador.**
+
+```sql
+-- (contenido completo del archivo, ver supabase/migrations/20260901150100_lock_anon_all_inspecciones_cap.sql)
+BEGIN;
+
+DROP POLICY IF EXISTS "rls_anon_all_inspecciones"       ON public."INSPECCIONES";
+DROP POLICY IF EXISTS "rls_select_inspecciones_anon"    ON public."INSPECCIONES";
+DROP POLICY IF EXISTS "rls_all_inspecciones_authenticated" ON public."INSPECCIONES";
+
+CREATE POLICY "rls_anon_deny_inspecciones" ON public."INSPECCIONES"
+FOR ALL TO anon USING (false) WITH CHECK (false);
+
+CREATE POLICY "rls_all_inspecciones_authenticated" ON public."INSPECCIONES"
+FOR ALL TO authenticated
+USING (
+  "ID_Organizacion" IS NOT NULL
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+)
+WITH CHECK (
+  "ID_Organizacion" IS NOT NULL
+  OR auth.role() = 'service_role'
+  OR current_user = 'postgres'
+);
+
+-- (mismo patrón repetido para las 6 CAP_* -- deny total a anon,
+--  authenticated preservado con USING(true)/WITH CHECK(true) -- ver el
+--  archivo completo)
+
+COMMIT;
+```
+
+### 5. Filas reales hoy en cada tabla (vía llave `anon`, sin leer contenido — solo dimensionar)
+
+| Tabla | Filas |
+|---|---|
+| `INSPECCIONES` | **2** (ambas de `COOP-JS`, una organización real más antigua que `COOP-AROMAS-VALLE` — `Estado: "En Proceso"`, ninguna completada) |
+| `CAP_DATOS_SOCIO` | **0** |
+| `CAP_MIC` | **0** |
+| `CAP_CONSERVACION` | **0** |
+| `CAP_BIENESTAR` | **0** |
+| `CAP_RIESGOS` | **0** |
+| `CAP_GESTION` | **0** |
+
+**Confirmado con `select=*&limit=1` contra `CAP_MIC` (no solo un
+conteo con nombre de columna adivinado)** — la respuesta vacía `[]` es
+real, no un error de nombre de columna disfrazado de "0 filas".
+
+**Lectura honesta de esto:** las 2 filas de `INSPECCIONES` sin ninguna
+fila `CAP_*` correspondiente son casi con certeza el mismo patrón que
+`fn_guardar_inspeccion_completa`/la migración `20260818_inspecciones_atomic_save.sql`
+fue diseñada para prevenir — un guardado viejo, de antes del guardado
+atómico, que dejó la cabecera creada sin sus tablas hijas. No hay PII
+socioeconómica real expuesta hoy en la práctica (0 filas `CAP_*`), pero
+la política que lo permitiría en cuanto exista una fila real sigue
+activa, y el propio módulo (con datos reales) puede empezar a usarse en
+cualquier momento sin que nadie tenga que cambiar nada más.
+
+### Recomendación para el arquitecto (no una decisión tomada en esta tarea)
+
+Dado que el contenido real expuesto hoy es 2 filas esqueléticas y 0
+filas de datos sensibles, **la urgencia de aplicar cualquiera de las 2
+migraciones ahora mismo es menor de lo que la severidad del mecanismo
+en abstracto sugiere** — a diferencia de `PADRON_SOCIOS` (618 personas
+reales ya expuestas). Igual de cierto: el mecanismo es el mismo defecto
+estructural, y aplicar (a) o (b) hoy mismo no tiene costo de datos
+reales que perder (no hay ninguno). La decisión real es sobre el costo
+de apagar el guardado de inspecciones (punto 2) sin tener el reemplazo
+`SECURITY DEFINER` listo todavía — eso es lo que el arquitecto necesita
+pesar, no si hay PII en riesgo hoy mismo (no la hay, en la práctica,
+para estas 7 tablas específicamente).
+
+**No se aplicó nada en Supabase en esta tarea** — los 2 archivos de
+migración existen en el repo (`supabase/migrations/`, igual que toda
+migración de este proyecto) pero no se corrieron en Studio.
+
+## 2026-09-01j — Reemplazo SECURITY DEFINER para lecturas de PADRON_SOCIOS/PADRON_PARCELAS — implementado, sin aplicar en Supabase
+
+**Tarea:** implementar (no solo diseñar) las 6 funciones de reemplazo
+para las lecturas de `PADRON_SOCIOS`/`PADRON_PARCELAS` documentadas en
+la entrada `2026-09-01h`, actualizar los 6 caminos de código reales, y
+dejar el lockdown `USING (false)` en la MISMA migración. `INSPECCIONES`/
+`CAP_*` explícitamente fuera de alcance (queda para la siguiente tarea,
+anotado abajo).
+
+### Migración: `supabase/migrations/20260901160000_lecturas_padron_security_definer.sql` (archivo creado, NO aplicada)
+
+10 funciones (más de las "5-6" originalmente estimadas — el desglose
+real de los 6 caminos pedidos resultó en más firmas de las previstas,
+ver el desglose abajo), todas `SECURITY DEFINER` + `SET search_path =
+public` (mismo patrón que las funciones `SECURITY DEFINER` preexistentes
+del proyecto, ej. `20260815_fase1_security_storage.sql`) + `REVOKE
+EXECUTE` explícito de `PUBLIC`/`anon`/`authenticated` + `GRANT` único a
+`service_role` — **desde el día uno de esta migración, no como fix
+posterior** (a diferencia de `fn_crear_socio_con_certificaciones`, donde
+el hueco se coló primero y se corrigió después). Cada función filtra por
+`p_organizacion` como PRIMERA condición de su `WHERE` — es la única
+barrera real una vez dentro de la función (SECURITY DEFINER bypasea RLS
+por completo).
+
+| Función | Reemplaza |
+|---|---|
+| `fn_listar_padron_socios` | `lib/sociosSearch.js::fetchSocios` |
+| `fn_listar_padron_parcelas_por_socio` | `lib/sociosSearch.js::fetchParcelasBySocio` |
+| `fn_buscar_padron_socios` / `fn_buscar_padron_parcelas` | `lib/padronSearch.js::searchSocios/searchParcelas` (autocompletado Inspecciones **y** editor vectorial de Consola QC — un 3er consumidor real de `padronSearch.js` encontrado al hacer el refactor, no estaba en el listado original de la tarea anterior) |
+| `fn_padron_socios_existentes` / `fn_padron_parcelas_existentes` | `lib/padronCsv.js` -- `applySocioDbChecks`/`applyParcelaDbChecks` (detección de duplicados en el preview de importación) |
+| `fn_padron_socios_ids_todos` / `fn_padron_socios_sample_activos` / `fn_padron_parcelas_codigos_e_ids` | `lib/padronCsv.js` -- `fetchSampleSocioIds`/`fetchExistingCodes` (plantillas descargables de Socios/Parcelas) |
+| `fn_enriquecer_parcela_qc` | `lib/eudrQcActions.js::enrichWithParcelaInfo` (Consola QC, enriquecimiento de `parcela_codigo`/`parcela_nombre` para registros `PENDIENTE`) |
+
+**Misma migración, al final** (pedido explícito: el reemplazo y el
+cierre del hueco viajan juntos): `DROP POLICY` + `CREATE POLICY ...
+USING (false)` para `anon` en `PADRON_SOCIOS`/`PADRON_PARCELAS`
+(diseño ya documentado en `2026-09-01h`, sin cambios).
+
+### Server Actions nuevas: `lib/actions/padronReadActions.js`
+
+Wrappers delgados 1:1 sobre cada función SQL, `'use server'`, Service
+Role Key (`getSupabaseServerClient()`). **Import relativo, no `@/lib/...`**
+(mismo motivo ya documentado en `lib/actions/organizacionesActions.js`:
+varios de los archivos que importan estos wrappers son importados
+directo por `tests/*.mjs` con Node puro, sin el resolver de alias de
+Next.js -- `@/lib/...` rompería esa cadena con `ERR_MODULE_NOT_FOUND`,
+error real que se encontró y corrigió durante esta misma tarea).
+
+### Los 6 caminos actualizados (código real, no solo la migración)
+
+- `lib/sociosSearch.js` -- reescrito completo. `fetchSocios` ya NO hace
+  ningún probe contra `PADRON_SOCIOS` para resolver la organización
+  activa (esa era la única razón por la que necesitaba leer la tabla
+  directo) -- ahora `resolveOrganizationIdFallback` (Server Action
+  contra `ORGANIZACIONES`, ya existía) es el único mecanismo, salvo
+  `organizationIdOverride`. Ninguna de las 2 funciones exportadas recibe
+  `supabase` como parámetro ya.
+- `lib/padronSearch.js` -- reescrito completo, mismo criterio.
+- `lib/padronCsv.js` -- `applySocioDbChecks`/`applyParcelaDbChecks`
+  reemplazan sus 3 consultas paralelas por 1-2 llamadas a las funciones
+  combinadas; `validateParcelaRows` perdió el parámetro `supabase`
+  (ya no lo necesita); `fetchSampleSocioIds`/`fetchExistingCodes`
+  (genéricas por `table`/`column`) se retiraron -- reemplazadas por 3
+  llamadas directas y específicas.
+- `lib/eudrQcActions.js` -- `enrichWithParcelaInfo` recibe
+  `organizationId` (ya resuelto por `fetchPendingRecords` vía el probe
+  existente contra `vw_monitoreo_poligonos`/`puntos`, una VISTA con
+  privilegios de owner, no afectada por el lockdown) en vez de
+  `supabase` -- **hallazgo real en el camino: la versión anterior no
+  filtraba por organización en absoluto** (leía `PADRON_PARCELAS` con
+  `.in('ID_Parcela_Fija', ids)` sin ningún `.eq('ID_Organizacion', ...)`),
+  un defecto real independiente del ya conocido de `PADRON_SOCIOS`, que
+  quedó cerrado como efecto colateral de este refactor.
+- `app/dashboard/socios/page.jsx`, `components/features/socios/ParcelaFormModal.jsx`,
+  `app/dashboard/qc/components/VectorEditorTools.jsx`,
+  `components/features/inspecciones/tabs/TabGeneral.jsx` -- actualizados
+  a las nuevas firmas (sin `supabase` donde ya no hace falta). 2 imports
+  de `getSupabaseClient` quedaron muertos y se retiraron.
+
+**Todas las funciones inyectables** (`listarPadronSocios`,
+`fetchSociosExistentes`, `fetchEnrich`, etc., con el default apuntando a
+la función real) -- mismo patrón ya establecido en este repo
+(`resolveOrganizationIdFallback` de `fetchSocios`), para no perder la
+cobertura de test existente sin depender de la Service Role Key real en
+cada corrida.
+
+### Test de aislamiento RLS cruzado — `tests/test_padron_read_functions_live.mjs` (nuevo)
+
+Pedido explícito de la tarea: "organización A no puede leer datos de
+organización B usando las nuevas funciones". A diferencia del resto de
+`tests/*.mjs` (que inyectan una función SQL FALSA, porque el filtro real
+ahora vive DENTRO de la función SQL, no en JS -- un fake de JS no puede
+probar eso de verdad), este archivo llama a las **funciones SQL REALES**
+contra la instancia real con la Service Role Key, comparando
+`COOP-AROMAS-VALLE` vs `ORG-TEST-DEMO`. Gateado (mismo espíritu que
+`NEEDS_SUPABASE` del lado de Python): se salta solo si faltan
+credenciales, o si la migración todavía no está aplicada (probe real
+contra `fn_listar_padron_socios`, detecta `PGRST202`). **Corrido en
+vivo ahora mismo: los 6 tests se saltan correctamente** (confirmado, la
+migración no está aplicada) -- van a empezar a correr de verdad en
+cuanto el arquitecto la aplique, sin tocar este archivo. Incluye un test
+específico que confirma el `REVOKE`/`GRANT` (la llave `anon` debe recibir
+`42501 permission denied`, no solo "no encontrada").
+
+Los tests existentes (`test_sociossearch_multitenant.mjs`,
+`test_padron_search.mjs`, bloque de duplicados de `test_padron_csv.mjs`,
+bloque de `fetchPendingRecords` de `test_eudr_qc_actions.mjs`,
+`test_multi_producto_code_sites.mjs`) se reescribieron para inyectar
+fakes con la nueva forma (función, no cliente Supabase) -- siguen
+probando que el wrapper de JS arma los mensajes/parámetros correctos,
+ya no la lógica de filtrado en sí (esa se movió a SQL).
+
+### Verificación
+
+- `node --test tests/*.mjs`: **680 passed, 0 failed, 6 skipped** (los 6
+  nuevos del test Live, gateados como se esperaba).
+- `npm run build`: compila limpio, sin errores.
+- **Verificación manual real en `/dashboard/socios`** (dev server
+  reiniciado limpio, `.next` borrado, siguiendo la higiene de dev server
+  documentada en `CLAUDE.md`): confirma exactamente el estado esperado
+  -- error `PGRST202`, `"Could not find the function
+  public.fn_listar_padron_socios(p_cert_flags, p_cert_org_estatus,
+  p_departamento, p_organizacion, p_page, p_page_size, p_search) in the
+  schema cache"`. **No es un bug** -- es la prueba de que el wiring
+  (nombre de función + nombres de parámetros, uno por uno) es correcto
+  y que la única pieza faltante es la migración sin aplicar. `resolveOrganizationId`
+  (Server Action ya existente, no tocada) respondió bien antes de este
+  error (confirmado en el log del server: 2 `POST /dashboard/socios 200`
+  previos). **No se pudo completar la verificación de "sigue mostrando
+  COOP-AROMAS-VALLE (618/821) correctamente" pedida en el punto 6** --
+  eso requiere la migración aplicada; queda pendiente de que el
+  arquitecto la aplique y avise.
+
+### Pendiente, anotado (no es tarea de esta sesión)
+
+`INSPECCIONES` + los 6 `CAP_*` (entrada `2026-09-01i`) siguen el MISMO
+patrón inmediatamente después de que esta migración se revise y aplique:
+funciones `SECURITY DEFINER` parametrizadas por organización para
+`fetchInspecciones`/`fetchInspeccionDetalle`, y una decisión aparte
+(fuera del texto de esa entrada) sobre cómo resolver que `saveInspeccion`
+hoy necesita escritura real vía `fn_guardar_inspeccion_completa` sin
+`SECURITY DEFINER` -- ese caso es distinto al de lectura acá (escribe,
+no solo lee), va a necesitar su propio diseño, no una copia mecánica de
+este patrón.
+
+**No se aplicó nada en Supabase en esta tarea.** El código está listo
+para que el arquitecto lo revise (mismo nivel de revisión que
+`fn_crear_socio_con_certificaciones`) antes de aplicar la migración en
+Studio. **No se commiteó todavía** -- mismo criterio que las 2 tareas
+anteriores (sin instrucción explícita de commit/push en el prompt).
+
+## 2026-09-01k — Bug real encontrado al correr el test Live contra la migración ya aplicada — hotfix preparado, sin aplicar
+
+**El usuario aplicó `20260901160000_lecturas_padron_security_definer.sql`
+en Supabase Studio y corrió `tests/test_padron_read_functions_live.mjs`
+contra la instancia real.** Resultado: **1 de 10 funciones tiene un bug
+real** — el resto (9 de 10) se probó a mano contra datos reales de
+`COOP-AROMAS-VALLE` y responde correctamente.
+
+**Bug:** `fn_listar_padron_socios` declaraba `socio_fecha_nacimiento`/
+`socio_fecha_ingreso` como `text` en su `RETURNS TABLE` — el tipo real
+de esas 2 columnas en `PADRON_SOCIOS` es `date` (confirmado contra el
+OpenAPI de PostgREST, `format: "date"`, no asumido). Toda llamada real
+fallaba con:
+```
+{"code":"42804","message":"structure of query does not match function result type",
+ "details":"Returned type date does not match expected type text in column 7."}
+```
+5 de los 6 tests de `test_padron_read_functions_live.mjs` fallaron con
+este mismo error — no son 5 bugs distintos, los 5 dependen de llamar a
+`fn_listar_padron_socios` primero (para obtener un `ID_Socio` real de
+muestra) y todos heredan el mismo error. El 6to test (confirma que
+`anon` recibe `42501 permission denied`) **pasó** — confirma que el
+`REVOKE`/`GRANT` de la migración funciona de verdad contra la instancia
+real, no solo en teoría.
+
+**Verificación cruzada del resto:** en vez de asumir que el resto
+también estaba bien, se probaron las 9 funciones restantes una por una
+contra datos reales de `COOP-AROMAS-VALLE` (vía REST con Service Role
+Key) — las 9 devuelven datos reales correctos, incluida
+`fn_listar_padron_parcelas_por_socio` (cuyo tipo `geometry` sin
+parámetros de tipo/SRID sí es compatible con la columna real
+`geometry(MultiPolygon,4326)`, a diferencia del caso `date`/`text`).
+
+**Hotfix preparado, NO aplicado:**
+`supabase/migrations/20260901161000_fix_fecha_columns_fn_listar_padron_socios.sql`.
+No se pudo corregir con `CREATE OR REPLACE FUNCTION` -- Postgres no
+permite cambiar el tipo de una columna de `RETURNS TABLE` con
+`REPLACE` ("cannot change return type of existing function"), hace
+falta `DROP FUNCTION` + `CREATE FUNCTION`. Como un `DROP` + `CREATE`
+resetea los privilegios a los defaults de Postgres (`EXECUTE` vuelve a
+quedar abierto a `PUBLIC`), **el `REVOKE`/`GRANT` se repite completo en
+este hotfix** -- no alcanza con corregir solo el tipo de columna sin
+repetir esa parte, o el hueco de seguridad que motivó toda esta ronda de
+tareas volvería a estar abierto para esta función específica.
+
+**No se aplicó el hotfix en Supabase** -- queda para que lo revises y
+apliques vos, mismo criterio que el resto de esta ronda.
+
+## 2026-09-01l — Hotfix aplicado por el usuario — CONFIRMADO: los 10/10 funciones + el lockdown funcionan de punta a punta
+
+**El usuario aplicó `20260901161000_fix_fecha_columns_fn_listar_padron_socios.sql`.**
+Recorrida completa de verificación después de eso:
+
+- `node --test tests/test_padron_read_functions_live.mjs`: **6/6 passed**
+  (antes: 5 fallaban por el bug de `date`/`text`) -- aislamiento cruzado
+  `COOP-AROMAS-VALLE` vs `ORG-TEST-DEMO` confirmado contra la función SQL
+  real, no un fake.
+- `node --test tests/*.mjs` (suite completa): **686 passed, 0 failed, 0
+  skipped** -- el test Live ya no se salta, corre de verdad.
+- **Verificación manual en `/dashboard/socios` (la que había quedado
+  pendiente en la entrada `2026-09-01j`, punto 6 de la tarea original):**
+  confirmado, **618 socio(s) encontrado(s)**, datos reales
+  (`COOP-AROMAS-VALLE-001 ABEL PEREZ DIAZ`, etc.) vía `fn_listar_padron_socios`.
+  Abrí el modal de Parcelas del primer socio -- **2 parcelas reales**
+  (`46837434-A "La Tuna" 1 ha`, `46837434-B "El Puente" 1.5 ha`) vía
+  `fn_listar_padron_parcelas_por_socio` -- coincide exactamente con lo ya
+  confirmado por REST directo. Los 2 caminos más usados del módulo
+  (listado + parcelas por socio) funcionan de punta a punta contra la
+  instancia real, con el lockdown de `anon` ya activo.
+
+**Estado final de esta ronda:** las 10 funciones `SECURITY DEFINER` +
+el lockdown `USING (false)` de `PADRON_SOCIOS`/`PADRON_PARCELAS` están
+aplicados y verificados en producción. Sigue pendiente, sin tocar en
+esta ronda: `exportSociosCsv`/`exportParcelasCsv` (los 2 botones de
+exportar, que NO estaban en el listado de "6 caminos" a reemplazar --
+ver la entrada `2026-09-01j` -- ahora devuelven un CSV vacío en vez de
+filtrar mal, porque consultan `PADRON_SOCIOS`/`PADRON_PARCELAS` directo
+con `anon` y esa vía ya está cerrada) e `INSPECCIONES`/`CAP_*` (entrada
+`2026-09-01i`, mismo patrón, tarea aparte).

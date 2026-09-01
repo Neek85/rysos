@@ -47,7 +47,6 @@ import {
   GIS_TARGET_TABLES,
 } from '@/lib/gisTargetTables'
 import { evaluateGeometry, isGeometryAllowedForTable } from '@/lib/gisVectorEditor'
-import { getSupabaseClient } from '@/lib/supabaseClient'
 import { searchSocios, searchParcelas } from '@/lib/padronSearch'
 import PadronAutocomplete from '@/components/features/inspecciones/PadronAutocomplete'
 import SocioFormModal from '@/components/features/socios/SocioFormModal'
@@ -405,13 +404,12 @@ function PadronEntityField({
   const isParcela = field.padronEntity === 'parcela'
 
   async function handleSearch(query) {
-    const supabase = getSupabaseClient()
-    if (!supabase || !organizationId) return []
+    if (!organizationId) return []
     if (isSocio) {
-      const rows = await searchSocios(supabase, organizationId, query)
+      const rows = await searchSocios(organizationId, query)
       return rows.map((r) => ({ key: r.ID_Socio, ...r }))
     }
-    const rows = await searchParcelas(supabase, organizationId, scopeParcelaSearchToSocio || null, query)
+    const rows = await searchParcelas(organizationId, scopeParcelaSearchToSocio || null, query)
     return rows.map((r) => ({ key: r.ID_Parcela_Fija, ...r }))
   }
 

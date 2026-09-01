@@ -26,7 +26,10 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const socios = readFileSync(path.join(ROOT, 'lib/validations/socios.js'), 'utf-8')
 const sociosActions = readFileSync(path.join(ROOT, 'lib/actions/sociosActions.js'), 'utf-8')
 const parcelaFormModal = readFileSync(path.join(ROOT, 'components/features/socios/ParcelaFormModal.jsx'), 'utf-8')
-const sociosSearch = readFileSync(path.join(ROOT, 'lib/sociosSearch.js'), 'utf-8')
+const lecturasPadronMigration = readFileSync(
+  path.join(ROOT, 'supabase/migrations/20260901160000_lecturas_padron_security_definer.sql'),
+  'utf-8'
+)
 
 test('HECTARE_FIELDS ya NO nombra "Café" en ningún label -- hcp/hcc genéricos (ADR-028, resuelve el hallazgo de la sección 5.1 de la spec)', () => {
   const start = socios.indexOf('export const HECTARE_FIELDS = [')
@@ -63,8 +66,12 @@ test('createParcela/updateParcela no necesitaron cambio propio -- ambos siguen s
   assert.match(sociosActions, /const updatePayload = parcelaPayload\(parsed, totalh\)/)
 })
 
-test('lib/sociosSearch.js::PARCELA_COLUMNS incluye id_producto_predominante (si no, ParcelaFormModal no puede pre-seleccionar el producto real al editar)', () => {
-  assert.match(sociosSearch, /const PARCELA_COLUMNS =[\s\S]*?id_producto_predominante/)
+test('fn_listar_padron_parcelas_por_socio (SECURITY DEFINER, reemplaza PARCELA_COLUMNS de lib/sociosSearch.js -- ver AI_STATE.md "Reemplazo SECURITY DEFINER para lecturas de PADRON_SOCIOS/PADRON_PARCELAS") devuelve id_producto_predominante (si no, ParcelaFormModal no puede pre-seleccionar el producto real al editar)', () => {
+  const start = lecturasPadronMigration.indexOf('CREATE OR REPLACE FUNCTION public.fn_listar_padron_parcelas_por_socio')
+  const end = lecturasPadronMigration.indexOf('$$;', start)
+  assert.ok(start > -1, 'la función debe existir en la migración')
+  const block = lecturasPadronMigration.slice(start, end)
+  assert.match(block, /id_producto_predominante/)
 })
 
 test('ParcelaFormModal.jsx carga PRODUCTOS filtrando vertical=AGRICOLA y activo=true (sin productos PECUARIO todavía)', () => {
