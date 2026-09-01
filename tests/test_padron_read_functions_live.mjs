@@ -62,6 +62,7 @@ const ORG_A = 'COOP-AROMAS-VALLE'
 const ORG_B = 'ORG-TEST-DEMO'
 
 let migrationApplied = false
+let exportMigrationApplied = false
 let supabase = null
 
 if (HAS_CREDENTIALS) {
@@ -72,12 +73,24 @@ if (HAS_CREDENTIALS) {
   } catch {
     migrationApplied = false
   }
+  try {
+    const { error } = await supabase.rpc('fn_exportar_padron_socios', { p_organizacion: '__probe_no_deberia_existir__' })
+    exportMigrationApplied = !error || error.code !== 'PGRST202'
+  } catch {
+    exportMigrationApplied = false
+  }
 }
 
 const skip = !HAS_CREDENTIALS
   ? 'NEXT_PUBLIC_SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY no están en .env.local -- test Live, se salta sin credenciales (mismo patrón que NEEDS_SUPABASE en Python).'
   : !migrationApplied
     ? 'supabase/migrations/20260901160000_lecturas_padron_security_definer.sql todavía no está aplicada en la instancia real (PGRST202) -- se salta hasta que el arquitecto la aplique en Supabase Studio.'
+    : false
+
+const skipExport = !HAS_CREDENTIALS
+  ? 'NEXT_PUBLIC_SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY no están en .env.local -- test Live, se salta sin credenciales (mismo patrón que NEEDS_SUPABASE en Python).'
+  : !exportMigrationApplied
+    ? 'supabase/migrations/20260901170000_export_padron_security_definer.sql todavía no está aplicada en la instancia real (PGRST202) -- se salta hasta que el arquitecto la aplique en Supabase Studio.'
     : false
 
 test('fn_listar_padron_socios: una llamada con p_organizacion=A nunca devuelve una fila de la organización B', { skip }, async () => {
@@ -149,6 +162,78 @@ test('EXECUTE de fn_listar_padron_socios está revocado para anon (confirma el R
   if (!anonKey) return
   const anonClient = createClient(SUPABASE_URL, anonKey)
   const { error } = await anonClient.rpc('fn_listar_padron_socios', { p_organizacion: ORG_A })
+  assert.ok(error, 'la llave anon nunca debe poder ejecutar esta función')
+  assert.equal(error.code, '42501', `se esperaba "permission denied" (42501), no "${error.code}"`)
+})
+
+// ════════════════════════════════════════════════════════════════════
+// fn_exportar_padron_socios / fn_exportar_padron_parcelas -- restauran
+// exportSociosCsv/exportParcelasCsv (lib/padronCsv.js), ver AI_STATE.md
+// "Restaurar exportSociosCsv/exportParcelasCsv". Migración separada
+// (20260901170000), probe/skip propios (exportMigrationApplied).
+// ════════════════════════════════════════════════════════════════════
+
+test('fn_exportar_padron_socios: A y B devuelven conjuntos de id disjuntos (aislamiento cruzado real)', { skip: skipExport }, async () => {
+  const [{ data: rowsA, error: errA }, { data: rowsB, error: errB }] = await Promise.all([
+    supabase.rpc('fn_exportar_padron_socios', { p_organizacion: ORG_A }),
+    supabase.rpc('fn_exportar_padron_socios', { p_organizacion: ORG_B }),
+  ])
+  if (errA) throw errA
+  if (errB) throw errB
+  assert.ok(rowsA.length > 0, `se esperaban filas reales para ${ORG_A}`)
+  assert.ok(
+    rowsA.every((r) => r.ID_Organizacion === ORG_A),
+    `ninguna fila debe pertenecer a otra organización que no sea ${ORG_A}`
+  )
+  const idsA = new Set(rowsA.map((r) => r.id))
+  const idsB = new Set(rowsB.map((r) => r.id))
+  const interseccion = [...idsA].filter((id) => idsB.has(id))
+  assert.deepEqual(interseccion, [], 'id de la organización A no debe aparecer en el resultado de B, ni viceversa')
+})
+
+test('fn_exportar_padron_socios: p_organizacion inexistente devuelve vacío, no un error ni "todo"', { skip: skipExport }, async () => {
+  const { data, error } = await supabase.rpc('fn_exportar_padron_socios', { p_organizacion: '__ORG_QUE_NO_EXISTE__' })
+  if (error) throw error
+  assert.deepEqual(data, [])
+})
+
+test('EXECUTE de fn_exportar_padron_socios está revocado para anon', { skip: skipExport }, async () => {
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!anonKey) return
+  const anonClient = createClient(SUPABASE_URL, anonKey)
+  const { error } = await anonClient.rpc('fn_exportar_padron_socios', { p_organizacion: ORG_A })
+  assert.ok(error, 'la llave anon nunca debe poder ejecutar esta función')
+  assert.equal(error.code, '42501', `se esperaba "permission denied" (42501), no "${error.code}"`)
+})
+
+test('fn_exportar_padron_parcelas: A y B devuelven conjuntos de ID_Parcela_Fija disjuntos (aislamiento cruzado real)', { skip: skipExport }, async () => {
+  const [{ data: rowsA, error: errA }, { data: rowsB, error: errB }] = await Promise.all([
+    supabase.rpc('fn_exportar_padron_parcelas', { p_organizacion: ORG_A }),
+    supabase.rpc('fn_exportar_padron_parcelas', { p_organizacion: ORG_B }),
+  ])
+  if (errA) throw errA
+  if (errB) throw errB
+  assert.ok(
+    rowsA.every((r) => r.ID_Organizacion === ORG_A),
+    `ninguna fila debe pertenecer a otra organización que no sea ${ORG_A}`
+  )
+  const idsA = new Set(rowsA.map((r) => r.ID_Parcela_Fija))
+  const idsB = new Set(rowsB.map((r) => r.ID_Parcela_Fija))
+  const interseccion = [...idsA].filter((id) => idsB.has(id))
+  assert.deepEqual(interseccion, [], 'ID_Parcela_Fija de la organización A no debe aparecer en el resultado de B, ni viceversa')
+})
+
+test('fn_exportar_padron_parcelas: p_organizacion inexistente devuelve vacío, no un error ni "todo"', { skip: skipExport }, async () => {
+  const { data, error } = await supabase.rpc('fn_exportar_padron_parcelas', { p_organizacion: '__ORG_QUE_NO_EXISTE__' })
+  if (error) throw error
+  assert.deepEqual(data, [])
+})
+
+test('EXECUTE de fn_exportar_padron_parcelas está revocado para anon', { skip: skipExport }, async () => {
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!anonKey) return
+  const anonClient = createClient(SUPABASE_URL, anonKey)
+  const { error } = await anonClient.rpc('fn_exportar_padron_parcelas', { p_organizacion: ORG_A })
   assert.ok(error, 'la llave anon nunca debe poder ejecutar esta función')
   assert.equal(error.code, '42501', `se esperaba "permission denied" (42501), no "${error.code}"`)
 })

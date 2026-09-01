@@ -125,7 +125,7 @@ export default function SociosPage() {
       return
     }
     try {
-      const { socios } = await exportSociosCsv(supabase)
+      const { socios } = await exportSociosCsv(supabase, organizationId)
       setToast({ type: 'success', message: `Exportado: ${socios} socio(s).` })
     } catch (err) {
       setToast({ type: 'error', message: err?.message || 'Error al exportar el padrón de socios.' })
@@ -139,7 +139,7 @@ export default function SociosPage() {
       return
     }
     try {
-      const { parcelas } = await exportParcelasCsv(supabase)
+      const { parcelas } = await exportParcelasCsv(supabase, organizationId)
       setToast({ type: 'success', message: `Exportado: ${parcelas} parcela(s).` })
     } catch (err) {
       setToast({ type: 'error', message: err?.message || 'Error al exportar el padrón de parcelas.' })

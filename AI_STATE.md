@@ -1543,3 +1543,117 @@ ver la entrada `2026-09-01j` -- ahora devuelven un CSV vacío en vez de
 filtrar mal, porque consultan `PADRON_SOCIOS`/`PADRON_PARCELAS` directo
 con `anon` y esa vía ya está cerrada) e `INSPECCIONES`/`CAP_*` (entrada
 `2026-09-01i`, mismo patrón, tarea aparte).
+
+## 2026-09-01m — Restaurar exportSociosCsv/exportParcelasCsv — paso 2, evidencia real antes de diseñar
+
+**Tarea:** las 2 funciones de export quedaron devolviendo CSV vacío tras
+el lockdown de la fase 1 (ADR-031). Antes de diseñar el reemplazo, se
+pidió explícitamente confirmar con evidencia real (no supuestos) qué
+alcance tenían.
+
+**Respuesta, leyendo el código real de `lib/padronCsv.js` línea por
+línea (no memoria de una tarea anterior):**
+
+```js
+export async function exportSociosCsv(supabase) {
+  const [{ data, error }, certificaciones] = await Promise.all([
+    supabase.from('PADRON_SOCIOS')
+      .select([...SOCIO_EXPORT_COLUMNS, 'id'].join(','))
+      .eq('activo', true)
+      .order('socio_nombre_completo'),
+    ...
+```
+
+**`exportSociosCsv`/`exportParcelasCsv` NO respetan ningún filtro de la
+UI — ni siquiera `activo` aparte del que ya aplican ellas mismas.** El
+único `WHERE` es `.eq('activo', true)`. Confirmado además del lado del
+caller: `app/dashboard/socios/page.jsx` las invoca como
+`exportSociosCsv(supabase)`/`exportParcelasCsv(supabase)` — **sin pasar
+ningún argumento de filtro** — el estado de búsqueda/departamento/
+certOrgEstatus/certFlags que el usuario tenga activo en la pantalla
+(`search`, `certOrgEstatus`, `departamento`, `certFlags`, variables de
+`page.jsx`) nunca llega a estas 2 funciones. Exportan **todo el padrón
+activo de todas las organizaciones** (antes del lockdown) o **nada**
+(después) — nunca un subconjunto filtrado. Esto coincide con
+`docs/ESTADO_PROYECTO.md`/tooltips del propio botón ("Exporta todo el
+padrón de socios activos, no solo esta página") — el diseño original
+siempre fue exportar todo, el filtro de pantalla es solo para lo que se
+VE en la tabla, nunca para lo que se exporta.
+
+**Corrección de premisa frente al contrato pedido en el prompt:** el
+prompt pedía "mismas columnas que `fn_listar_padron_socios` MENOS
+`total_count`" — **no es así**. `exportSociosCsv` selecciona
+`SOCIO_EXPORT_COLUMNS` (14 columnas: `ID_Socio`, `ID_Organizacion`,
+`codigo_finca`, `socio_nombre_completo`, `socio_dni`, `socio_genero`,
+`socio_fecha_nacimiento`, `celular_socio`, `socio_departamento`,
+`socio_provincia`, `socio_distrito`, `localidad`, `socio_fecha_ingreso`,
+`cert_org_estatus`) + `id` (uuid, necesario para el JOIN posterior contra
+`SOCIO_CERTIFICACIONES` que arma las columnas dinámicas de
+certificación) — un subconjunto MÁS CHICO que las columnas de
+`fn_listar_padron_socios` (que además incluye `conyuge_nombre`,
+`conyuge_dni`, `certificaciones`, los 8 flags crudos `cert_nop_usda`...,
+y `activo`). La función de reemplazo se diseña para devolver
+exactamente `SOCIO_EXPORT_COLUMNS` + `id`, no una copia de
+`fn_listar_padron_socios` con una columna menos. Mismo caso para
+`exportParcelasCsv`: selecciona `PARCELA_EXPORT_COLUMNS` (13 columnas:
+`ID_Parcela_Fija`, `ID_Organizacion`, `ID_Socio`, `parcela_codigo`,
+`parcela_nombre`, `hcp`, `hcc`, `ho`, `hip`, `hrp`, `hbp`,
+`otros_cultivo`, `totalh`) — sin `geom`, sin `activo` como columna
+(aunque sí como filtro `WHERE`), sin `id_producto_predominante` — otro
+subconjunto distinto al de `fn_listar_padron_parcelas_por_socio`.
+
+**Lo que SÍ sigue igual y no hace falta tocar:** el enriquecimiento de
+certificaciones (`SOCIO_CERTIFICACIONES`, `fetchActiveCertificaciones`,
+`fetchSocioCertOrgEstatus`) sigue leyendo con `anon` directo — esas
+tablas/RLS no fueron parte del lockdown de la fase 1 (`ADR-031` solo
+tocó `PADRON_SOCIOS`/`PADRON_PARCELAS`), siguen abiertas (`USING
+(id_organizacion IS NOT NULL)`, mismo hallazgo de severidad baja-media ya
+documentado en `2026-09-01h`, no priorizado). Por eso el reemplazo de
+`exportSociosCsv` solo necesita cambiar la PRIMERA consulta (a
+`PADRON_SOCIOS`), el resto de la función queda igual.
+
+**Resultado (implementación, mismo turno):**
+
+- Migración nueva `supabase/migrations/20260901170000_export_padron_security_definer.sql`
+  (BEGIN/COMMIT, idempotente, `DROP FUNCTION IF EXISTS` antes de `CREATE`
+  desde el principio) con `fn_exportar_padron_socios(p_organizacion text)`
+  y `fn_exportar_padron_parcelas(p_organizacion text)` — sin parámetros de
+  filtro (confirmado arriba que ninguna función original los respetaba),
+  columnas = exactamente `SOCIO_EXPORT_COLUMNS`+`id` (15) y
+  `PARCELA_EXPORT_COLUMNS` (13), `socio_fecha_nacimiento`/
+  `socio_fecha_ingreso` declaradas `date` desde el principio (lección del
+  hotfix `20260901161000` de la fase 1). Mismo patrón exacto de la fase 1:
+  `SECURITY DEFINER`, `SET search_path = public`, `REVOKE EXECUTE` de
+  `PUBLIC`/`anon`/`authenticated`, `GRANT EXECUTE` solo a `service_role`.
+- `lib/actions/padronReadActions.js`: agregados los wrappers
+  `fnExportarPadronSocios(organizationId)`/
+  `fnExportarPadronParcelas(organizationId)` (mismo archivo/patrón de
+  import relativo que los 10 wrappers de la fase 1, no el alias `@/lib/...`).
+- `lib/padronCsv.js`: `exportSociosCsv`/`exportParcelasCsv` ahora reciben
+  `(supabase, organizationId)` — la consulta directa a
+  `PADRON_SOCIOS`/`PADRON_PARCELAS` con `anon` se reemplazó por
+  `fnExportarPadronSocios`/`fnExportarPadronParcelas`; el resto de
+  `exportSociosCsv` (join contra `SOCIO_CERTIFICACIONES`, cálculo de
+  `cert_org_estatus` en vivo) no se tocó, como se documentó arriba.
+- `app/dashboard/socios/page.jsx`: único caller real (confirmado por grep
+  en todo `app/`/`components/`/`lib/` — no hay otro). Se actualizaron las
+  2 llamadas (`handleExportSocios`/`handleExportParcelas`) para pasar el
+  `organizationId` que ya vive en el estado de la página.
+- `tests/test_padron_read_functions_live.mjs`: agregado un probe/skip
+  independiente (`exportMigrationApplied`/`skipExport`) para la migración
+  nueva (no reutiliza el gate de la fase 1, son migraciones distintas) y
+  6 tests nuevos (3 por función: aislamiento cruzado A/B con conjuntos de
+  IDs disjuntos, `p_organizacion` inexistente devuelve vacío, `anon`
+  revocado con `42501`).
+- `npm run build`: compila limpio, 10 rutas generadas, sin errores.
+- `node --test tests/*.mjs`: **692 tests, 686 pass, 0 fail, 6 skipped**
+  (exactamente los 6 tests nuevos de export — se saltan porque
+  `20260901170000_export_padron_security_definer.sql` todavía NO está
+  aplicada en la instancia real, como se pidió). Los 6 tests live de la
+  fase 1 (`fn_listar_padron_socios`/`fn_listar_padron_parcelas_por_socio`/
+  `fn_padron_socios_existentes`) siguen corriendo de verdad y pasando —
+  no se rompieron.
+- **No se aplicó la migración en Supabase Studio ni se hizo commit** —
+  igual que el resto del incidente, queda para revisión del arquitecto.
+  Una vez aplicada, los 6 tests nuevos empiezan a correr solos (mismo
+  patrón que la fase 1) sin tocar este archivo.

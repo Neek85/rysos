@@ -136,6 +136,21 @@
   expuesto ahí hoy es mínimo (2 filas sin datos sensibles), a diferencia
   del caso de `PADRON_SOCIOS`.
 
+- **(2026-09-01) Fase 1b del mismo incidente — exportación CSV del
+  padrón restaurada:** el lockdown de arriba dejó `exportSociosCsv`/
+  `exportParcelasCsv` (`/dashboard/socios`) devolviendo un CSV vacío —
+  esas 2 funciones no estaban entre los 6 caminos reemplazados en la
+  primera ronda. Cerrado con el mismo patrón (`fn_exportar_padron_socios`/
+  `fn_exportar_padron_parcelas`, `SECURITY DEFINER` + `REVOKE`/`GRANT
+  EXECUTE` a `service_role` únicamente), sin parámetros de filtro
+  (confirmado que ninguna de las 2 funciones originales respetaba
+  ningún filtro de la UI — siempre exportaban el padrón activo completo).
+  Verificado end-to-end: 12/12 tests de aislamiento cruzado real, 692/692
+  de la suite completa, y verificación manual real — los 2 CSV
+  descargados desde `/dashboard/socios` confirmados con 618 socios / 821
+  parcelas, ambos con `ID_Organizacion = COOP-AROMAS-VALLE` únicamente,
+  0 IDs duplicados. Ver [ADR-031](adr/ADR-031-lecturas-padron-security-definer.md).
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
