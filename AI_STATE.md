@@ -295,3 +295,164 @@ esperados después (`COOP-JS-001`/`COOP-JS-003`/`COOP-JS-004`).
 usuario) y volver a correr `python -m pytest tests/ -v` para confirmar
 que los 7 tests Live pasan (no solo se saltan) contra el schema real ya
 corregido.
+
+## 2026-09-01 — Script de limpieza del padrón de COOP-AROMAS-VALLE (preparado, no aplicado)
+
+**Tarea:** preparar (no ejecutar) un script SQL que vacíe
+`PADRON_SOCIOS`/`PADRON_PARCELAS` (y tablas dependientes) de
+`COOP-AROMAS-VALLE`, para recargar con un archivo de prueba de 10 filas
+como parte de la ronda de robustez del importador masivo (transacción
+atómica, progreso real, aviso `beforeunload`). Es limpieza deliberada,
+no un error — se documenta acá por pedido explícito del prompt, no
+porque haya sido un bloqueo.
+
+**Grafo de FKs real (verificado en `information_schema` contra la
+instancia real, no por grep), corrigiendo la premisa del prompt:**
+`SOCIO_CERTIFICACIONES.id_socio → PADRON_SOCIOS.id` y
+`PARCELA_CERTIFICACIONES.id_parcela → PADRON_PARCELAS.id` son ambas
+**`ON DELETE NO ACTION`, no CASCADE** — el prompt planteaba ambas
+posibilidades y pedía confirmar cuál era real. Hay que borrar las dos
+tablas de certificaciones explícitamente antes que
+`PADRON_SOCIOS`/`PADRON_PARCELAS`, o el DELETE final falla con violación
+de FK.
+
+**Hallazgo no documentado en `docs/schema_live.md`:** tanto
+`PADRON_SOCIOS` como `PADRON_PARCELAS` tienen una columna interna `id`
+(uuid) además de su clave de negocio (`ID_Socio`/`ID_Parcela_Fija`,
+ambos `text`, código manual tipo `JS-00001`/`COOP-JS-001` — la única PK
+que `schema_live.md` documenta hasta ahora). Los FK reales de
+`SOCIO_CERTIFICACIONES`/`PARCELA_CERTIFICACIONES` apuntan a esa `id`
+uuid interna, no al código de negocio. Ambas tablas de certificaciones
+también tienen su propia columna `id_organizacion` (redundante con el
+join real) — el script de limpieza borra vía subquery contra la FK real
+(`id_socio`/`id_parcela IN (SELECT id FROM PADRON_SOCIOS/PADRON_PARCELAS
+WHERE "ID_Organizacion" = ...)`) en vez de confiar solo en
+`id_organizacion`, para no depender de que ese tag redundante esté
+sincronizado. `docs/schema_live.md` debería actualizarse para documentar
+esta columna `id` — queda pendiente, no se tocó en esta tarea (fuera de
+alcance del prompt).
+
+**Conteos reales verificados en vivo (2026-09-01, vía REST con
+`SUPABASE_SERVICE_ROLE_KEY`, que bypasea RLS — no vía Supabase Studio:
+el SQL Editor embebido se puso inestable en esta sesión, navegación
+espuria a `/auth/users` en medio de varios intentos de tipeo largo con
+muchas comillas; el editor de FK/columnas sí se corrió ahí antes de que
+empezara a fallar):**
+- `PADRON_SOCIOS` con `ID_Organizacion = 'COOP-AROMAS-VALLE'`: **618 filas**
+- `PADRON_PARCELAS`: **821 filas**
+- `SOCIO_CERTIFICACIONES` (vía FK real): **4191 filas**
+- `PARCELA_CERTIFICACIONES` (vía FK real): **0 filas**
+- `EUDR_MONITOREO` / `EUDR_USO_SUELO` / `EUDR_INSTALACIONES` / `INSPECCIONES`
+  con `ID_Organizacion = 'COOP-AROMAS-VALLE'`: **0 filas en las 4** — no
+  hay datos reales de monitoreo GIS ni de inspecciones socioeconómicas
+  ligados a este org todavía, así que el punto de "frenar y avisar" del
+  prompt no aplica hoy. Si al volver a correr la Sección 1 del script
+  (ver abajo) alguna de estas 4 diera >0, sí hay que frenar antes de
+  correr la Sección 2 — puede haber cambiado desde el 2026-09-01.
+
+**Importante para quien lea esto después:** `COOP-AROMAS-VALLE` NO es un
+dataset de prueba chico — son 618 socios + 821 parcelas + 4191
+certificaciones reales (5630 filas) los que este script borra. El
+usuario pidió el script para revisarlo y correrlo él mismo en Supabase
+Studio (no se ejecutó de forma autónoma en ningún momento de esta
+tarea) — pero la escala real quedó señalada explícitamente en la
+respuesta al usuario, más allá de que el prompt lo haya enmarcado como
+"volver a cargar con un archivo de prueba de 10 filas".
+
+**Script completo:** entregado al usuario en el chat de esta tarea (3
+secciones — conteos antes / DELETE transaccional / conteos después, para
+correr como 3 ejecuciones separadas en el SQL Editor, porque un solo
+`Run` con varios `SELECT` solo muestra el resultado del último). No se
+commiteó al repo (no hay convención de `scripts/sql/` para este tipo de
+limpieza ad-hoc, a diferencia de `supabase/migrations/` que es para
+cambios de schema idempotentes) — copia también en el scratchpad de la
+sesión, `limpieza_padron_coop_aromas_valle.sql`.
+
+## 2026-09-01b — Organización de prueba `ORG-TEST-DEMO` (spec + generador listos, alta y carga pendientes)
+
+**Tarea:** crear una organización de prueba aislada con padrón sintético
+(10-50 socios/parcelas) para (a) validar la robustez del importador
+masivo sin tocar datos reales y (b) dejar una base reutilizable para una
+futura demo comercial. **`COOP-AROMAS-VALLE` no fue tocada en ningún
+momento de esta tarea** — ningún archivo ni consulta de esta tarea la
+referencia salvo para excluirla explícitamente.
+
+**Corrección de premisa (confirmada con el usuario antes de escribir
+código):** el prompt pedía documentar un `TIPO` nuevo (`DEMO-`/`TEST-`)
+en `ADR-030`. `ADR-030` (ya existente) dice explícitamente que ese
+prefijo es solo para el primer caso real de un tipo jurídico de
+organización, no para datos sintéticos — agregar uno ahí habría
+contradicho la decisión que la propia ADR ya tomó. El sistema ya tiene
+el mecanismo correcto para esto (`ADR-008`: `es_organizacion_prueba` +
+convención `ORG-TEST-*`). **`ADR-030` no se tocó.** Código elegido:
+`ORG-TEST-DEMO`. Ver `specs/organizacion_prueba_robustez_importador.md`
+sección 0.a para el detalle completo.
+
+**Hallazgo colateral (fuera de alcance, no se actuó sobre esto):**
+`ORG-TEST-E2E` (la fila que creó `ADR-008` para
+`scripts/run_e2e_etl_test.py`) ya no existe en `ORGANIZACIONES`
+(confirmado en vivo — hoy solo hay 1 fila, `COOP-AROMAS-VALLE`).
+Efecto: ese script abortaría con `UnsafeOrgIdError` si se corre en modo
+real hoy. No se reparó — no era parte de este pedido.
+
+**Bloqueante real encontrado, que detiene el paso 6 del prompt original
+(cargar el CSV vía el importador real):** `lib/actions/sociosActions.js::createSocio()`
+(usado tanto por el alta manual como por la carga masiva CSV) llama
+desde la ronda 9 de `specs/mejoras_importador_padron_masivo.md` a la RPC
+`fn_crear_socio_con_certificaciones`. Confirmado en vivo vía REST
+(`POST .../rpc/fn_crear_socio_con_certificaciones` → `PGRST202`, función
+no encontrada): la migración que la crea,
+`supabase/migrations/20260901120000_socio_creacion_atomica.sql`, sigue
+**pendiente de aplicación manual en Supabase Studio**. Esto significa
+que **el alta de un socio está rota en producción ahora mismo**, no solo
+para esta tarea — afecta también a `COOP-AROMAS-VALLE`. La migración ya
+existe, es idempotente (`CREATE OR REPLACE FUNCTION`, `BEGIN`/`COMMIT`)
+y no necesita ningún cambio, solo aplicarse. Hasta que eso pase, el paso
+6 (carga real + verificación de atomicidad) no se puede completar.
+
+**Lo que sí quedó terminado y verificado en esta tarea:**
+- `specs/organizacion_prueba_robustez_importador.md` — spec completa
+  (alcance, fuera de alcance, criterio de "sintético", decisión de
+  vincular Café Y Cacao — no solo uno, para que la demo muestre el
+  soporte multi-producto de ADR-028).
+- `scripts/generar_padron_sintetico.mjs` — genera `Socios.csv`/
+  `Parcelas.csv` reutilizando `socioSchema`/`parcelaSchema`/
+  `buildSociosCsv`/`buildParcelasCsv`/`computeNextCodes` tal cual (no
+  reimplementa el contrato). Corrido en vivo con `--count 12 --seed
+  test1`: 12/12 filas pasan ambos schemas, reproducibilidad confirmada
+  (mismo seed → mismo hash MD5 en 2 corridas). `.gitignore` recibió una
+  entrada nueva (`scratch/`) para el directorio de salida por defecto.
+- **Limitación real descubierta al implementar el generador:**
+  `id_producto_predominante` (la columna que decide si una parcela es
+  Café o Cacao, ADR-028) **no está en `PARCELA_EXPORT_COLUMNS`** — el
+  importador CSV no la soporta hoy. Las parcelas sintéticas quedan sin
+  producto asignado tras la carga; para que la demo muestre ambos
+  productos habría que asignarlo después vía `ParcelaFormModal.jsx` o un
+  `UPDATE` aparte — documentado en el script y en la spec, no resuelto
+  acá (fuera de alcance del contrato CSV vigente, que esta tarea pidió
+  explícitamente reutilizar sin modificar).
+- `python -m pytest tests/ -v` no aplica (ningún `.py` cambia).
+  `node --test tests/*.mjs`: **677 passed, 0 failed** (sin cambios de
+  comportamiento en ningún módulo existente — el generador solo
+  importa funciones ya testeadas, no las modifica). `npm run lint`
+  sigue sin poder correr en este entorno (prompt interactivo de
+  configuración de ESLint) — mismo límite ya documentado en la entrada
+  "2026-08-25" de arriba, no algo nuevo de esta tarea.
+- INSERT transaccional para el alta de `ORG-TEST-DEMO` (con
+  `es_organizacion_prueba = true`, vinculada a CAFE + CACAO) preparado
+  siguiendo el runbook de `specs/alta_organizacion_real.md` — entregado
+  al usuario en el chat para revisar y aplicar en Supabase Studio, no
+  ejecutado de forma autónoma (mismo criterio que la tarea anterior y
+  que el propio runbook exige explícitamente). Copia en el scratchpad de
+  la sesión, `alta_org_test_demo.sql`.
+
+**Qué falta (bloqueado en el usuario):** (1) aplicar
+`20260901120000_socio_creacion_atomica.sql` en Supabase Studio — esto es
+urgente independientemente de esta tarea, porque bloquea el alta de
+socios en producción; (2) aplicar el INSERT de `ORG-TEST-DEMO`; (3) con
+ambas cosas aplicadas, cargar `Socios.csv`/`Parcelas.csv` (generados con
+`node scripts/generar_padron_sintetico.mjs`) vía `/dashboard/socios` y
+documentar acá el resultado (filas válidas, atomicidad ante interrupción
+deliberada, progreso real); (4) commit/push a `staging` de este trabajo
+— no se hizo todavía porque el prompt pedía documentar el resultado de
+la carga real en el mismo commit, y esa carga sigue bloqueada.
