@@ -7,6 +7,7 @@ import { getSupabaseClient } from '@/lib/supabaseClient'
 import { fetchSocios } from '@/lib/sociosSearch'
 import { CERT_FLAG_FIELDS } from '@/lib/validations/socios'
 import { deactivateSocio } from '@/lib/actions/sociosActions'
+import { resolveTestOrganizationOverride } from '@/lib/actions/organizacionesActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
 import { exportSociosCsv, exportParcelasCsv } from '@/lib/padronCsv'
 import SocioFormModal from '@/components/features/socios/SocioFormModal'
@@ -50,6 +51,15 @@ export default function SociosPage() {
   // variable de página para escrituras.
   const [organizationId, setOrganizationId] = useState(null)
 
+  // TEMPORAL (ronda de robustez del importador contra ORG-TEST-DEMO, ver
+  // AI_STATE.md 2026-09-01f): ?org=<codigo> en la URL, verificado contra
+  // ORGANIZACIONES (resolveTestOrganizationOverride, Server Action) antes
+  // de usarse -- nunca se confía en el valor crudo de la URL. Se lee con
+  // `window.location.search` (no `useSearchParams` de next/navigation)
+  // para evitar el requisito de envolver la página en `<Suspense>` solo
+  // por esto -- la página ya es 100% client-side (`export const dynamic
+  // = 'force-dynamic'`), así que no hay nada que se pierda por leerlo así.
+  // Sin `?org=` en la URL, el comportamiento es idéntico al de siempre.
   async function load() {
     setLoading(true)
     setError(null)
@@ -60,6 +70,9 @@ export default function SociosPage() {
       return
     }
     try {
+      const orgParam = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('org') : null
+      const organizationIdOverride = orgParam ? await resolveTestOrganizationOverride(orgParam) : null
+
       const {
         rows: data,
         total: count,
@@ -69,6 +82,7 @@ export default function SociosPage() {
         page,
         search,
         filters: { certOrgEstatus, certFlags, departamento },
+        organizationIdOverride,
       })
       setRows(data)
       setTotal(count)

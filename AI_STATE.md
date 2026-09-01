@@ -548,3 +548,246 @@ sigue sin poder correr en este entorno (mismo límite ya documentado).
 y las respuestas 9.a/9.b, y solo entonces aplica la migración corregida
 + el INSERT de `ORG-TEST-DEMO` en Supabase Studio — no se aplicó nada de
 forma autónoma en esta tarea.
+
+## 2026-09-01e — BLOQUEO real: `/dashboard/socios` no puede apuntar a `ORG-TEST-DEMO` hoy — ninguna carga se intentó
+
+**Tarea:** ejecutar la ronda de robustez del importador (carga completa,
+carga interrumpida, verificación de progreso real) contra `ORG-TEST-DEMO`,
+ya con la migración y el INSERT aplicados en Supabase (verificado en vivo
+al empezar: `ORGANIZACIONES` tiene la fila `ORG-TEST-DEMO` con
+`es_organizacion_prueba = true`, `ORGANIZACION_PRODUCTOS` confirma CAFE +
+CACAO, la RPC devuelve `P0001` con Service Role Key -- error de
+validación propio de la función, prueba de que existe -- y devuelve
+`42501 permission denied` con la anon key -- prueba de que el
+`REVOKE`/`GRANT` de la tarea anterior funciona de verdad).
+
+**Bloqueo real, no se llegó a intentar ninguna carga:** `/dashboard/socios`
+no tiene ningún selector de organización — nunca lo tuvo, es una
+limitación conocida y documentada por el propio equipo, no algo roto por
+esta tarea. `lib/sociosSearch.js::fetchSocios` resuelve la "organización
+activa" de la página entera con un probe: la primera fila de
+`PADRON_SOCIOS` con `activo = true` (sin `ORDER BY` explícito). Como
+`COOP-AROMAS-VALLE` ya tiene 618 filas reales ahí, ese probe **siempre**
+devuelve `COOP-AROMAS-VALLE` — nunca llega a intentar el fallback
+(`resolveOrganizationId`, Server Action). Y aunque llegara: ese fallback
+**excluye explícitamente `es_organizacion_prueba = true`** por diseño
+(`lib/actions/organizacionesActions.js`, comentario propio: "no resuelve
+un selector multi-organización, fuera de alcance de este fix" — ronda 8,
+`specs/mejoras_importador_padron_masivo.md` línea ~1345). Confirmado
+leyendo el código (`app/dashboard/socios/page.jsx`: `organizationId` se
+fija una sola vez desde `fetchSocios`, sin ningún `<select>` ni control
+para cambiarlo, y se pasa igual a `ImportPadronModal`/`SocioFormModal`/
+`ParcelaFormModal` — ningún componente resuelve su propia organización
+por separado) — no fue necesario ni se intentó cargar la página en el
+navegador para confirmar esto, la lectura del código ya es concluyente
+y coincide con lo que se vio en pantalla (618 socios listados al entrar
+a `/dashboard/socios`, todos con prefijo `COOP-AROMAS-VALLE-`).
+
+**Por qué esto no se puede evitar sin escribir código nuevo:** las 2
+"salidas fáciles" quedan descartadas por las reglas explícitas de esta
+tarea y las anteriores:
+- Vaciar/desactivar temporalmente los socios de `COOP-AROMAS-VALLE` para
+  que el probe encuentre `ORG-TEST-DEMO` en su lugar — prohibido, "NO
+  toca `COOP-AROMAS-VALLE` bajo ninguna circunstancia" (spec sección 2).
+- Llamar a la RPC directo (vía script, sin pasar por la UI real) para
+  poder decir "se probó" — inválido para el propósito real de esta
+  ronda: los 3 puntos pedidos (progreso real fila por fila, aviso
+  `beforeunload`, corte limpio ante interrupción) son propiedades de
+  `ImportPadronModal.jsx` en el navegador, no de la RPC en sí (la
+  atomicidad de la RPC ya se verificó a nivel de diseño en la tarea
+  anterior, sección 9.b) — evitar la UI real dejaría sin probar
+  exactamente lo que se pidió probar.
+
+**No se tocó código de producción para resolver esto en esta tarea** —
+agregar un selector de organización (o un override temporal vía query
+param) a `/dashboard/socios` es un cambio de alcance real sobre lógica
+multi-tenant que se acaba de corregir por un bug de producción distinto
+(ronda 8), y merece confirmación explícita del usuario antes de tocarla,
+no una decisión unilateral en medio de esta tarea.
+
+**Lo que sí se completó:** el dataset sintético para esta ronda
+(`node scripts/generar_padron_sintetico.mjs --count 15 --seed ronda-robustez-1`,
+15 socios + 15 parcelas, en el directorio de salida por defecto — no
+commiteado, `scratch/` está en `.gitignore`). Queda listo para cargar en
+cuanto se resuelva el bloqueo de arriba.
+
+**Qué falta:** decisión del usuario sobre cómo destrabar esto (agregar
+un selector de organización real a la UI, un override temporal solo
+para esta prueba, u otra alternativa) antes de poder completar los
+pasos 3-6 del prompt original (carga completa, carga interrumpida,
+verificación de progreso real). Pasos 7-9 (documentación final,
+tests/lint, commit) quedan pendientes de que la carga real se complete.
+
+## 2026-09-01f — Ronda de robustez del importador completada contra ORG-TEST-DEMO (con override temporal de organización)
+
+**Decisión del usuario sobre el bloqueo de la entrada anterior:**
+override temporal por query param (`?org=<codigo>`), verificado
+server-side contra `ORGANIZACIONES` (nunca confía en el valor crudo de
+la URL), aplicado a AMBOS caminos (lectura y escritura) porque los dos
+comparten la misma variable `organizationId` resuelta una sola vez en
+`app/dashboard/socios/page.jsx`.
+
+### Mecanismo agregado (TEMPORAL — ver "Qué queda pendiente" abajo)
+
+- `lib/actions/organizacionesActions.js::resolveTestOrganizationOverride(orgId)`
+  — Server Action con Service Role Key. `SELECT "ID" FROM ORGANIZACIONES
+  WHERE "ID" = orgId AND es_organizacion_prueba = true`. Devuelve `null`
+  si `orgId` no existe o si existe pero `es_organizacion_prueba = false`
+  (cualquier organización real, incluida `COOP-AROMAS-VALLE`) — nunca
+  confía en el valor crudo de la URL.
+- `lib/sociosSearch.js::fetchSocios` — nuevo parámetro
+  `organizationIdOverride`: si viene truthy, se usa directo y el
+  probe/fallback normal se saltea por completo. `null`/`undefined`
+  (default) preserva el comportamiento existente sin cambios — 2 tests
+  nuevos en `tests/test_sociossearch_multitenant.mjs` cubren ambos
+  casos (679 passed, 0 failed en la suite completa).
+- `app/dashboard/socios/page.jsx` — lee `?org=` de `window.location.search`
+  (no `useSearchParams` de `next/navigation`, para no necesitar envolver
+  la página en `<Suspense>` solo por esto — ya es 100% client-side),
+  lo verifica con `resolveTestOrganizationOverride`, y pasa el resultado
+  a `fetchSocios`. Como `organizationId` (el mismo estado resuelto acá)
+  es la MISMA prop que recibe `ImportPadronModal` para sus llamadas a
+  `createSocio`/`createParcela`, el override cubre lectura Y escritura
+  con un solo punto de verificación — confirmado en vivo, no solo por
+  inspección de código (ver evidencia abajo).
+
+**Verificación de la barrera de seguridad (pedido explícito del
+usuario, antes de dar por buena la implementación):**
+```
+ID=eq.COOP-AROMAS-VALLE & es_organizacion_prueba=eq.true  -> []   (rechazado)
+ID=eq.ORG-TEST-DEMO      & es_organizacion_prueba=eq.true  -> [1 fila] (aceptado)
+ID=eq.FAKE-ORG-XYZ       & es_organizacion_prueba=eq.true  -> []   (rechazado)
+```
+Confirmado también en el navegador: `/dashboard/socios?org=ORG-TEST-DEMO`
+mostró el padrón vacío real de `ORG-TEST-DEMO` (no el de
+`COOP-AROMAS-VALLE`, que tiene 618 filas y sería lo que el probe normal
+resuelve hoy).
+
+### Ronda de robustez — resultado real, con evidencia de base de datos (no solo de la UI)
+
+**Carga 1 (Socios.csv, 15 filas, sin interrupción):** `15 válida(s), 0
+con error`. Confirmado en `PADRON_SOCIOS` (15 filas, `DEMO-00001`...`DEMO-00015`)
+y `SOCIO_CERTIFICACIONES` (48 filas vía FK real). `COOP-AROMAS-VALLE`
+sin cambios (618).
+
+**Carga 2 (Socios.csv, 50 filas, interrumpida deliberadamente):**
+- **Progreso real (punto 5 del prompt):** capturado en pantalla en 2
+  momentos distintos de la misma carga — "Importando fila 20 de 50
+  (40%)" y, en el intento de interrupción real, "Importando fila 35 de
+  37 (95%)" en la carga de Parcelas más abajo — swatches de porcentaje
+  que coinciden exactamente con `processed/total`, no un salto
+  instantáneo ni un valor estático.
+- **`beforeunload` (punto 4a):** al intentar navegar fuera de la página
+  a mitad de la carga, la navegación fue efectivamente BLOQUEADA por un
+  diálogo nativo "Leave site?" del navegador (confirmado por la
+  herramienta de automatización: "Navigation was blocked by a 'Leave
+  site?' dialog... the page is still open and unchanged") — recién se
+  completó la interrupción real forzando el descarte de ese diálogo
+  (`force: true`, "discarded a 'Leave site?' dialog — the page had
+  unsaved changes that are now lost"). Un primer intento con un lote más
+  chico (15 filas) NO alcanzó a capturar el diálogo porque la carga ya
+  había terminado antes de que la navegación se disparara — no es que
+  `beforeunload` no funcione, es que 15 llamadas RPC secuenciales contra
+  la instancia real de Supabase terminan en menos de lo que tarda esta
+  sesión en reaccionar; el lote de 50 sí dio la ventana necesaria.
+- **Corte limpio por fila, no corrupción de archivo (punto 4b):**
+  confirmado con una consulta real a `PADRON_SOCIOS` después de la
+  interrupción — de las 50 filas válidas del CSV, **37 quedaron
+  commiteadas** (`DEMO-00046` a `DEMO-00082`) y las **13 restantes
+  simplemente no existen** (nunca se intentaron). Las 37 que sí entraron
+  tienen **cero huérfanas**: se verificó contra `SOCIO_CERTIFICACIONES`
+  que las 37 tienen al menos 1 fila de certificación (ninguna quedó con
+  socio creado pero sin sus certificaciones) — exactamente el
+  comportamito "por fila, no por archivo" documentado en la tarea
+  anterior (sección 9.b de la spec). `COOP-AROMAS-VALLE` sin cambios
+  (618) durante todo este proceso.
+
+**Carga 3 (Parcelas.csv, mismo lote de 50, sin interrupción):** el CSV
+generado en la carga 2 traía 37 filas cuyo `ID_Socio` sí existe (los que
+entraron) y 13 cuyo `ID_Socio` NO existe (los que la interrupción dejó
+afuera) — el importador los separó correctamente ("El Código de Socio
+... no existe en la organización activa. Debe registrar al socio antes
+de importar sus parcelas", 13 tipos de error, 1 por fila) sin que se
+pidiera explícitamente probar esto, buena señal de que la validación
+referencial funciona incluso contra un padrón parcialmente cargado. Las
+37 válidas se confirmaron con progreso real ("Importando fila 35 de 37
+(95%)") y completaron sin interrupción: **37/37 en `PADRON_PARCELAS`**
+confirmado por consulta directa. `COOP-AROMAS-VALLE` sin cambios (821
+parcelas) durante todo el proceso.
+
+**Total final en `ORG-TEST-DEMO` tras toda la ronda:** 67 filas en
+`PADRON_SOCIOS`, 37 en `PADRON_PARCELAS`. Desglose real de cómo se llegó
+a 67 (3 cargas de socios, no 2 -- ver "Hallazgo colateral" #3 abajo para
+por qué hicieron falta 3 intentos):
+- Carga 1: 15 filas (`DEMO-00001`..`DEMO-00015`), sin interrupción.
+- Intento de interrupción #1 (30 filas generadas, 15 válidas por el bug
+  del punto 1 de abajo): las 15 válidas (`DEMO-00031`..`DEMO-00045`)
+  completaron ANTES de que la navegación de interrupción llegara a
+  dispararse -- terminó siendo, sin querer, una 2da carga limpia sin
+  interrupción, no la prueba de interrupción real.
+- Intento de interrupción #2 (50 filas, ya con el bug corregido): esta
+  sí se interrumpió de verdad -- 37 de 50 quedaron commiteadas
+  (`DEMO-00046`..`DEMO-00082`), 13 nunca se intentaron. Total acumulado:
+  15 + 15 + 37 = 67.
+- `PADRON_PARCELAS`: las 37 parcelas correspondientes a los socios que
+  sí quedaron creados en el intento #2 (`DEMO-00046`..`DEMO-00082`),
+  cargadas sin interrupción.
+
+### Hallazgos colaterales encontrados en el camino (no pedidos, documentados por transparencia)
+
+1. **Bug real en `scripts/generar_padron_sintetico.mjs`, encontrado y
+   corregido en esta misma tarea:** `socio_dni`/`codigo_finca` se
+   generaban con el índice LOCAL del loop (`0..count-1`), no un índice
+   global que tuviera en cuenta los socios ya existentes de
+   `ORG-TEST-DEMO` — a diferencia de `ID_Socio`, que sí usaba
+   `computeNextCodes(existingSocioIds, ...)` correctamente. Una 2da
+   corrida contra la misma organización repetía los mismos DNI/código de
+   finca de la 1ra. El importador real detectó la colisión
+   correctamente (la rechazó como error de fila, no la aceptó
+   silenciosamente) — pero el generador no debería producir un CSV con
+   ese defecto de origen. **Corregido:** el script ahora consulta
+   `PADRON_SOCIOS` antes de generar y usa un `globalOffset` para
+   `socio_dni`/`codigo_finca`/`localidad`, igual que ya hacía para
+   `ID_Socio`. Confirmado con una corrida real después del fix (offset
+   correcto, `F-0031` en vez de repetir `F-0001`).
+2. **`exportSociosCsv`/`exportParcelasCsv` no respetan ningún scope de
+   organización** — a diferencia de `fetchSocios` (que si tiene el
+   override nuevo), esas 2 funciones (`lib/padronCsv.js`) no reciben
+   `organizationId` en absoluto. Se descubrió al hacer clic por error en
+   "Exportar Padrón de Parcelas" en vez de "Cargar Padrón Masivo"
+   (ambos botones quedaron muy cerca en el layout tras agregar contenido
+   a la página) — el CSV exportado trajo las 821 parcelas de
+   `COOP-AROMAS-VALLE`, no las de `ORG-TEST-DEMO`. Sin riesgo real (es
+   una descarga de solo lectura de datos ya visibles en la app, no una
+   escritura ni una fuga de datos que el usuario no pudiera ver ya
+   navegando la UI normal) pero es un gap real preexistente, no
+   introducido por esta tarea — **no se tocó**, fuera de alcance de
+   esta ronda.
+3. **Los primeros 2 intentos de interrupción no capturaron el diálogo
+   `beforeunload`** porque el lote (15 y luego 30 filas parcialmente
+   inválidas por el bug del punto 1) terminó de importarse antes de que
+   la navegación llegara a dispararse — de ahí que el total final en
+   `ORG-TEST-DEMO` incluya más filas de las que un solo intento de
+   interrupción explicaría. Ningún dato quedó corrupto por estos
+   intentos — cada uno completó limpio (0 con error) antes de que se
+   intentara la siguiente interrupción.
+
+### Qué queda pendiente
+
+- **El override `?org=` es TEMPORAL**, pensado solo para esta ronda de
+  prueba — no es un selector de organización real (sin persistencia,
+  sin UI visible, hay que conocer y escribir el código a mano en la
+  URL). Un selector de organización real en `/dashboard/socios`
+  (dropdown, persistido, visible en la UI) queda pendiente como tarea
+  aparte, con su propio spec, para cuando haya una segunda organización
+  REAL (no de prueba) o se priorice la demo comercial — decisión y
+  spec nuevos, no implícitos en este mecanismo temporal.
+- El hallazgo colateral 2 (export sin scope de organización) queda sin
+  resolver, fuera de alcance.
+- El dataset sintético final que quedó en `ORG-TEST-DEMO` (67 socios /
+  37 parcelas) es intencionalmente "sucio" (resultado real de una
+  interrupción deliberada + un bug de generador corregido a mitad de
+  camino) — si se quiere una base de demo comercial prolija desde cero,
+  regenerar con `node scripts/generar_padron_sintetico.mjs --count N
+  --seed <nuevo>` contra una `ORG-TEST-DEMO` recién vaciada (o una
+  organización de prueba nueva), no reutilizar este estado tal cual.

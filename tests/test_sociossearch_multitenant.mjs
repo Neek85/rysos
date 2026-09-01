@@ -128,6 +128,27 @@ test('fetchSocios: con PADRON_SOCIOS con datos, el probe normal alcanza -- el fa
   assert.equal(organizationId, 'COOP-JS')
 })
 
+// ---------------------------------------------------------------
+// Ronda de robustez del importador contra ORG-TEST-DEMO (2026-09-01f,
+// ver AI_STATE.md) -- organizationIdOverride TEMPORAL para poder apuntar
+// /dashboard/socios a una organización de prueba distinta de la que el
+// probe normal resolvería (que hoy siempre es COOP-AROMAS-VALLE, la
+// única con filas reales en PADRON_SOCIOS).
+// ---------------------------------------------------------------
+
+test('fetchSocios: con organizationIdOverride, usa ese valor directo y NUNCA corre el probe de PADRON_SOCIOS', async () => {
+  const supabase = createFakeSupabase({ PADRON_SOCIOS: SOCIOS_FAKE })
+  const { rows, organizationId } = await fetchSocios(supabase, { organizationIdOverride: 'ORG-TEST-DEMO' })
+  assert.equal(organizationId, 'ORG-TEST-DEMO')
+  assert.deepEqual(rows, [], 'ORG-TEST-DEMO no tiene filas en el fake -- el override no debe traer filas de COOP-JS/COOP-ND')
+})
+
+test('fetchSocios: organizationIdOverride null/undefined preserva el comportamiento normal (probe de siempre)', async () => {
+  const supabase = createFakeSupabase({ PADRON_SOCIOS: SOCIOS_FAKE })
+  const { organizationId } = await fetchSocios(supabase, { organizationIdOverride: null })
+  assert.equal(organizationId, 'COOP-JS', 'sin override, sigue resolviendo por el probe normal')
+})
+
 test('fetchParcelasBySocio: un ID_Socio que existe en DOS organizaciones (mismo código, distinto tenant tras la migración de PK) nunca mezcla las parcelas de la organización equivocada', async () => {
   const supabase = createFakeSupabase({ PADRON_PARCELAS: PARCELAS_FAKE })
   const rowsOrgA = await fetchParcelasBySocio(supabase, 'JS-00001', 'COOP-JS')

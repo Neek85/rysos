@@ -1,9 +1,12 @@
 # Spec — Organización de prueba para robustez del importador y demo comercial
 
-- **Estado:** En progreso — org y padrón sintético preparados; hueco de
-  seguridad en la migración pendiente cerrado (sección 0.d); alta en
-  Supabase Studio y carga vía UI siguen pendientes de que el usuario
-  aplique la migración corregida (ver sección 0.c).
+- **Estado:** **Completado.** Migración + alta de `ORG-TEST-DEMO`
+  aplicadas por el usuario en Supabase Studio; ronda de robustez del
+  importador ejecutada y verificada con evidencia real de base de
+  datos (secciones 7-8) — progreso real, `beforeunload`, y corte
+  limpio por fila ante interrupción, los 3 confirmados. Pendiente
+  solo lo documentado como fuera de alcance (selector de organización
+  real, sección 8).
 - **Fecha:** 2026-09-01.
 - **Contexto previo:** `docs/adr/ADR-008-etiqueta-organizacion-prueba-y-guardarail-e2e.md`,
   `docs/adr/ADR-030-convencion-codigo-organizaciones.md`,
@@ -259,29 +262,82 @@ credenciales que el resto de scripts que leen catálogos en vivo
 `.env.local`) — solo para leer `CERTIFICACIONES_CATALOGO` (lectura,
 sin escritura).
 
-## 7. Alta de la organización — pendiente, manual
+## 7. Alta de la organización — APLICADA
 
-Sigue el runbook de `specs/alta_organizacion_real.md`, adaptado con
-`es_organizacion_prueba = true` (sección 3.2) y 2 filas en
-`ORGANIZACION_PRODUCTOS` (Café + Cacao, sección 3.3). El `INSERT`
-transaccional se entrega al usuario para revisar y aplicar en Supabase
-Studio — mismo criterio que el runbook original y que la limpieza de
-`COOP-AROMAS-VALLE` de la tarea anterior: no se ejecuta de forma
-autónoma.
+`ORG-TEST-DEMO` fue aplicada manualmente por el usuario en Supabase
+Studio (migración `20260901120000_socio_creacion_atomica.sql` +
+INSERT de la organización) — confirmado en vivo al empezar la ronda de
+robustez: `ORGANIZACIONES` tiene la fila con `es_organizacion_prueba =
+true`, `ORGANIZACION_PRODUCTOS` confirma Café + Cacao, y la RPC
+`fn_crear_socio_con_certificaciones` devuelve `P0001` (su propio guard
+clause) con Service Role Key y `42501 permission denied` con la anon
+key — prueba de que existe y de que el `REVOKE`/`GRANT` de la tarea
+anterior funciona de verdad.
 
-## 8. Carga vía importador real — bloqueada (ver 0.c)
+## 8. Carga vía importador real — COMPLETADA (ver AI_STATE.md 2026-09-01f para el detalle completo con evidencia)
 
-No se puede completar hasta que el usuario aplique
-`20260901120000_socio_creacion_atomica.sql`. Una vez aplicada, el plan
-es: cargar `Socios.csv`/`Parcelas.csv` contra `ORG-TEST-DEMO` desde
-`/dashboard/socios`, e interrumpir deliberadamente la carga a mitad de
-camino (navegar afuera) para confirmar que las filas ya procesadas
-quedan completas (socio + sus certificaciones, atómico por fila vía la
-RPC) y que las filas no llegadas a procesar simplemente no existen
-(sin filas a medio insertar) — documentando cuántas filas entraron
-válidas, si la barra de progreso reflejó avance real, y si el aviso
-`beforeunload` apareció al intentar cerrar/navegar afuera a mitad de
-carga.
+**Bloqueante nuevo encontrado antes de poder cargar nada:**
+`/dashboard/socios` no tenía ningún selector de organización — la
+"organización activa" de toda la página se resolvía con un único probe
+(primera fila de `PADRON_SOCIOS`), que con `COOP-AROMAS-VALLE` ya
+teniendo 618 filas reales, **siempre** resolvía a `COOP-AROMAS-VALLE`,
+nunca a `ORG-TEST-DEMO`. Resuelto con un override temporal por query
+param (`?org=<codigo>`, verificado server-side contra
+`ORGANIZACIONES.es_organizacion_prueba = true` antes de aceptarse —
+`lib/actions/organizacionesActions.js::resolveTestOrganizationOverride`,
+`lib/sociosSearch.js::fetchSocios` con el parámetro nuevo
+`organizationIdOverride`) — decisión del usuario, con la condición
+explícita de que la verificación cubriera tanto lectura como escritura,
+confirmado en vivo (ver AI_STATE.md 2026-09-01f).
+
+**Resultado real, con evidencia de base de datos (no solo de pantalla):**
+- **Carga completa sin interrupción (Socios.csv, 15 filas):** 15/15
+  válidas, 15/15 confirmadas en `PADRON_SOCIOS` + 48 filas en
+  `SOCIO_CERTIFICACIONES` (vía FK real).
+- **Progreso real fila por fila:** confirmado en pantalla en múltiples
+  momentos de cargas distintas ("Importando fila 20 de 50 (40%)",
+  "Importando fila 35 de 37 (95%)") — el porcentaje siempre coincidió
+  exactamente con `processed/total`, nunca un salto instantáneo.
+- **`beforeunload`:** confirmado que SÍ bloquea la navegación —
+  intentar navegar fuera a mitad de una carga de 50 filas disparó el
+  diálogo nativo "Leave site?" del navegador (la navegación quedó
+  bloqueada hasta forzar el descarte del diálogo). Un intento anterior
+  con un lote de 15 filas no llegó a capturar el diálogo porque la
+  carga ya había terminado antes de que la navegación se disparara —
+  limitación de la ventana de tiempo de la prueba, no de
+  `beforeunload` en sí.
+- **Corte limpio por fila ante interrupción real, no corrupción de
+  archivo:** de 50 filas válidas, 37 quedaron commiteadas
+  (`DEMO-00046`..`DEMO-00082`) y 13 nunca se intentaron. Las 37 tienen
+  **cero huérfanas** (se verificó que las 37 tienen al menos 1 fila en
+  `SOCIO_CERTIFICACIONES`) — confirma en vivo lo que la sección 9.b ya
+  documentó a nivel de diseño: atomicidad por fila, no de archivo.
+- **Parcelas.csv:** mismo componente/mecanismo (progreso real
+  confirmado también ahí), 37/37 válidas cargadas sin interrupción; las
+  13 filas restantes del mismo CSV (referenciando los socios que la
+  interrupción de arriba dejó afuera) fueron correctamente rechazadas
+  por la validación referencial existente ("el Código de Socio no
+  existe en la organización activa"), sin que se pidiera probar esto
+  explícitamente.
+- `COOP-AROMAS-VALLE` sin cambios en ningún momento de toda la ronda
+  (618 socios / 821 parcelas, verificado antes y después).
+
+**Hallazgos colaterales (documentados, no resueltos en esta tarea):**
+1. Bug real en `scripts/generar_padron_sintetico.mjs` (`socio_dni`/
+   `codigo_finca` no se offseteaban contra socios ya existentes de la
+   organización, a diferencia de `ID_Socio`) — encontrado y corregido
+   en esta misma tarea.
+2. `exportSociosCsv`/`exportParcelasCsv` (`lib/padronCsv.js`) no
+   respetan ningún scope de organización — a diferencia de
+   `fetchSocios`, no reciben `organizationId` en absoluto. Sin riesgo
+   real (solo lectura de datos ya visibles en la UI), pero es un gap
+   preexistente real — fuera de alcance, no tocado.
+
+**Pendiente:** el override `?org=` es temporal, pensado solo para esta
+ronda de prueba (sin persistencia ni UI visible) — un selector de
+organización real queda como tarea aparte, con su propio spec, para
+cuando haya una segunda organización REAL o se priorice la demo
+comercial.
 
 ## 9. Decisiones de diseño de `fn_crear_socio_con_certificaciones`
 
@@ -348,19 +404,31 @@ de la atomicidad de la RPC en sí — no confundir las dos capas.
 
 ## 11. Criterios de aceptación
 
-- [ ] `ORG-TEST-DEMO` existe en `ORGANIZACIONES` con
+- [x] `ORG-TEST-DEMO` existe en `ORGANIZACIONES` con
       `es_organizacion_prueba = true` y 2 filas en
-      `ORGANIZACION_PRODUCTOS` (Café, Cacao).
-- [ ] `scripts/generar_padron_sintetico.mjs` genera `Socios.csv`/
+      `ORGANIZACION_PRODUCTOS` (Café, Cacao). Aplicado por el usuario,
+      confirmado en vivo.
+- [x] `scripts/generar_padron_sintetico.mjs` genera `Socios.csv`/
       `Parcelas.csv` entre 10 y 50 filas, deterministas por `--seed`,
       donde el 100% de las filas pasa `socioSchema`/`parcelaSchema`
-      sin error.
-- [ ] Ubigeo de cada socio existe realmente en `lib/data/ubigeo_peru.json`
+      sin error. Corrido en vivo múltiples veces durante la ronda de
+      robustez (15, 30, 50 filas).
+- [x] Ubigeo de cada socio existe realmente en `lib/data/ubigeo_peru.json`
       (Cajamarca → provincia real → distrito real).
-- [ ] Integridad referencial 100%: todo `ID_Socio` en `Parcelas.csv`
-      existe en `Socios.csv`.
-- [ ] `COOP-AROMAS-VALLE` no aparece en ningún archivo ni sentencia SQL
-      de esta tarea salvo para excluirla explícitamente.
-- [ ] Carga real vía `/dashboard/socios` documentada en `AI_STATE.md`
+- [x] Integridad referencial 100%: todo `ID_Socio` en `Parcelas.csv`
+      existe en `Socios.csv` DEL MISMO LOTE. Nota real encontrada
+      durante la ronda: si un lote de Socios se interrumpe a mitad de
+      camino, el `Parcelas.csv` generado en esa misma corrida sí puede
+      referenciar `ID_Socio` que nunca se llegaron a crear — el
+      importador de Parcelas lo detecta y rechaza correctamente esas
+      filas (sección 8), pero es responsabilidad de quien opera la
+      demo cargar Parcelas.csv después de confirmar qué socios
+      realmente entraron, no asumir que el archivo generado es 100%
+      consistente si la carga de Socios se cortó.
+- [x] `COOP-AROMAS-VALLE` no aparece en ningún archivo ni sentencia SQL
+      de esta tarea salvo para excluirla explícitamente. Verificado en
+      vivo antes/después de cada carga (618 socios / 821 parcelas, sin
+      cambios en ningún momento).
+- [x] Carga real vía `/dashboard/socios` documentada en `AI_STATE.md`
       (filas válidas, atomicidad ante interrupción, progreso real) —
-      condicionado a que la migración de la sección 0.c esté aplicada.
+      completado, ver entrada `2026-09-01f`.

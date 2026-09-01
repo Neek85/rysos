@@ -196,17 +196,39 @@ async function main() {
     throw new Error('CERTIFICACIONES_CATALOGO no tiene ninguna fila activa — revisar antes de generar el dataset')
   }
 
+  // Consulta los ID_Socio ya existentes de ORG-TEST-DEMO para no repetir
+  // códigos entre corridas sucesivas contra la misma organización (ej. una
+  // 2da tanda para una ronda de robustez que ya cargó una 1ra) -- mismo
+  // patrón que computeNextCodes ya usa en el resto del repo (nunca
+  // hardcodea el punto de partida cuando puede consultar el real).
+  const { data: existingSocios, error: existingErr } = await supabase
+    .from('PADRON_SOCIOS')
+    .select('ID_Socio')
+    .eq('ID_Organizacion', ORG_ID)
+  if (existingErr) throw existingErr
+  const existingSocioIds = (existingSocios ?? []).map((r) => r.ID_Socio)
+
   const rng = mulberry32(`${args.seed}:${args.count}`)
   const provincias = getProvincias(DEPARTAMENTO)
   if (provincias.length === 0) throw new Error(`getProvincias('${DEPARTAMENTO}') no devolvió nada — revisar lib/data/ubigeo_peru.json`)
 
-  const socioIds = computeNextCodes([], args.count, { defaultPrefix: 'DEMO-', defaultPadLength: 5 })
+  const socioIds = computeNextCodes(existingSocioIds, args.count, { defaultPrefix: 'DEMO-', defaultPadLength: 5 })
 
   const socioRecords = [] // objetos con forma socioSchema (validados)
   const socioCsvRows = [] // objetos con forma buildSociosCsv (columnas fijas + cert ids dinámicos)
 
+  // Índice GLOBAL (offset por los socios ya existentes de ORG-TEST-DEMO),
+  // no el índice local del loop -- bug real encontrado en la ronda de
+  // robustez (2026-09-01f, ver AI_STATE.md): socio_dni/codigo_finca
+  // usaban el índice local (siempre 0..count-1), así que una 2da corrida
+  // contra la misma organización repetía los mismos DNI/codigo_finca de
+  // la 1ra (aunque ID_Socio, que sí usaba computeNextCodes con
+  // existingSocioIds, no colisionaba) -- el importador real detectó la
+  // colisión correctamente (rechazó esas filas como duplicado), pero el
+  // generador no debería producir un CSV con ese defecto de entrada.
+  const globalOffset = existingSocioIds.length
   for (let i = 0; i < args.count; i++) {
-    const base = buildSocio(rng, i, socioIds[i], provincias)
+    const base = buildSocio(rng, globalOffset + i, socioIds[i], provincias)
     const { flags, cert_org_estatus } = buildSocioCertFlags(rng)
 
     const schemaShaped = { ...base, ...flags, cert_org_estatus }
