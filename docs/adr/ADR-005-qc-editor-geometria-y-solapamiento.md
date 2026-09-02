@@ -1,0 +1,606 @@
+# ADR-005 — Editor Vectorial de QC: 2 bugs reales, y solapamiento auditable visualmente
+
+- **Estado:** Aceptado
+- **Fecha:** 2026-08-21 (Fase A agregada 2026-08-22)
+- **Migraciones:** ninguna nueva en la versión original — `fn_validar_topologia_eudr`
+  (`supabase/migrations/20260820_fn_validar_topologia_eudr.sql`) ya estaba
+  correcta en los 3 puntos investigados (ver abajo), confirmada aplicada en
+  la instancia real como precondición de esta tarea. **Fase A (2026-08-22)
+  sí agrega una migración:**
+  `supabase/migrations/20260822_173416_fn_validar_topologia_contencion_parcela.sql`
+  (pendiente de aplicación manual en Supabase Studio, como toda migración
+  de este repo).
+- **Spec:** `specs/consola_qc_layout_y_validacion.md` (addendum
+  "Solapamiento auditable")
+- **Tests:** `tests/test_qc_editor_bugs_and_solapamiento.mjs`,
+  `tests/test_eudr_qc_actions.mjs` (3 tests nuevos de
+  `fetchComparisonGeometries`)
+
+## Precondición verificada antes de empezar
+
+Reproducido en vivo (`curl` contra `/api/qc/validate-spatial` y contra
+`vw_monitoreo_puntos` con la anon key): `fn_validar_topologia_eudr` y
+`20260819_fix_vw_monitoreo_puntos_id_origen.sql` **ya están aplicadas** en
+la instancia real (a diferencia de la tarea anterior, donde `fn_validar_topologia_eudr`
+todavía no se había aplicado manualmente en Supabase Studio). Se procedió
+con la Fase 1.
+
+## Bug 1 — Popup permanente con nombre crudo de tabla (CONFIRMADO)
+
+`components/gis/QcConsoleMap.jsx`, efecto de renderizado:
+
+```js
+layer.bindPopup(
+  `<strong>${record.tabla_origen}</strong><br/>${record.clasificacion || 'Sin clasificar'}`
+)
+```
+
+y en el efecto de `selectedKey`: `selectedLayer.openPopup?.()`.
+
+Confirmado en vivo en el navegador antes de tocar código: seleccionar un
+registro de Instalaciones mostraba un popup con el texto literal
+"EUDR_INSTALACIONES" sobre el mapa. El panel derecho
+(`QcDetailEditor.jsx`, sección "Corregir atributos") ya muestra el mismo
+dato con la etiqueta legible (`LAYER_LABELS['EUDR_INSTALACIONES'] =
+'Instalaciones'`) — el popup no aportaba nada que el panel no mostrara ya,
+así que se eliminó (`bindPopup`/`openPopup`) sin reemplazo.
+
+## Bug 2 — "Editor de puntos abre modo polígono" (NO REPRODUCIDO)
+
+Investigado a fondo antes de tocar código, en 2 niveles:
+
+1. **Lectura de código:** el efecto de `editingKey` llama
+   `childLayer.pm.enable(...)` directamente sobre la sub-capa real
+   (`layer.getLayers()[0]`) — para un registro Point esa sub-capa es un
+   `L.CircleMarker` (vía `pointToLayer`), que activa el módulo dedicado
+   `L.PM.Edit.CircleMarker` de geoman (confirmado en
+   `specs/qc_geoman_layer_binding_fix.md`, tarea anterior) — un módulo sin
+   concepto de "cadena de vértices" ni "Finalizar"/"Eliminar último
+   vértice" (esos textos son tooltips del modo DIBUJO de geoman —
+   `L.PM.Draw.Polygon`/`Line` — no del modo edición de una capa
+   existente, confirmado grep-eando el bundle instalado).
+2. **Verificación en vivo:** se seleccionó un registro real de
+   Instalaciones (Point), se activó "Ajustar Geometría", y se inspeccionó
+   el DOM real con `javascript_tool`:
+   ```json
+   { "pathClasses": ["leaflet-interactive leaflet-pm-draggable", "leaflet-interactive", "leaflet-interactive"] }
+   ```
+   Un solo elemento con la clase `leaflet-pm-draggable` (el marcador
+   editado) y **cero** `.leaflet-marker-icon`/`.leaflet-editing-icon` en
+   el DOM (`document.querySelectorAll(...).length === 0`) — sin cadena de
+   vértices, sin modo polígono.
+
+**Conclusión: el bug tal como está descrito no existe en el código
+actual.** Ver `[[feedback_prompt_verification]]` (memoria de sesión) — es
+el 4º/5º hallazgo de este tipo en esta línea de trabajo sobre el mismo
+mecanismo de edición.
+
+Se hizo igual una mejora real y de bajo riesgo, alineada con el principio
+que el propio prompt pide ("fuente de verdad: el campo de geometría real,
+nunca el nombre de tabla"): `QcDetailEditor.jsx` ahora deriva
+`isPointRecord` de `record.geom?.type === 'Point'` (la geometría real) en
+vez de no diferenciar el texto de ayuda — antes decía genéricamente
+"Arrastrá los vértices (o el marcador)"; ahora dice "Arrastrá el
+marcador" o "Arrastrá los vértices" según corresponda. Relevante porque
+un `EUDR_MONITOREO` puede ser Point si el técnico QField lo capturó así
+(`ST_Dimension()` en la propia `fn_validar_topologia_eudr` ya contempla
+este caso) — inferir por `tabla_origen === 'EUDR_INSTALACIONES'` habría
+sido incorrecto para esos registros.
+
+## Investigación 4 — Mecanismo de "Solapado X%"
+
+La función real es `fn_validar_topologia_eudr`
+(`supabase/migrations/20260820_fn_validar_topologia_eudr.sql`), invocada
+desde `app/api/qc/validate-spatial/route.js` (Service Role Key). El
+código real de la sección de solapamiento (ya existente, sin cambios):
+
+```sql
+WITH candidatos AS (
+    SELECT 'EUDR_MONITOREO'::text AS tabla_origen, id_monitoreo::text AS registro_id, geom_inspeccion AS geom
+    FROM public."EUDR_MONITOREO"
+    WHERE "ID_Organizacion" = v_org
+      AND estado_revision = 'APROBADO'
+      AND ST_Dimension(geom_inspeccion) = 2
+      AND NOT (p_tabla_origen = 'EUDR_MONITOREO' AND id_monitoreo::text = p_registro_id)
+    UNION ALL
+    SELECT 'EUDR_USO_SUELO'::text, id::text, geom
+    FROM public."EUDR_USO_SUELO"
+    WHERE "ID_Organizacion" = v_org
+      AND estado_revision = 'APROBADO'
+      AND ST_Dimension(geom) = 2
+      AND NOT (p_tabla_origen = 'EUDR_USO_SUELO' AND id::text = p_registro_id)
+),
+solapados AS (
+    SELECT
+        tabla_origen, registro_id,
+        ROUND((ST_Area(ST_Intersection(v_geom, geom)::geography) / NULLIF(ST_Area(v_geom::geography), 0) * 100)::numeric, 2)
+            AS solapamiento_pct
+    FROM candidatos
+    WHERE ST_Overlaps(v_geom, geom) OR ST_Contains(geom, v_geom) OR ST_Contains(v_geom, geom)
+)
+```
+
+Respuestas a las 3 preguntas del prompt (las 3 ya estaban bien, ninguna
+requirió corrección):
+
+- **(a) ¿Filtra por `ID_Organizacion`?** Sí — `WHERE "ID_Organizacion" =
+  v_org` en el CTE `candidatos`, para ambas tablas candidatas.
+- **(b) ¿Excluye la versión previa del propio registro?** Sí — el `NOT
+  (p_tabla_origen = X AND id::text = p_registro_id)` en cada rama del
+  `UNION ALL` excluye explícitamente la fila que se está validando.
+- **(c) ¿`geography` o grados crudos?** `geography` — tanto
+  `ST_Intersection(...)::geography` como `v_geom::geography` en el
+  denominador, nunca área en grados de un CRS geográfico crudo.
+
+**El contrato de datos que pedía el prompt YA estaba casi completo:** la
+función ya devuelve `registros_solapados: [{ tabla_origen, registro_id,
+solapamiento_pct }]` y `solapamiento_max_pct` (confirmado en vivo,
+`curl` real) — nombres de campo `registro_id`/`tabla_origen` en vez de
+`id`/`tabla` como pedía el contrato del prompt, pero ya consumidos por
+código funcionando (`lib/qcTopologyValidation.js`, badges de
+`QcDetailEditor.jsx`) — no se renombraron para no romper esos consumidores
+sin ningún beneficio real. Lo único que faltaba, y sí se agregó: la
+geometría de cada registro solapado.
+
+## Decisión: exponer la geometría vía un fetch adicional, no ampliando la RPC
+
+Se evaluó extender `fn_validar_topologia_eudr` para devolver también la
+geometría de cada solapado, pero se prefirió una función nueva de solo
+lectura (`fetchComparisonGeometries`, `lib/eudrQcActions.js`) que consulta
+`vw_monitoreo_poligonos` por los `registro_id` ya devueltos — misma vista
+de auditoría que ya usa el resto de la consola, ya legible con la anon key
+(vistas con privilegio de owner, ver el gotcha de RLS en `CLAUDE.md`), sin
+tocar la función SQL que ya está aplicada y funcionando en producción.
+Defensa en profundidad: se filtra igual por `ID_Organizacion` del lado del
+cliente aunque la RPC ya garantiza que esos IDs pertenecen a la misma
+organización — mismo criterio que `assertSameOrganization` en el resto de
+este archivo.
+
+## Frontend — capa de comparación
+
+`components/gis/QcConsoleMap.jsx` gana una nueva `comparisonGroupRef`
+(capa Leaflet separada, agregada al mapa antes que la capa principal para
+quedar siempre detrás visualmente) que dibuja las geometrías devueltas por
+`comparisonFeatures` con contorno punteado ámbar (`dashArray: '6, 6'`,
+`fillOpacity: 0.05`) — visualmente distinto del estilo de cualquier
+`tabla_origen` (ver `LAYER_STYLES`). `app/dashboard/qc/page.jsx` calcula
+`comparisonFeatures` dentro de `handleValidateTopology`, **solo cuando el
+registro validado es el actualmente seleccionado** (esta misma función
+también la usa "Validar Todos PENDIENTES" en modo batch — sin ese guard,
+un batch sobrescribiría la capa de comparación con la del último registro
+validado, no la que el usuario está mirando). Se limpia
+(`setComparisonFeatures([])`) en el mismo efecto que ya reseteaba
+`editingGeometryKey`/`geometryDraft` al cambiar `selectedKey`.
+
+## Re-investigación (2026-08-21, mismo día) — "editor de puntos abre modo polígono" SÍ era real
+
+Un prompt de seguimiento aportó evidencia nueva y específica (2 capturas
+reales de sesión, 1 minuto de diferencia, mismo registro Instalaciones):
+la hipótesis de colisión entre el toolbar del Editor Vectorial (crear
+registro nuevo — botones ⬠ Polígono/📍 Marcador, siempre visibles arriba
+a la izquierda del mapa) y el modo "Ajustar Geometría" (editar el registro
+ya seleccionado). Esta vez SÍ se confirmó.
+
+**Código relevante ANTES de tocar nada:** `useVectorEditor`
+(`app/dashboard/qc/components/VectorEditorTools.jsx`) engancha
+`attachVectorEditor` en un `useEffect` con dependencia `[mapReady]`
+únicamente — se ejecuta una sola vez al montar el mapa y nunca se
+reevalúa por `editingKey`. El toolbar de dibujo (`map.pm.addControls(...)`)
+queda activo y clickeable durante TODA la vida del componente,
+completamente independiente de si un registro existente está en modo
+"Ajustar Geometría".
+
+**Reproducido en vivo** (no solo inspección de código, como pide el
+prompt) con `javascript_tool`, secuencia exacta: seleccionar un registro
+Point → "Ajustar Geometría" → sin salir de "Editando…" → click real
+(`.click()`) sobre el botón "Dibujar Polígono" del toolbar. Resultado
+confirmado con una sola consulta al DOM:
+
+```json
+{ "stillEditing": true, "hasFinishAction": true, "hasRemoveLastVertex": true, "hasCancel": true, "markerStillDraggable": true }
+```
+
+Los 5 campos en `true` a la vez: el registro seguía en "Editando…", el
+marcador seguía arrastrable, Y el toolbar completo de dibujo de polígono
+(Finalizar/Eliminar último vértice/Cancelar) estaba activo — exactamente
+lo que muestran las 2 capturas del reporte.
+
+(Nota metodológica: los clicks del `computer` tool sobre este botón
+específico no lo activaban de forma confiable — mismo tipo de flakiness
+ya documentado en esta sesión para otros elementos — por eso la
+reproducción se hizo con un `.click()` real vía `javascript_tool` sobre
+el elemento DOM, que sí dispara el evento que Leaflet escucha.)
+
+### Regresión real y no relacionada, encontrada en el camino
+
+Antes de poder reproducir nada, el toolbar del Editor Vectorial no
+aparecía en absoluto — ni un solo botón de dibujo, en ningún registro. Se
+aisló con un `console.error` temporal en el `catch` de `init()`
+(`components/gis/QcConsoleMap.jsx`): `layerGroupRef.current.bringToFront
+is not a function`. Causa: `L.layerGroup()` crea un `L.LayerGroup` plano,
+que **no tiene** `.bringToFront()` — ese método solo existe en
+`L.FeatureGroup`/capas basadas en `L.Path`. La línea se agregó en la
+tarea anterior (capa de comparación de solapamiento) para intentar
+garantizar el z-order visual; al tirar, quedaba atrapada por el
+`catch {}` silencioso de `init()`, dejando `mapReady` en `false` para
+siempre — con eso, **todo** el Editor Vectorial (no solo el toolbar de
+dibujo) quedaba inoperable desde el commit anterior. Corregido sin
+`bringToFront()`: `comparisonGroupRef` ahora se agrega al mapa ANTES que
+`layerGroupRef` — Leaflet apila las capas en el orden en que se agregan,
+así que el orden de creación por sí solo logra el mismo z-order buscado.
+
+### Fix: exclusión mutua real, en ambas direcciones
+
+1. **Editar bloquea dibujar** (la dirección reportada): el mismo efecto
+   de `editingKey` en `QcConsoleMap.jsx` ahora llama
+   `map.pm.Toolbar.setButtonDisabled('drawPolygon'|'drawMarker',
+   isAnyEditing)` — API real de geoman que agrega la clase CSS
+   `pm-disabled` + `aria-disabled="true"` (deshabilitado **visualmente**,
+   no solo un flag lógico, tal como pedía el prompt). Confirmado en vivo:
+   con un registro en "Editando…", el botón de Polígono muestra
+   `pm-disabled`/`aria-disabled="true"`, y clickearlo ya no crea ningún
+   vértice (`vertexMarkerCount: 0`, contenedor de acciones con
+   `display: none`). Al terminar la edición, la clase se remueve.
+2. **Dibujar bloquea editar** (dirección inversa, para exclusión mutua
+   real): `QcConsoleMap.jsx` reporta hacia `page.jsx` (nuevo callback
+   `onDrawSessionActiveChange`) cuando hay un borrador o una capa dibujada
+   sin guardar (`vectorEditor.draft || vectorEditor.drawnLayer`).
+   `page.jsx` deshabilita el botón "Ajustar Geometría" en
+   `QcDetailEditor.jsx` (nueva prop `geometryEditDisabled`) para
+   cualquier registro que NO esté ya en edición — nunca bloquea terminar
+   una edición ya en curso.
+
+Commit: `fix(qc): excluye mutuamente editor de geometria nueva y ajuste
+de geometria existente`, push a `staging`.
+
+## Fase 2 — verificación explícita del redondeo cliente/server (2026-08-21, a pedido directo)
+
+A pedido explícito, verificación línea por línea de que el redondeo del
+panel en vivo (`lib/geo/areaUtils.js`) coincide con el server:
+
+- **Cliente** (`lib/geo/areaUtils.js:32-37`): `AREA_HA_DECIMALS = 4`,
+  `roundTo(value, decimals) { const factor = 10**decimals; return
+  Math.round(value * factor) / factor }`.
+- **`fn_validar_topologia_eudr` NO redondea ella misma**
+  (`supabase/migrations/20260820_fn_validar_topologia_eudr.sql:127`):
+  `v_area_ha := public.fn_calcular_area_ha(v_geom);` — delega.
+- **La constante real** (`supabase/migrations/20260818_gis_core_sanitization.sql:88`):
+  `ROUND((ST_Area(p_geom::geography) / 10000)::numeric, 4)`.
+
+Cantidad de decimales: coincide (4 ambos lados). Dirección de redondeo:
+coincide (Postgres `numeric` `ROUND` y JS `Math.round` redondean
+half-away-from-zero para valores positivos, y el área nunca es
+negativa).
+
+**Probado en vivo si `Number(x.toFixed(4))` sería más preciso que
+`Math.round(x*10**4)/10**4`** (la sospecha específica que motivó la
+pregunta) — no lo es: `node -e` confirmó que ambas técnicas devuelven
+exactamente el mismo resultado en el caso clásico de imprecisión de
+punto flotante (`1.005` con 2 decimales → ambas dan `1`, no `1.01`,
+porque `1.005` no es representable exacto en binario IEEE754). Ninguna
+técnica de redondeo nativa de JS evita esto — solo una librería de
+precisión arbitraria (`decimal.js`/`big.js`) lo haría, y no se agregó esa
+dependencia porque no resolvería el problema real: el área del cliente
+(`@turf/area`, esfera aproximada) y la del server
+(`ST_Area(geography)`, geodésica sobre el elipsoide WGS84) usan modelos
+matemáticos distintos de la forma de la Tierra y ya divergen varios
+dígitos ANTES del último decimal — un redondeo perfecto no las haría
+coincidir, solo redondearía con más precisión dos números que ya son
+distintos. Se documentó esto explícitamente como comentario en
+`roundTo()` (`lib/geo/areaUtils.js`) para que no se persiga esta misma
+pista de nuevo — commit de documentación, sin cambio funcional.
+
+## Divergencia turf/PostGIS cuantificada (2026-08-21, mismo día)
+
+Cuantificación real (no estimada) de la divergencia entre turf.js
+(cliente) y `fn_calcular_area_ha` (server, `ST_Area(geometry::geography)`)
+para polígonos cerca del umbral de 4.0 ha, en coordenadas reales de
+operación de RYZOS: lat/lng tomadas de un polígono `EUDR_MONITOREO` real
+existente en `ORG-COOP-NORTE`, vía consulta REST directa (`lng ≈ -78.87,
+lat ≈ -5.89`, zona Jaén, Cajamarca — no se asumió el ecuador). El área
+PostGIS se obtuvo con una llamada RPC real y directa a
+`fn_calcular_area_ha` (`POST .../rest/v1/rpc/fn_calcular_area_ha`, ya
+tiene `EXECUTE` para `anon` por default de Postgres, sin `GRANT`
+explícito) — nunca reimplementada a mano.
+
+**7 cuadrados cerca de 4.0 ha:**
+
+| área objetivo (ha) | turf (ha) | PostGIS (ha) | diff (ha) | diff (%) |
+|---|---|---|---|---|
+| 3.90 | 3.891252 | 3.874400 | 0.016852 | 0.4350% |
+| 3.95 | 3.941140 | 3.924100 | 0.017040 | 0.4342% |
+| 3.99 | 3.981050 | 3.963800 | 0.017250 | 0.4352% |
+| 4.00 | 3.991028 | 3.973700 | 0.017328 | 0.4361% |
+| 4.01 | 4.001005 | 3.983700 | 0.017305 | 0.4344% |
+| 4.05 | 4.040916 | 4.023400 | 0.017516 | 0.4353% |
+| 4.10 | 4.090803 | 4.073100 | 0.017703 | 0.4346% |
+
+**Confirmación de que la divergencia no depende de la forma** (misma
+zona real, 2 formas adicionales, área objetivo ~3.95/4.00/4.05 ha cada
+una): rectángulo 4:1 → diff 0.017040 / 0.017328 / 0.017516 ha (idéntico
+al cuadrado); pentágono irregular → diff 0.017100 / 0.017300 / 0.017500
+ha. Prácticamente el mismo valor sin importar la forma — confirma que es
+un factor de escala sistemático (esfera aproximada de turf vs elipsoide
+WGS84 real de PostGIS), no un artefacto de la forma probada.
+
+**Conclusión:** la divergencia es real, consistente, y **siempre en la
+misma dirección** — turf sobreestima respecto a PostGIS, nunca al revés,
+~0.017–0.018 ha (~0.43–0.44%) en todos los casos probados cerca de 4.0
+ha. No es despreciable frente al margen sugerido de referencia
+(0.05 ha) pero tampoco lo agota.
+
+**Decisión:** como turf siempre sobreestima, un polígono cuya área real
+(server) ya está por debajo de 4.0 ha puede aparecer en el cliente como
+>= 4.0 ha — el badge informativo de `polygonBelowThreshold` no se
+mostraría pese a que el server sí consideraría el área por debajo del
+umbral ("sub-advertencia" del cliente respecto al server, exactamente lo
+que pedía evitar la tarea). Se agregó `CLIENT_AREA_SAFETY_MARGIN_HA =
+0.03` (`lib/gisVectorEditor.js`) — corre el punto de disparo del cliente
+hacia arriba (~70% de margen sobre el máximo medido, 0.0177 ha) para que
+el cliente jamás deje de mostrar el aviso en un caso donde el server sí
+lo mostraría. No es un margen simétrico "por las dudas": la dirección
+(hacia arriba, no hacia abajo) refleja la dirección real y medida de la
+divergencia — turf nunca subestima en esta zona, así que un margen hacia
+abajo no habría corregido nada. El texto del badge se actualizó para no
+sobre-prometer precisión ("Área cercana o menor a 4.0 ha... el valor
+exacto se recalcula al guardar").
+
+`MIN_POLYGON_HECTARES` (`lib/eudrDdsExporter.js`) **no se tocó** — sigue
+siendo el umbral regulatorio real, usado tal cual en el export DDS
+(sobre el área ya calculada server-side, autoritativa, sin esta
+divergencia). El margen solo afecta la vista previa informativa del
+cliente durante el dibujo.
+
+Commit: `fix(qc): margen de seguridad en badge Requiere Polygon segun
+divergencia turf/postgis`, push a `staging` tras confirmación explícita.
+
+## Fase A (2026-08-22) — excluir la contención esperada dentro de la misma parcela
+
+**Reporte real:** una subdivisión de `EUDR_USO_SUELO` de 0.95 ha,
+completamente contenida dentro del perímetro de `EUDR_MONITOREO` de su
+propia parcela, se marcaba como "Solapado 100%" — un falso positivo, no
+un conflicto real (es la estructura esperada: el perímetro de Monitoreo
+contiene sus propias subdivisiones de Uso de Suelo).
+
+**Reglas de negocio confirmadas con el usuario:**
+1. Subdivisión de Uso de Suelo contenida en el perímetro de Monitoreo de
+   SU MISMA parcela → NO es conflicto, no cuenta en el % de "Solapado".
+2. Dos subdivisiones de Uso de Suelo de la MISMA parcela que se solapan
+   ENTRE SÍ → SÍ es conflicto (posible doble registro de la misma tierra
+   con dos usos) — sin cambios.
+3. Solapamiento contra geometrías de OTRA parcela (Monitoreo o Uso de
+   Suelo) → SÍ es conflicto (posible invasión de terreno ajeno) — sin
+   cambios.
+
+### Premisa verificada antes de escribir código — y descartada
+
+La precondición de la tarea asumía que `EUDR_USO_SUELO` tenía un campo de
+parcela comparable contra `EUDR_MONITOREO."ID_Parcela_Fija"` (con la
+advertencia explícita de "no darlo por sentado"). Verificado contra datos
+reales (REST en vivo + el GeoPackage real de un paquete de prueba
+ingerido en la sesión) y **confirmado que NO existe tal campo hoy**:
+
+- `EUDR_USO_SUELO.id_parcela` / `EUDR_INSTALACIONES.id_parcela` = el GUID
+  interno de QField del Monitoreo padre en el proyecto de campo original
+  (ej. `{4166dc2a-4cf0-452b-8eee-d5f68ce05e5c}`) — confirmado comparando
+  el layer `EUDR_MONITOREO` crudo del GeoPackage (donde `id_monitoreo` SÍ
+  es ese mismo GUID) contra el layer `EUDR_USO_SUELO` (`id_parcela`
+  idéntico para las subdivisiones de esa misma parcela).
+- Pero `scripts/etl_drive_to_supabase.py::build_monitoreo_payload`
+  **recalcula `id_monitoreo` de forma determinística** a partir de
+  `(org, ID_Parcela_Fija, fecha)` antes de escribir a `EUDR_MONITOREO` —
+  confirmado en datos reales insertados (GUID crudo `{4166dc2a-...}` →
+  `id_monitoreo` almacenado `b12677bd-6b88-...`, sin relación). El GUID
+  original que vincularía ambas tablas **nunca se persiste**.
+- Conclusión: `EUDR_USO_SUELO.id_parcela` y `EUDR_MONITOREO."ID_Parcela_Fija"`
+  son identificadores de espacios completamente distintos — comparables
+  por igualdad, esa comparación NUNCA sería verdadera. Implementar el fix
+  así habría sido un no-op disfrazado de fix.
+
+### Decisión: heurístico espacial de contención exclusiva (temporal)
+
+Confirmado con el usuario tras plantear la disyuntiva (ampliar el ETL
+para preservar el GUID real, vs. un heurístico espacial sin tocar
+ingesta): se usa un heurístico espacial con una condición de seguridad
+estricta. En `fn_validar_topologia_eudr`, al validar una fila de
+`EUDR_USO_SUELO`, "misma parcela" = el **único** perímetro de
+`EUDR_MONITOREO` APROBADO (misma organización) que **contiene por
+completo** (`ST_Contains`) la subdivisión:
+
+- Si hay **exactamente un** perímetro que la contiene → se excluye del
+  cálculo de `% Solapado` (es la estructura esperada).
+- Si hay **cero o más de uno** → no se excluye nada, se mantiene el
+  comportamiento anterior (se sigue marcando como solapamiento). Nunca se
+  asume silenciosamente cuál es "la" parcela correcta ante ambigüedad —
+  el error va siempre hacia "seguir mostrando la alerta", nunca hacia
+  "ocultarla de más".
+
+**Esto es un heurístico TEMPORAL, no una relación real de datos.**
+Depende de que las parcelas vecinas no se solapen físicamente entre sí en
+la práctica — si dos perímetros de parcelas vecinas sí se solapan y ambos
+contienen la misma subdivisión, el caso cae en "más de uno" y se sigue
+marcando (correcto por el lado seguro, aunque implique una alerta
+innecesaria en ese caso específico). Antes de la Fase B (cobertura
+completa de deforestación, que sí bloquea aprobaciones) hace falta
+resolver el vínculo real vía GUID — usar un match geométrico para decidir
+qué áreas sumar y bloquear una aprobación es un riesgo mucho mayor que
+usarlo acá solo para suprimir una alerta informativa.
+
+La regla 2 (dos subdivisiones de la misma parcela solapadas entre sí)
+**no requirió ningún cambio**: el heurístico solo excluye geometrías de
+la rama `EUDR_MONITOREO` del CTE de candidatos, nunca de la rama
+`EUDR_USO_SUELO` — dos subdivisiones que se solapan entre sí siguen
+comparándose exactamente igual que antes, sin importar si son de la
+misma parcela o de parcelas distintas.
+
+### Reproducción real del bug (en vivo, antes del fix)
+
+Contra la instancia real (`curl` a `/rest/v1/rpc/fn_validar_topologia_eudr`,
+Service Role Key, sin aplicar todavía la migración de Fase A):
+
+| `EUDR_USO_SUELO.id` | Área | `solapa` | `solapamiento_max_pct` | Contra |
+|---|---|---|---|---|
+| 18 | 0.9455 ha | `true` | 100.00% | su propio `EUDR_MONITOREO` (`b2f305a0-...`, `ID_Parcela_Fija=COOP-JS-001`) |
+| 19 | 4.8570 ha | `true` | 100.00% | su propio `EUDR_MONITOREO` (`10425cbd-...`, `ID_Parcela_Fija=COOP-JS-003`) |
+| 20 | 10.1873 ha | `true` | 99.64% | su propio `EUDR_MONITOREO` (`10425cbd-...`, `ID_Parcela_Fija=COOP-JS-003`) |
+
+El caso `id=18` (0.9455 ha) coincide con el reporte original ("0.95 ha
+completamente dentro del perímetro de su propia parcela"). `id=19`/`id=20`
+confirman el mismo patrón con otra parcela — ambas reproducciones reales,
+no fixtures sintéticos.
+
+### Frontend — sin cambios de código necesarios
+
+El badge y la alerta ámbar de "Validación topológica & EUDR"
+(`QcDetailEditor.jsx`) ya derivan exclusivamente de `result.solapa` /
+`result.solapamiento_max_pct`, que vienen tal cual de la RPC. Con el fix
+en la función, un caso de contención exclusiva pasa a `solapa: false`
+automáticamente — sin tocar ningún componente. El indicador neutral
+opcional ("Contenido correctamente en su parcela") mencionado como
+posible mejora en el prompt no se implementó en esta fase (explícitamente
+no obligatorio) — sí se agregó el campo `contenido_en_parcela_propia`
+(booleano) en la respuesta de la RPC, de costo casi nulo ya que el valor
+se calcula de todos modos, disponible para una UI futura sin otra
+migración.
+
+### Verificación
+
+`node --test tests/test_qc_editor_bugs_and_solapamiento.mjs` — pruebas
+de inspección de código sobre la nueva migración: confirma que el
+heurístico solo aplica a `EUDR_USO_SUELO`, solo excluye con conteo exacto
+de 1, solo toca la rama `EUDR_MONITOREO` del CTE (nunca la rama
+`EUDR_USO_SUELO` — preserva la regla 2), y que el filtro por organización
+/ exclusión del propio registro siguen intactos (preserva la regla 3).
+
+**Bug real encontrado en la primera aplicación:** `MIN(id_monitoreo)`
+falló en vivo con `{"code":"42883","message":"function min(uuid) does
+not exist"}` — Postgres no tiene un agregado `MIN`/`MAX` registrado para
+`uuid` (sí soporta `<`/`>`, pero no el agregado). Reemplazado por
+`(array_agg(id_monitoreo))[1]`, que no depende de ningún agregado de
+orden (`count(*) = 1` ya garantiza que es el único elemento). Confirmado
+con los 3 registros reales, que fallaban los 3 por igual con el mismo
+error (no era específico de uno).
+
+**Verificación EN VIVO del "después"** (tras aplicar la migración
+corregida):
+
+| Caso | Antes | Después | ¿Coincide con lo esperado? |
+|---|---|---|---|
+| `id=18` (0.9455 ha) | `solapa:true`, 100% | `solapa:false`, `contenido_en_parcela_propia:true` | Sí |
+| `id=19` (4.8570 ha) | `solapa:true`, 100% | `solapa:false`, `contenido_en_parcela_propia:true` | Sí |
+| `id=20` (10.1873 ha) | `solapa:true`, 99.64% | `solapa:true`, 99.64%, `contenido_en_parcela_propia:false` | **Sin cambio — y es correcto** |
+
+`id=20` NO se excluyó, a propósito: su solapamiento con su propio
+Monitoreo padre es 99.64%, no 100% — un 0.36% de su área queda fuera del
+perímetro (desalineación real de GPS de campo entre las dos capturas).
+`ST_Contains` exige contención completa; al no cumplirse, no hay ningún
+candidato con containment exclusivo (0 candidatos, no >1), así que el
+heurístico correctamente NO excluye nada — exactamente el comportamiento
+"el error va siempre hacia seguir mostrando la alerta" que pidió el
+usuario, demostrado con un caso real, no solo documentado en teoría.
+
+**Regla 2 confirmada en vivo con un fixture desechable:** se insertaron 2
+filas reales en `EUDR_USO_SUELO` (`ID_Organizacion=ORG-TEST-E2E`,
+`estado_revision=APROBADO`, mismo `id_parcela` sintético, dos cuadrados
+solapados 25% entre sí, ubicados lejos de cualquier parcela real para
+aislar la prueba) — `id=21`/`id=22`. Ambos devolvieron `solapa:true,
+solapamiento_max_pct:25.00, contenido_en_parcela_propia:false`, cada uno
+señalando al otro como `registros_solapados`. Confirma la regla 2 sin
+cambios. Fixture borrado por `id` inmediatamente después (`DELETE
+... WHERE id IN (21,22)`, nunca un DELETE sin acotar) — conteo verificado
+en 2 antes y 0 después, sin nada residual.
+
+Commit: `fix(qc): excluye contencion esperada dentro de la misma parcela
+del calculo de solapamiento` + `fix(qc): corrige MIN(uuid) inexistente en
+Postgres`, sin push — pendiente de confirmación explícita.
+
+## Fase A — Seguimiento (2026-08-23) — margen de tolerancia para ruido GPS real
+
+El caso real `id=20` (99.64% de contención, `ST_Contains` estricto
+devolvió `false`) demostró que exigir contención al 100% casi nunca
+calza en la práctica — el ruido GPS típico entre dos capturas de campo
+distintas (perímetro de Monitoreo vs. subdivisión de Uso de Suelo, cada
+una tomada con su propio GPS de mano) hace que un caso de contención
+genuina rara vez sea matemáticamente exacto.
+
+### Decisión: umbral de contención con nombre, ambigüedad sin relajar
+
+Se reemplazó `ST_Contains(geom_inspeccion, v_geom)` (contención exacta,
+0% de margen) por un chequeo de porcentaje de área contenida:
+
+```sql
+v_umbral_contencion_pct constant numeric := 0.98;
+...
+AND ST_Area(ST_Intersection(geom_inspeccion, v_geom)::geography)
+    / NULLIF(ST_Area(v_geom::geography), 0) >= v_umbral_contencion_pct;
+```
+
+`v_umbral_contencion_pct` es una constante con nombre (no un número
+mágico inline), declarada `constant` en el `DECLARE` del bloque
+`plpgsql`, documentada in situ y en la cabecera de la migración —
+ajustable en el futuro si aparecen casos reales por debajo del 98%.
+
+**La condición de ambigüedad NO se relajó junto con el umbral**: sigue
+siendo `count(*) = 1` exacto, ahora evaluado sobre el nuevo criterio de
+"≥98% contenido" en vez de "100% contenido". Si dos perímetros (ej.
+parcelas vecinas que se solapan entre sí) superan igual el 98%, la
+ambigüedad sigue resolviéndose hacia "no excluir nada" — mismo
+comportamiento seguro de siempre, verificado en vivo con un fixture
+específico para este caso (ver abajo).
+
+### Verificación en vivo completa (con el margen de tolerancia aplicado)
+
+**(1) `id=20` — el caso que motivó el cambio:**
+
+| | Antes (Fase A original, 100%) | Después (98%) |
+|---|---|---|
+| `solapa` | `true` | **`false`** |
+| `contenido_en_parcela_propia` | `false` | **`true`** |
+
+**(2) Ambigüedad bajo el NUEVO criterio (fixture desechable):** se
+insertaron 2 perímetros `EUDR_MONITOREO` reales (`APROBADO`,
+`ID_Organizacion=ORG-TEST-E2E`, `ID_Parcela_Fija` `FIXTURE-AMBIG-A`/`-B`,
+dos cuadrados grandes superpuestos entre sí) y una subdivisión
+`EUDR_USO_SUELO` sintética pequeña, ubicada completamente dentro de la
+zona de superposición de ambos (contención 100% para los dos). Resultado
+real:
+
+```json
+{"solapa": true, "contenido_en_parcela_propia": false,
+ "registros_solapados": [
+   {"registro_id": "4f384a07-...", "tabla_origen": "EUDR_MONITOREO", "solapamiento_pct": 100.00},
+   {"registro_id": "372960d3-...", "tabla_origen": "EUDR_MONITOREO", "solapamiento_pct": 100.00}
+ ]}
+```
+
+Con 2 candidatos que superan el umbral, `v_contenedor_exclusivo` queda
+`NULL` y NO se excluye nada — ambos perímetros aparecen en
+`registros_solapados`, la alerta se sigue mostrando. Confirma que la
+condición de ambigüedad sigue aplicando sobre el criterio con margen, tal
+como se pidió. Los 3 registros del fixture (1 `EUDR_USO_SUELO` + 2
+`EUDR_MONITOREO`) se borraron por id/id_monitoreo inmediatamente después
+— conteo verificado en 3 antes y 0 después.
+
+**(3) Regresión — sin cambios respecto a Fase A original:**
+
+| Caso | Resultado |
+|---|---|
+| `id=18` | `solapa:false`, `contenido_en_parcela_propia:true` (sin cambio) |
+| `id=19` | `solapa:false`, `contenido_en_parcela_propia:true` (sin cambio) |
+| Hermanas solapadas (fixture recreado, ids 23/24 — los ids 21/22 originales ya no estaban disponibles por ser `id` autoincremental) | `solapa:true`, `solapamiento_max_pct:25.00`, `contenido_en_parcela_propia:false` en ambos (idéntico al resultado de Fase A original) |
+
+Fixture de hermanas borrado por `id` inmediatamente después — conteo
+verificado en 2 antes y 0 después.
+
+### Bug real encontrado y corregido antes de esta verificación
+
+`MIN(id_monitoreo)` (donde `id_monitoreo` es `uuid`) falló en vivo con
+`{"code":"42883","message":"function min(uuid) does not exist"}` —
+Postgres no tiene agregado `MIN`/`MAX` registrado para `uuid`. Los 3
+casos reales (`id=18/19/20`) fallaron por igual con el mismo error, no
+uno específico. Corregido con `(array_agg(id_monitoreo))[1]` (no depende
+de ningún agregado de orden; `count(*) = 1` ya garantiza que es el único
+elemento del array) — ver commit `d2bcebd`.
+
+Commit: `fix(qc): agrega margen de tolerancia al heuristico de contencion
+para ruido GPS real`, sin push — pendiente de confirmación explícita.

@@ -21,7 +21,7 @@ export const dynamic = 'force-dynamic'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { resolveDriveRoot, parseEtlSummary } from '@/lib/driveSyncTrigger'
+import { resolveDriveRoot, parseEtlSummary, buildSyncErrorDetail } from '@/lib/driveSyncTrigger'
 
 const SCRIPT_RELATIVE_PATH = path.join('scripts', 'etl_drive_to_supabase.py')
 
@@ -95,7 +95,7 @@ export async function POST() {
         available: true,
         success: false,
         message: 'El script de sincronización terminó con un error.',
-        detail: (stderr || stdout).slice(-2000),
+        detail: buildSyncErrorDetail({ code, stdout, stderr }),
       },
       { status: 500 }
     )

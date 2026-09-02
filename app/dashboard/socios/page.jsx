@@ -4,9 +4,10 @@ export const dynamic = 'force-dynamic'
 
 import { useEffect, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
-import { fetchSocios, resolveActiveOrganizationId } from '@/lib/sociosSearch'
+import { fetchSocios } from '@/lib/sociosSearch'
 import { CERT_FLAG_FIELDS } from '@/lib/validations/socios'
 import { deactivateSocio } from '@/lib/actions/sociosActions'
+import { resolveTestOrganizationOverride } from '@/lib/actions/organizacionesActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
 import { exportSociosCsv, exportParcelasCsv } from '@/lib/padronCsv'
 import SocioFormModal from '@/components/features/socios/SocioFormModal'
@@ -35,19 +36,30 @@ export default function SociosPage() {
   const [deactivating, setDeactivating] = useState(false)
   const [showImport, setShowImport] = useState(false)
 
-  // FIX (2026-08-18, "Violación multi-tenant" falso positivo al editar
-  // parcelas): esta tabla no filtra por ID_Organizacion (fetchSocios no
-  // lo hace, ver lib/sociosSearch.js) — la página puede mostrar socios de
-  // más de una organización a la vez. `organizationId` acá es solo una
-  // heurística de "mejor esfuerzo" para el caso de ALTA de un socio nuevo
-  // (no hay ningún registro existente del que tomar el valor real). Para
-  // EDITAR un socio o gestionar las parcelas de uno ya existente, SIEMPRE
-  // se debe usar `<registro>.ID_Organizacion` real (ver más abajo,
-  // `editingSocio.ID_Organizacion` / `parcelasSocio.ID_Organizacion`) —
-  // nunca esta heurística de página, que puede apuntar a una organización
-  // distinta a la del registro que realmente se está editando.
-  const organizationId = resolveActiveOrganizationId(rows)
+  // Ronda 8 (2026-09-01, mejoras_importador_padron_masivo.md):
+  // `organizationId` ahora viene directo del retorno de `fetchSocios`
+  // (con fallback vía Server Action cuando PADRON_SOCIOS está vacío para
+  // la organización -- caso real de una organización recién dada de
+  // alta, antes de su primera carga masiva) en vez de re-derivarse acá
+  // con `resolveActiveOrganizationId(rows)` (retirada de
+  // lib/sociosSearch.js -- esa era la causa real de "No se pudo
+  // determinar la organización activa": devolvía `null` apenas `rows`
+  // estaba vacío). Para EDITAR un socio o gestionar las parcelas de uno
+  // ya existente, se sigue prefiriendo `<registro>.ID_Organizacion` real
+  // (`editingSocio.ID_Organizacion` / `parcelasSocio.ID_Organizacion`,
+  // ver más abajo) — mismo criterio de siempre, no depender de esta
+  // variable de página para escrituras.
+  const [organizationId, setOrganizationId] = useState(null)
 
+  // TEMPORAL (ronda de robustez del importador contra ORG-TEST-DEMO, ver
+  // AI_STATE.md 2026-09-01f): ?org=<codigo> en la URL, verificado contra
+  // ORGANIZACIONES (resolveTestOrganizationOverride, Server Action) antes
+  // de usarse -- nunca se confía en el valor crudo de la URL. Se lee con
+  // `window.location.search` (no `useSearchParams` de next/navigation)
+  // para evitar el requisito de envolver la página en `<Suspense>` solo
+  // por esto -- la página ya es 100% client-side (`export const dynamic
+  // = 'force-dynamic'`), así que no hay nada que se pierda por leerlo así.
+  // Sin `?org=` en la URL, el comportamiento es idéntico al de siempre.
   async function load() {
     setLoading(true)
     setError(null)
@@ -58,14 +70,24 @@ export default function SociosPage() {
       return
     }
     try {
-      const { rows: data, total: count, pageSize: size } = await fetchSocios(supabase, {
+      const orgParam = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('org') : null
+      const organizationIdOverride = orgParam ? await resolveTestOrganizationOverride(orgParam) : null
+
+      const {
+        rows: data,
+        total: count,
+        pageSize: size,
+        organizationId: orgId,
+      } = await fetchSocios({
         page,
         search,
         filters: { certOrgEstatus, certFlags, departamento },
+        organizationIdOverride,
       })
       setRows(data)
       setTotal(count)
       setPageSize(size)
+      setOrganizationId(orgId)
     } catch (err) {
       setError(err?.message || 'Error al cargar el padrón de socios.')
     } finally {
@@ -103,7 +125,7 @@ export default function SociosPage() {
       return
     }
     try {
-      const { socios } = await exportSociosCsv(supabase)
+      const { socios } = await exportSociosCsv(supabase, organizationId)
       setToast({ type: 'success', message: `Exportado: ${socios} socio(s).` })
     } catch (err) {
       setToast({ type: 'error', message: err?.message || 'Error al exportar el padrón de socios.' })
@@ -117,7 +139,7 @@ export default function SociosPage() {
       return
     }
     try {
-      const { parcelas } = await exportParcelasCsv(supabase)
+      const { parcelas } = await exportParcelasCsv(supabase, organizationId)
       setToast({ type: 'success', message: `Exportado: ${parcelas} parcela(s).` })
     } catch (err) {
       setToast({ type: 'error', message: err?.message || 'Error al exportar el padrón de parcelas.' })

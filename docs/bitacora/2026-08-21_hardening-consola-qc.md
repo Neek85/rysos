@@ -1,0 +1,887 @@
+# Bitácora — Refuerzo de la Consola QC (21–23 de agosto de 2026)
+
+*Para cualquiera que quiera entender qué pasó en este tramo de trabajo sin
+necesidad de leer código. Cubre desde el commit `0d003e8` hasta el
+`a7fd9f6`.*
+
+> **Nota sobre el número de commits:** el pedido original de esta bitácora
+> hablaba de "9 commits". Revisando el historial real, el tramo de
+> trabajo que cubre todo lo pedido (los bugs de la Consola QC, el panel
+> en vivo, la capa de parcelas vecinas, el incidente de datos huérfanos y
+> el fix de sincronización de Drive) son en realidad **15 commits**, no
+> 9. Se corrige el número acá para que la bitácora quede exacta; el
+> listado completo está al final.
+
+> **Actualización (mismo 23 de agosto, más tarde):** se agregaron las
+> secciones 6 y 7 (que corrieron el resto del documento un lugar hacia
+> abajo), con el trabajo de 3 commits nuevos (`1ec2c2d`, `5c6d4f9`,
+> `2ac75d6`) que siguieron directamente después de `f099a75`: el vínculo
+> real entre subdivisiones y su parcela madre, la validación de cobertura
+> completa, y un bug crítico encontrado y corregido el mismo día. La
+> sección 8 ("Qué queda pendiente") y la tabla técnica de la sección 9
+> también se actualizaron para reflejar esto.
+
+> **Actualización (mismo 23 de agosto, más tarde todavía):** se agregó la
+> sección 8 ("El incidente de las aprobaciones que se revertían solas — y
+> dos problemas más que destapó"), que corrió "Qué queda pendiente" y la
+> tabla técnica un lugar más hacia abajo (ahora 9 y 10). Cubre 4 commits
+> nuevos (`4de126d`, `a611779`, `9ad7aa2`, `6611451`) que siguieron
+> directamente después de `2ac75d6`: una pregunta simple sobre polígonos
+> duplicados al sincronizar Drive terminó destapando tres problemas reales
+> distintos — aprobaciones que se revertían solas sin dejar rastro, una
+> tabla de auditoría que existía solo en el papel, y códigos de parcela
+> repetidos en lugares físicamente distintos.
+
+> **Actualización (mismo 23 de agosto, cierre de la sesión):** se agregó
+> la sección 9 ("El error que apuntaba a la causa equivocada, y un repaso
+> del padrón de socios"), que corrió "Qué queda pendiente" y la tabla
+> técnica un lugar más hacia abajo (ahora 10 y 11). Cubre 3 commits nuevos
+> (`5ad2aa3`, `e938d0d`, `a7fd9f6`) que siguieron directamente después de
+> `79a2e30`: un mensaje de conflicto de código de parcela reescrito en
+> lenguaje simple, un bug real (sin relación con lo que el propio mensaje
+> de error decía) que impedía aprobar registros de Instalaciones, y un
+> repaso completo de cómo funciona hoy la baja de socios y qué haría falta
+> para transferir una parcela entre organizaciones.
+
+> **Actualización (24 de agosto de 2026):** se agregó la sección 10 ("El
+> Editor Vectorial: cuatro problemas de uso diario, y un hallazgo que
+> apareció probándolo"), que corrió "Qué queda pendiente" y la tabla
+> técnica un lugar más hacia abajo (ahora 11 y 12). Cubre 4 commits nuevos
+> (`70ff8a7`, `0bcae00`, `3ecf718`, `5c13874`) que siguieron después de
+> `a66218a` (el commit que escribió esta misma bitácora): cuatro problemas
+> reales de uso diario del Editor Vectorial (crear registros nuevos
+> dibujando sobre el mapa), encontrados usando la herramienta, no
+> inventados — y, en el medio de probar la corrección del último, un
+> hallazgo real de datos mezclados entre organizaciones que se corrigió
+> con el mismo patrón de dos capas ya usado para el conflicto de código de
+> parcela (punto 8.3). Queda fuera de este rango un commit más
+> (`d0ae441`, sobre el formato del paquete de exportación de trazabilidad
+> EUDR) — es de un tema completamente distinto (no toca la Consola QC ni
+> el Editor Vectorial) y ya tiene su propia documentación aparte, así que
+> no se incluye acá.
+
+> **Actualización (25 de agosto de 2026):** se agregó la sección 11 ("El
+> Editor Vectorial, de punta a punta: el vínculo de cobertura, la parcela
+> nueva, e Instalaciones"), que corrió "Qué queda pendiente" y la tabla
+> técnica un lugar más hacia abajo (ahora 12 y 13). Cubre 3 commits nuevos
+> (`1e0f09d`, `9088eb1`, `d8cbb2e`) que siguieron directamente después de
+> `d777f99` (el commit que escribió la sección anterior): mientras se
+> probaba de punta a punta la creación de socios y parcelas nuevas desde
+> el mapa, apareció un bug real que dejaba invisible, en silencio, toda
+> subdivisión de Uso de Suelo creada así para el cálculo de cobertura de
+> Fase B — corregido extendiendo el mismo mecanismo ya usado para los
+> datos de campo. En el camino, un número de verificación físicamente
+> imposible (29,371 hectáreas) resultó ser un error de metodología de
+> prueba, no un bug de código — se cuenta acá cómo se detectó y cómo se
+> confirmó. También se agregó la posibilidad de crear una parcela nueva
+> directamente desde el Editor Vectorial, y se cerró la duda pendiente
+> sobre por qué "Instalaciones" no aparecía como tabla destino.
+
+---
+
+## 1. Qué problemas reales se encontraron y corrigieron en la Consola QC
+
+La Consola QC (`/dashboard/qc`) es la pantalla donde un revisor aprueba o
+rechaza los monitoreos que suben los técnicos de campo, y donde puede
+corregir la geometría (el polígono dibujado en el mapa) si hace falta.
+En este tramo de trabajo aparecieron tres problemas reales de uso:
+
+**a) Dos herramientas de dibujo se pisaban entre sí.** La consola tiene
+dos formas de editar geometría: "dibujar un registro nuevo" y "ajustar
+la geometría de un registro ya existente". Estaban pensadas para
+excluirse mutuamente (una bloquea a la otra mientras está activa), pero
+en la práctica un revisor podía dejar un registro existente en modo
+"Editando…" y, sin salir de ahí, arrancar a dibujar un polígono nuevo
+por encima — dejando la pantalla en un estado confuso, con dos ediciones
+superpuestas. Se corrigió para que ambas herramientas se bloqueen entre
+sí de verdad, en las dos direcciones: editar bloquea dibujar, y dibujar
+bloquea editar. En el camino apareció un bug relacionado (una función de
+Leaflet mal usada) que dejaba el editor de mapa completamente roto —
+también se corrigió.
+
+**b) Un popup mostraba el nombre técnico de la tabla en vez de algo
+legible.** Al seleccionar un registro de "Instalaciones" en el mapa,
+aparecía literalmente el texto `EUDR_INSTALACIONES` sobre el mapa — un
+nombre de tabla de base de datos, no algo pensado para que lo vea una
+persona. Se sacó ese popup (el panel lateral ya mostraba la misma
+información con un nombre legible, así que no hacía falta reemplazarlo
+por otra cosa).
+
+**c) El "% Solapado" no se podía verificar a simple vista.** Cuando la
+consola marcaba un registro como "Solapado 40%" (es decir, su polígono
+se superpone con otro ya aprobado), no había forma de ver EN EL MAPA
+cuál era ese otro polígono — el revisor tenía que confiar en el número a
+ciegas. Se agregó una segunda capa en el mapa (línea punteada ámbar) que
+dibuja exactamente los polígonos con los que se está solapando, para que
+el revisor pueda verlo con sus propios ojos antes de decidir.
+
+---
+
+## 2. Qué mejoras nuevas se agregaron
+
+**a) Panel de información en vivo mientras se dibuja.** Antes, para
+saber el área o el perímetro de un polígono que se estaba dibujando,
+había que terminar de dibujarlo y guardarlo. Ahora hay un panel que
+muestra área, perímetro y si la forma es válida **mientras se está
+dibujando**, actualizado en tiempo real. Se verificó con cuidado que el
+número que muestra ese panel (calculado en el navegador) coincide con el
+número real que después calcula el servidor — coinciden, con la
+salvedad de que usan dos fórmulas matemáticas ligeramente distintas para
+medir superficies sobre un globo (una aproxima la Tierra como una
+esfera, la otra usa la forma real, algo ovalada) — la diferencia es
+mínima (menos de medio por ciento) pero se agregó un margen de seguridad
+para que, en un polígono al filo de las 4 hectáreas (el umbral legal
+EUDR), el panel del navegador nunca deje de avisar cuando el servidor sí
+lo haría.
+
+**b) Capa de "parcelas vecinas" como contexto.** Se agregó una tercera
+capa en el mapa, puramente informativa: mientras un revisor dibuja o
+ajusta un polígono, la consola muestra (en gris, para no confundirla con
+una alerta real) qué otros monitoreos aprobados hay cerca, dentro de un
+radio de 500 metros por defecto. No implica ningún conflicto — es solo
+"esto es lo que hay alrededor". El radio se puede configurar por
+organización, aunque hoy no hay una pantalla para hacerlo (se deja
+apuntado como tarea pendiente si hiciera falta).
+
+**c) El sistema dejó de confundir "tu propia parcela" con "un
+conflicto".** Este fue el cambio más delicado del tramo — se explica en
+detalle abajo, en el punto 4, porque está ligado al mismo incidente de
+datos de prueba.
+
+---
+
+## 3. El sistema de solapamiento: de un falso positivo a un cálculo confiable
+
+Una parcela real en RYZOS tiene un perímetro general (el "Monitoreo") y,
+adentro, subdivisiones por tipo de uso de la tierra ("Uso de Suelo" —
+por ejemplo, una parte en producción de café, otra en pasto). Es
+completamente normal que esas subdivisiones estén DENTRO del perímetro
+general — no es un conflicto, es la estructura esperada.
+
+El sistema, sin embargo, no distinguía eso: si una subdivisión estaba
+contenida en el perímetro de su propia parcela, la marcaba igual como
+"Solapado 100%", como si fuera una invasión de terreno ajeno. Se
+confirmó con un caso real: una subdivisión de 0.95 hectáreas, totalmente
+adentro de su propio perímetro, aparecía con la alerta amarilla de
+conflicto.
+
+Corregirlo resultó más difícil de lo esperado, porque **no existe hoy
+ninguna forma directa de saber, en la base de datos, a qué perímetro
+"pertenece" cada subdivisión** — el dato que debería vincularlos (un
+identificador interno del sistema de captura de campo, QField) se pierde
+durante el proceso de carga de datos y nunca queda guardado. Se decidió,
+como solución provisoria, usar la ubicación real en el mapa: si una
+subdivisión está **completamente adentro** de un único perímetro
+aprobado (y de uno solo — si hay ambigüedad, por ejemplo dos parcelas
+vecinas que se superponen entre sí, el sistema NO asume nada y sigue
+mostrando la alerta), se considera que es su propia parcela y deja de
+contar como conflicto.
+
+Al probarlo contra casos reales apareció un matiz importante: exigir que
+la subdivisión esté contenida "al 100% exacto" casi nunca se cumplía en
+la práctica, porque el perímetro y la subdivisión se capturan por
+separado en el campo, cada uno con su propio GPS de mano, y ese margen
+de error entre dos capturas hace que casi nunca calcen matemáticamente
+perfecto (se encontró un caso real al 99.64% de contención). Se ajustó
+el criterio a un margen razonable (98% de contención, en vez de 100%
+exacto) — manteniendo intacta la regla de "si hay ambigüedad, no asumas
+nada", que se volvió a verificar con casos de prueba después del ajuste.
+
+Este arreglo NO cambia dos cosas importantes: si dos subdivisiones de
+una misma parcela se superponen entre sí (posible doble registro de la
+misma tierra con dos usos), eso SIGUE marcándose como conflicto. Y
+cualquier superposición contra una parcela distinta (posible invasión de
+terreno de otro productor) también SIGUE marcándose — este cambio solo
+afecta el caso específico de "mi propia subdivisión, dentro de mi propio
+perímetro".
+
+Es, deliberadamente, una solución **provisoria** basada en la ubicación
+en el mapa, no una relación real y confiable de datos — antes de avanzar
+a una etapa futura más exigente (donde el sistema sumaría áreas y podría
+llegar a bloquear una aprobación automáticamente), hace falta resolver
+el vínculo real entre parcela y subdivisión de una forma más sólida que
+"mirar dónde cae en el mapa".
+
+---
+
+## 4. El incidente de los datos huérfanos
+
+Durante este tramo se descubrió que había datos de prueba reales
+mezclados en la base de datos de producción, usando un nombre de
+organización — `ORG-COOP-NORTE` — que **no correspondía a ningún
+cliente real**. Concretamente: 14 registros (monitoreos, subdivisiones e
+instalaciones) que un script de pruebas automáticas había ido dejando en
+la base cada vez que se corría, sin limpiarlos después.
+
+**Qué se decidió:** antes de borrar nada, se auditó **todo** el sistema
+para confirmar que este era el único caso de este tipo (no había otros
+"huérfanos" escondidos en otras tablas) — se confirmó que sí, era el
+único caso. Recién con esa confirmación, y con aprobación explícita, se
+borraron los 14 registros de prueba.
+
+**Qué protección se agregó para que no vuelva a pasar:**
+
+1. **Una etiqueta nueva en la base de datos** que marca explícitamente
+   qué organizaciones son de prueba y cuáles son reales — por defecto,
+   cualquier organización sin marcar se trata como **real**, para que el
+   error, si alguna vez ocurre, sea "tratar algo de prueba como real"
+   (inofensivo) y nunca al revés.
+2. **El script de pruebas automáticas ahora se niega a correr** si la
+   organización contra la que va a escribir no está marcada
+   explícitamente como "de prueba" — en vez de escribir datos de prueba
+   en cualquier lado por error, aborta sin escribir nada.
+3. **Una regla de base de datos** (a nivel de motor, no solo de código)
+   que impide insertar un registro con una organización que no existe
+   realmente — así que aunque alguien se equivoque escribiendo el
+   nombre, el sistema lo rechaza automáticamente en vez de aceptarlo en
+   silencio.
+4. **Un protocolo nuevo, por escrito**, para cualquier borrado o
+   actualización masiva futura: antes de ejecutar algo así, hay que
+   mostrar el conteo real de filas afectadas y el nombre real de la
+   organización, y esperar una confirmación humana explícita citando
+   esos números — nunca un "sí" genérico. Esta regla aplica sin importar
+   si quien lo ejecuta es una persona, un script, o un asistente de IA.
+
+---
+
+## 5. El botón "Sincronizar Google Drive" — de un error mudo a un mensaje útil
+
+El botón de sincronización manual (que trae datos de campo desde una
+carpeta de Google Drive a la base de datos, solo funciona en entorno de
+desarrollo local) empezó a fallar con el mensaje genérico "El script de
+sincronización terminó con un error" — sin ningún detalle de qué había
+salido mal.
+
+La causa real resultó ser doble:
+
+1. Un cliente de prueba había dejado, sin darse cuenta, un archivo real
+   con la organización de prueba equivocada (`ORG-COOP-NORTE`, la misma
+   del incidente anterior) — al renombrarse esa carpeta a la
+   organización de prueba correcta, ese caso puntual se resolvió solo.
+2. Pero el mensaje de error en sí **nunca mostraba el detalle real** del
+   problema, ni siquiera cuando el problema era otro completamente
+   distinto — el código descartaba esa información en vez de mostrarla.
+   Se corrigió para que, de ahora en más, cualquier error real (el que
+   sea) se muestre con un mensaje específico y útil en vez del genérico
+   de siempre.
+
+---
+
+## 6. El vínculo real entre una subdivisión y su parcela madre
+
+La solución provisoria descrita en el punto 3 (adivinar "esta subdivisión
+es de esta parcela" mirando dónde cae en el mapa) funcionaba para avisar
+de un falso conflicto de solapamiento, pero no era suficientemente sólida
+para algo más serio: usarla para decidir si una parcela ya está
+completamente clasificada o no, y menos todavía para bloquear una
+aprobación en base a eso. Un cálculo "por ubicación" siempre deja un
+margen de duda; una decisión que bloquea el trabajo de alguien necesita
+un dato real, no una suposición geográfica.
+
+Investigando cómo llegan los datos desde el celular del técnico de campo
+hasta la base de datos, apareció la solución de fondo: el sistema de
+captura (QField) sí guarda, desde el origen, un identificador que conecta
+cada subdivisión con su parcela — pero ese dato se estaba descartando
+sin querer durante el proceso de carga, nunca llegaba a guardarse. Se
+corrigió para que, de ahora en adelante, ese identificador se preserve —
+y a partir de eso, "esta subdivisión pertenece a esta parcela" pasó a ser
+un dato certero, no una suposición basada en el mapa.
+
+Para las subdivisiones que ya estaban cargadas antes de este cambio (y
+que por lo tanto nunca guardaron ese identificador), se recuperó el dato
+para los casos posibles usando, por única vez y con mucho cuidado, la
+misma técnica de "mirar el mapa" de antes — y solo cuando no había
+ninguna duda. Con los pocos datos reales que existen hoy: **2 parcelas
+se pudieron vincular sin ninguna ambigüedad, 1 quedó sin vincular por
+simple falta de datos (no había ninguna subdivisión ahí todavía), y 0
+casos quedaron en duda.** Antes de tocar cualquier dato existente, se
+mostró ese resultado y se esperó una confirmación explícita — mismo
+criterio que se usó durante todo este tramo de trabajo para cualquier
+cambio sobre datos ya cargados.
+
+## 7. Validación de cobertura completa — y un bug crítico encontrado a tiempo
+
+**Por qué importa para EUDR:** una parcela de café puede tener varias
+subdivisiones (una parte en producción, otra en pasto, etc.). Para que
+un reporte de cumplimiento ambiental sea confiable, esas subdivisiones
+tienen que sumar el 100% del terreno real de la parcela — si queda un
+pedazo de tierra sin clasificar, ese reporte está incompleto sin que
+nadie se dé cuenta a simple vista. Por eso se construyó una validación
+que compara el área real del perímetro contra la suma de las
+subdivisiones ya aprobadas, y avisa cuando falta cubrir más del 5% del
+terreno.
+
+**El dato del Padrón no sirve para esto.** Antes de construir la
+validación, se investigó si se podía usar un número que ya existe en el
+sistema del Padrón de productores (`totalh`, el total de hectáreas
+declaradas) en vez de calcular el área real del mapa. Con los pocos
+casos reales disponibles para comprobarlo, el resultado fue contundente:
+en una parcela real (`COOP-JS-003`), el Padrón decía 2.25 hectáreas
+mientras que el área real medida en el mapa es 24.6 hectáreas — casi 11
+veces más. Ese número del Padrón viene de un sistema más viejo (una
+migración desde una herramienta llamada AppSheet) que no tiene un
+proceso claro de mantenimiento ni se actualiza de forma confiable. Por
+eso se decidió no usarlo nunca para decidir si bloquear algo — solo se
+muestra aparte, como información de referencia, con una advertencia
+explícita de que puede no ser confiable.
+
+**El hallazgo más importante de este tramo:** la primera versión de esta
+validación sí bloqueaba el botón "Aprobar" cuando detectaba que faltaba
+cobertura. Al probarla con datos reales en pantalla, apareció un problema
+serio: **ninguna subdivisión, de ninguna parcela, podía aprobarse nunca**
+— siempre aparecía "0% cubierto", sin excepción. La causa, en términos
+simples: el cálculo solo contaba las subdivisiones que YA estaban
+aprobadas — pero la que se está revisando en ese momento, por definición,
+todavía no lo está. Es como pedirle la llave de un candado a algo que
+está justamente adentro del candado, cerrado: la última subdivisión que
+le faltaba a cualquier parcela para completarse nunca podía contarse a sí
+misma antes de aprobarse, así que nunca podía pasar su propio control.
+No era un caso raro — pasaba siempre, con cualquier parcela.
+
+Este problema no lo encontró ninguna prueba automática — se encontró
+mirando la pantalla real, con datos reales, y confirmando el problema con
+capturas concretas. La corrección: la validación de cobertura dejó de
+bloquear el botón "Aprobar" y pasó a ser **puramente informativa** — un
+aviso amarillo, igual que el aviso de "Solapado X%" que ya existía, que
+avisa "cobertura parcial, revisá si falta algo" pero nunca le impide a
+nadie aprobar una subdivisión individual. El cálculo en sí (cuánto se
+cubrió, cuánto falta) sigue funcionando exactamente igual — solo cambió
+qué hace el sistema con ese resultado.
+
+**Pendiente, explícitamente sin decidir:** en algún punto del proceso SÍ
+va a hacer falta exigir que una parcela esté completamente cubierta antes
+de darla por lista — probablemente al momento de exportar el reporte
+oficial de trazabilidad (la exportación DDS que ya existe en el mapa),
+no al aprobar cada subdivisión suelta una por una. Dónde exactamente se
+debe aplicar ese control real todavía no se decidió — queda como una
+tarea futura separada.
+
+## 8. El incidente de las aprobaciones que se revertían solas — y dos problemas más que destapó
+
+Este tramo arrancó de una pregunta simple: ¿podía estar generando
+polígonos duplicados la sincronización con Google Drive? Investigarla con
+cuidado, en vez de responderla rápido, destapó tres problemas reales
+distintos, cada uno con su propia causa y su propia corrección.
+
+### 8.1 Aprobaciones y rechazos que se revertían solos, sin dejar ningún rastro
+
+Se confirmó, con evidencia real (no solo una sospecha): 3 registros que un
+revisor humano ya había marcado como "Aprobado" volvieron por su cuenta a
+"Pendiente de revisión" — como si nunca los hubiera revisado nadie, sin
+ningún aviso ni rastro de que había pasado.
+
+**Por qué pasaba, en simple:** cuando un técnico de campo sigue trabajando
+sobre el mismo proyecto en QField (la app que usa para capturar datos en el
+celular) y ese proyecto se vuelve a sincronizar, el sistema no solo trae los
+registros nuevos que agregó — trae **todos** los registros del proyecto de
+nuevo, incluidos los que ya se habían subido y revisado antes. El sistema
+reconoce que un registro "ya existe" (por su parcela y fecha) y lo actualiza
+en vez de duplicarlo — hasta ahí, correcto. El problema es que, al
+actualizarlo, siempre volvía a escribir "Pendiente de revisión" sin
+preguntar primero si un humano ya lo había aprobado o rechazado — pisando
+esa decisión en silencio, sin que nadie se enterara.
+
+**La corrección:** ahora, antes de actualizar cualquier registro durante una
+sincronización, el sistema primero revisa si ese registro ya fue revisado
+por una persona. Si ya tiene una decisión (Aprobado o Rechazado), lo deja
+completamente intacto — ni el estado, ni la geometría, ni ningún otro dato
+se toca — y el registro de la sincronización deja constancia explícita de
+qué se protegió y por qué. Solo los registros que siguen genuinamente
+pendientes (o que son nuevos de verdad) se actualizan con normalidad, como
+siempre.
+
+### 8.2 Una tabla de auditoría que existía en el papel, pero nunca en la base real
+
+El sistema estaba diseñado, desde antes de este tramo, para dejar un
+registro permanente de cada decisión real de la Consola QC (quién aprobó
+qué, cuándo, por qué se rechazó algo) — pensado justamente para casos como
+el del punto anterior, donde sin ese registro es imposible saber qué pasó.
+El código para conectar esa auditoría ya estaba escrito y probado, pero la
+tabla en sí, la que debía guardar esos datos, **nunca se había creado
+realmente** en la base de datos — la documentación decía que sí estaba
+creada, pero no era cierto.
+
+Se aplicó la creación real de esa tabla, y se confirmó en vivo que la
+conexión que ya existía funciona: aprobar o rechazar un registro real desde
+la Consola QC ahora sí deja una fila permanente, con el contexto técnico de
+la decisión (nunca datos personales de nadie). Se probó, además, que esa
+tabla es imborrable de verdad: ni siquiera con el nivel de acceso más alto
+que tiene el propio sistema se puede modificar o borrar una fila ya
+escrita — un intento directo de cambiarla o borrarla fue rechazado por la
+base de datos misma, no solo por una regla del código que alguien podría
+saltarse.
+
+### 8.3 El mismo código de parcela apuntando a dos lugares distintos
+
+Se confirmó, como regla de negocio (no una suposición del sistema): un
+código de parcela tiene que corresponder siempre a un único lugar físico —
+nunca a dos ubicaciones distintas. Investigando cuánto se cumplía esto en
+la práctica, se encontraron 3 casos reales donde no se cumplía: el mismo
+código de parcela aparecía en dos ubicaciones separadas por distancias de
+entre 768 metros y 3.5 kilómetros — demasiado lejos para tratarse del mismo
+lugar capturado dos veces con un GPS de mano.
+
+Se agregó una detección que, al abrir uno de estos registros en conflicto
+en la Consola QC, bloquea los botones de Aprobar y Rechazar hasta que
+alguien resuelva manualmente cuál de los dos registros tiene el código
+equivocado — mostrando en pantalla la distancia real y cuál es el otro
+registro involucrado. Esta protección se armó dos veces, a propósito: una
+vez en la pantalla (el botón directamente no se puede apretar) y otra vez
+del lado del servidor (aunque alguien intentara forzar la acción saltándose
+el botón, por otro camino técnico, el sistema la rechaza igual) — para que
+el bloqueo no dependa únicamente de que ese botón exista.
+
+La distancia usada para decidir "esto es un conflicto real" (100 metros) es
+provisoria: se documentó con honestidad que, entre los datos reales
+disponibles hoy, no hay todavía ningún ejemplo de "mismo lugar, con el
+margen de error normal de un GPS de campo" para calibrar ese número con
+precisión — los 3 casos encontrados son todos, sin duda, "otro lugar". Se
+ajustará ese número si en el futuro aparece un caso real que lo contradiga.
+
+## 9. El error que apuntaba a la causa equivocada, y un repaso del padrón de socios
+
+Antes de cerrar la sesión se hicieron dos cosas más, sin relación directa
+entre sí: se hizo más claro el mensaje que ve un revisor cuando dos
+registros comparten el mismo código de parcela (el número de distancia
+crudo, tipo "1213.49m", pasó a mostrarse como "1.2 km", y el otro registro
+en conflicto se identifica por su fecha de captura y su técnico
+responsable en vez de un código interno sin significado para nadie no
+técnico); y se investigó — y se corrigió parte de — un error que llevaba
+cuatro días mostrando un mensaje equivocado.
+
+### 9.1 El mensaje de error que apuntaba a la causa equivocada
+
+El 19 de agosto se había corregido un problema real: los registros de
+"Instalaciones" (por ejemplo, una construcción o beneficio dentro de una
+parcela) no se podían aprobar ni rechazar en la Consola QC, porque le
+faltaba a la base de datos un dato interno necesario para identificar cuál
+fila actualizar. Ese día se aplicó la corrección — y quedó anotado en el
+código que, en ese momento, no había ningún registro real de Instalaciones
+esperando revisión, así que el problema, aunque corregido, no tenía forma
+de mostrarse todavía.
+
+Cuatro días después, alguien vio en pantalla, en vivo, el mensaje "falta
+aplicar esa corrección" — a pesar de que ya estaba aplicada desde el 19.
+En vez de darlo por resuelto con "ya está aplicada, entonces no hay nada
+que investigar", se siguió la contradicción: la corrección del 19 de
+agosto sí había arreglado la base de datos, pero **una pieza completamente
+distinta del sistema — la parte que le pide los datos a la base desde la
+pantalla — nunca había empezado a pedir el dato nuevo**. Es decir, el dato
+ya estaba disponible desde el 19 de agosto, pero nadie se lo pedía, así
+que nunca llegaba a la pantalla. El problema original (no poder aprobar
+Instalaciones) nunca se había solucionado de verdad — solo se volvió
+visible recién cuando llegaron, ese mismo día, los primeros registros
+reales de Instalaciones esperando revisión (durante el trabajo descrito en
+el punto 8.1) — y para entonces, el mensaje de error, escrito cuatro días
+antes, ya apuntaba a una causa que ya no era cierta.
+
+**La corrección:** se hizo que esa pieza del sistema pida el dato que
+faltaba (un cambio de una sola línea), y se reescribió el mensaje de error
+para que ya no le eche la culpa a una corrección puntual — ahora describe
+lo que realmente pasa, sin asumir por qué, para que la próxima persona que
+lo vea no pierda tiempo persiguiendo una pista equivocada. Se probó en
+vivo, con un registro real: antes de este cambio, era imposible aprobar un
+registro de Instalaciones desde la pantalla — después, funcionó
+normalmente con el botón real.
+
+### 9.2 Repaso del padrón: baja de socios y transferencia de parcelas entre organizaciones
+
+Se pidió revisar cómo está preparado el sistema para dos situaciones: que
+un socio deje una cooperativa (sin borrar su historial), y que una parcela
+pase de una organización a otra conservando lo ya trabajado bajo la
+organización original.
+
+**La primera parte ya estaba resuelta, de una etapa anterior de este mismo
+proyecto** — no hizo falta construirla de nuevo. Dar de baja a un socio (o
+una parcela) nunca borra el registro: solo lo marca como inactivo, y deja
+de aparecer en las pantallas de trabajo diario, pero el historial completo
+sigue existiendo tal cual. El propio código ya explica por qué se decidió
+así: el historial de monitoreo de campo de un socio tiene que sobrevivir
+aunque el socio se dé de baja del padrón administrativo — es una exigencia
+de cumplimiento EUDR, no solo una preferencia de diseño (ver el recuadro
+regulatorio más abajo). Lo único que hacía falta corregir era chico: el
+buscador que usa el formulario de Inspecciones para encontrar un socio o
+una parcela por nombre o código todavía mostraba socios/parcelas ya dados
+de baja como si estuvieran activos — se corrigió para que ya no aparezcan
+ahí, sin tocar ningún dato ya guardado.
+
+**La segunda parte reveló un problema más grande, que queda como tarea
+pendiente de diseño, no como un arreglo rápido.** Hoy, el código de una
+parcela (por ejemplo "COOP-JS-001") tiene que ser único en **todo el
+sistema**, no solo dentro de una organización — la base de datos lo
+impide directamente, con la misma regla que evita que dos personas tengan
+el mismo número de documento en la tabla de socios. Eso significa que hoy
+es **imposible** mover una parcela de una organización a otra manteniendo
+el mismo código — la base de datos rechazaría el intento antes de que
+llegara a guardarse nada. Antes de construir esa transferencia hace falta
+decidir cómo resolver esa limitación (por ejemplo, si el código puede
+cambiar al transferirse, o si hay que rediseñar cómo se identifican las
+parcelas en la base) — se deja documentado como el tema grande pendiente
+de esta sesión, sin apurar una solución.
+
+> **Nota de contexto regulatorio (no es un consejo legal):** el reglamento
+> europeo EUDR exige conservar la documentación de diligencia debida y
+> trazabilidad durante al menos 5 años desde que un producto se coloca en
+> el mercado. Es, en parte, el motivo por el que la baja de un socio nunca
+> borra nada — un historial de monitoreo que en algún momento pudo
+> respaldar un lote real de café no se puede perder solo porque el
+> productor dejó la cooperativa después.
+
+## 10. El Editor Vectorial: cuatro problemas de uso diario, y un hallazgo que apareció probándolo
+
+El Editor Vectorial es la parte de la Consola QC que permite crear un
+registro nuevo dibujando directamente sobre el mapa satelital (un
+perímetro, o una subdivisión de uso de suelo) — en vez de esperar a que
+llegue por sincronización desde el celular del técnico de campo. En este
+tramo el usuario reportó cuatro problemas reales, encontrados usando la
+herramienta día a día, no en una revisión de código:
+
+1. Se podían dibujar varios marcadores (puntos) seguidos, sin ninguna
+   forma de borrar los que sobraban.
+2. La barra de dibujo no tenía en cuenta qué tabla estaba seleccionada —
+   se podía dibujar un punto aunque la tabla elegida solo aceptara
+   polígonos (o al revés), y el error recién aparecía al final, al
+   intentar guardar.
+3. El campo "Tipo de Uso" (por ejemplo, "Producción", "Bosque", "Pan
+   Llevar") era un cuadro de texto libre — cualquiera podía escribir
+   cualquier cosa, con errores de tipeo o mayúsculas/minúsculas distintas
+   cada vez.
+4. Los campos "Código de Socio" y "Código de Parcela" también eran texto
+   libre — se podía guardar un registro con un código inventado, sin que
+   el sistema verificara que ese socio o esa parcela existieran de
+   verdad.
+
+### 10.1 Los primeros dos: la barra de dibujo ahora reacciona a lo que está pasando
+
+Antes, la barra de herramientas de dibujo (los botones de "marcador" y
+"polígono" sobre el mapa) se configuraba una sola vez al abrir la
+pantalla y no volvía a cambiar. Se corrigió para que reaccione en tiempo
+real a dos cosas: qué tabla está seleccionada (si esa tabla solo acepta
+polígonos, el botón de marcador queda deshabilitado directamente, antes
+de tocar el mapa) y si ya hay un dibujo sin guardar en curso (mientras
+haya un borrador pendiente, ambos botones quedan bloqueados — no se
+puede empezar un dibujo nuevo hasta guardar o cancelar el actual). Esto
+cierra de raíz el problema de los marcadores sobrantes: ya no hay forma
+de que aparezcan, porque nunca se puede iniciar un segundo dibujo
+mientras el primero siga sin resolver.
+
+### 10.2 "Tipo de Uso" pasó a ser una lista, no un cuadro de texto
+
+Se reemplazó el cuadro de texto libre por una lista desplegable con las 7
+categorías reales que ya se usan en el mapa principal para colorear las
+subdivisiones (Producción, Crecimiento, Pan Llevar, Inverna/Pasto,
+Rastrojo/Purma, Bosque, Otras áreas) — tomadas de un único lugar del
+código para que el mapa y este formulario nunca puedan mostrar una lista
+distinta de la otra.
+
+### 10.3 Los códigos de socio y parcela ahora se buscan, no se escriben
+
+Este fue el cambio más grande del tramo. "Código de Socio" y "Código de
+Parcela" dejaron de ser cuadros de texto: ahora son buscadores reales,
+el mismo tipo de buscador que ya existe en la pantalla de Inspecciones —
+se escribe un nombre, un DNI o un código, aparecen coincidencias reales
+del padrón de productores, y solo se puede elegir una de esas
+coincidencias. Ya no es posible guardar un registro con un código
+inventado, porque ya no hay forma de escribirlo a mano.
+
+Para el caso de un socio genuinamente nuevo (que todavía no existe en el
+padrón), se agregó un botón "+ Crear socio nuevo" que abre el mismo
+formulario que ya existe en la pantalla de Productores y Parcelas, como
+una ventana superpuesta — sin perder el dibujo que se estaba haciendo en
+el mapa detrás. Ese formulario aplica exactamente las mismas reglas que
+ya existían ahí (por ejemplo, que no se repita un DNI dentro de la misma
+organización): no se escribió ninguna regla nueva, se reutilizó la que ya
+estaba probada, para que las dos pantallas nunca puedan quedar
+desincronizadas.
+
+También se agregó algo pensado para el trabajo real de campo: si un
+técnico dibuja primero el perímetro de una parcela (eligiendo su socio y
+su código) y después dibuja, seguido, varias subdivisiones de esa misma
+parcela, ya no hace falta volver a buscar el mismo socio y la misma
+parcela cada vez — el sistema los precarga automáticamente del último
+guardado exitoso, dejándolos igual de editables por si hiciera falta
+cambiarlos.
+
+### 10.4 El hallazgo: datos de una organización apareciendo mezclados con los de otra
+
+Mientras se probaba todo lo anterior con datos reales, usando los
+botones "Cargar Capa Espacial" y "Sincronizar Google Drive", aparecieron
+9 registros nuevos en la organización de pruebas. Revisándolos con
+cuidado antes de dar por buena la prueba, se encontró algo que no tenía
+que ver con datos de prueba en sí: **7 de esos 9 registros
+referenciaban un socio o una parcela que sí existen de verdad — pero
+pertenecen a otra organización real** (dos cooperativas reales del
+sistema, no organizaciones inventadas). Es decir, un registro guardado
+bajo la organización de pruebas, pero "hablando de" el socio de otra
+organización distinta.
+
+Investigando la causa, se confirmó que ninguna de las dos partes del
+sistema que pudo haber creado estos registros avisaba de esto:
+
+- El sincronizador de Google Drive nunca comparaba el socio o la parcela
+  que trae el archivo de campo contra la organización real a la que
+  pertenecen — solo confiaba en el nombre de la carpeta de Drive de
+  donde vino el archivo.
+- Tampoco lo detectaba la propia Consola QC al momento de aprobar un
+  registro: la verificación que ya existía ahí solo confirmaba que el
+  registro perteneciera a la organización que se estaba mirando en
+  pantalla en ese momento — nunca verificaba si el socio o la parcela
+  mencionados adentro del registro eran realmente de esa organización.
+
+**La corrección siguió el mismo patrón de dos capas que ya se había
+usado antes para el problema del código de parcela repetido (punto
+8.3):** el sincronizador de Google Drive ahora avisa con un mensaje claro
+en su registro de actividad cuando detecta este tipo de mezcla, pero
+nunca bloquea la carga — sigue trayendo los datos igual, porque frenar
+una sincronización completa por un dato sospechoso sería peor que
+avisar y dejar que alguien lo revise. La Consola QC, en cambio, sí
+bloquea de verdad: si un revisor intenta aprobar un registro con esta
+mezcla, el botón "Aprobar" aparece deshabilitado con el motivo explicado
+en pantalla — pero el botón "Rechazar" queda siempre disponible, a
+propósito, para que nunca quede cerrada la salida de simplemente
+descartar un registro problemático.
+
+Se verificó todo esto en vivo, contra los 9 registros reales del
+hallazgo (sin borrarlos ni modificarlos — quedan ahí, como evidencia, y
+ahora protegidos por el nuevo bloqueo si alguien intentara aprobarlos) y
+corriendo el sincronizador real una vez más contra un paquete de prueba
+aparte, desechable, para confirmar el aviso en el registro de actividad
+y que la carga efectivamente no se frena.
+
+## 11. El Editor Vectorial, de punta a punta: el vínculo de cobertura, la parcela nueva, e Instalaciones
+
+Con los cuatro problemas del punto 10 ya corregidos, se probó el Editor
+Vectorial de punta a punta, con el flujo real de un técnico en el campo:
+crear un socio nuevo, crear su parcela, dibujar el perímetro, y dibujar
+adentro una subdivisión de Uso de Suelo — todo desde el mapa, sin volver a
+ninguna otra pantalla. Esa prueba de punta a punta destapó un bug serio que
+ninguna prueba anterior había podido ver, porque ninguna prueba anterior
+había completado el flujo entero.
+
+### 11.1 El hallazgo: las subdivisiones creadas desde el mapa quedaban invisibles para el cálculo de cobertura
+
+La validación de cobertura completa (punto 7 de esta bitácora) depende de
+un vínculo real entre cada subdivisión de Uso de Suelo y su parcela madre —
+un identificador técnico interno que normalmente llega desde el celular del
+técnico de campo (QField) y que el punto 6 de esta bitácora ya se había
+encargado de preservar durante la carga de datos por sincronización.
+
+Lo que no se había probado hasta ahora es qué pasaba con ese mismo vínculo
+cuando el dato **no** viene de una sincronización, sino que se crea a mano
+desde el Editor Vectorial. La respuesta, confirmada con datos reales: no
+pasaba nada — el Editor Vectorial nunca generaba ese identificador técnico
+al crear un perímetro nuevo, y al crear una subdivisión guardaba el código
+de parcela que el usuario elige en pantalla (algo legible, como
+"COOP-JS-001") en el mismo campo donde el sistema espera encontrar el
+identificador técnico interno — dos cosas distintas, con el mismo nombre de
+campo. El resultado: cualquier subdivisión de Uso de Suelo dibujada a mano
+desde el mapa quedaba, en silencio, completamente invisible para el cálculo
+de cobertura de Fase B — como si nunca se hubiera clasificado nada, sin
+ningún error ni aviso en pantalla.
+
+**La corrección** extiende exactamente el mismo mecanismo que ya se usaba
+para los datos que llegan por sincronización (punto 6), para que ambos
+caminos — el dato que llega del campo real y el dato que se dibuja a mano
+en el mapa — terminen hablando el mismo idioma: al crear un perímetro nuevo
+desde el Editor Vectorial, el sistema le genera su propio identificador
+técnico; al crear una subdivisión adentro, el sistema resuelve ese
+identificador del perímetro real (nunca el código legible que ve el
+usuario) y es ESO lo que guarda. Como en todo este tramo de trabajo, si en
+algún momento hay ambigüedad (por ejemplo, más de un perímetro con el mismo
+código de parcela — un caso real, ver punto 8.3), el sistema no asume nada:
+la subdivisión se guarda igual, solo queda "sin vínculo" hasta que alguien
+lo resuelva a mano, nunca bloquea el guardado por esto.
+
+### 11.2 El número imposible que casi pasa desapercibido — y cómo se confirmó que no era un bug de código
+
+Durante la primera verificación de la corrección anterior, el resultado
+mostró que un perímetro de prueba, dibujado a mano, medía **263,997
+hectáreas** — más grande que cualquier parcela real vista en toda esta
+sesión de trabajo, por varios órdenes de magnitud. Antes de dar la
+verificación por buena, se paró a confirmar de dónde salía ese número.
+
+La causa real: el mapa de la Consola QC arranca alejado (para mostrar de
+un vistazo todos los registros pendientes de revisión) y el polígono de
+prueba se había dibujado justo así, sin acercar el mapa primero — cada
+click, sin darse cuenta, quedó representando una distancia real de cientos
+de metros en vez de unos pocos metros. No fue un cálculo de código
+incorrecto: fue, literalmente, un polígono descomunal dibujado sin querer
+durante la prueba misma, medido correctamente por un sistema que hizo bien
+su trabajo. Se confirmó haciendo la cuenta a mano (cuánto mide cada
+píxel de pantalla a ese nivel de zoom, multiplicado por el tamaño del
+polígono dibujado) y el resultado coincidió, en el mismo orden de
+magnitud, con el número imposible observado.
+
+Se repitió la prueba completa desde cero, con cuidado, acercando el mapa
+a un nivel realista antes de dibujar: el mismo perímetro de prueba, esta
+vez, midió 4.59 hectáreas — y la subdivisión adentro, 2.58 hectáreas.
+Números coherentes con una parcela de café real. El cálculo de cobertura,
+corrido sobre estos datos ya coherentes, dio un resultado correcto:
+detectó bien que la subdivisión dibujada cubría poco más de la mitad del
+perímetro, y avisó correctamente que faltaba clasificar el resto — el
+comportamiento esperado, no un error.
+
+### 11.3 "+ Crear parcela nueva" — el mismo patrón que ya funcionó para crear un socio
+
+El punto 10.3 de esta bitácora ya había agregado un botón "+ Crear socio
+nuevo" al Editor Vectorial, para cuando un socio genuinamente nuevo
+todavía no existe en el padrón. Faltaba el mismo botón para el otro campo:
+"+ Crear parcela nueva". Se agregó siguiendo exactamente el mismo patrón
+que ya había funcionado bien — abre, como una ventana superpuesta sin
+perder el dibujo en curso, el mismo formulario de gestión de parcelas que
+ya existe en la pantalla de Productores y Parcelas, con el mismo
+correlativo automático que esa pantalla ya calculaba. No se escribió
+ninguna lógica nueva de validación ni de numeración: se reutilizó tal cual
+la que ya estaba probada.
+
+El botón solo aparece habilitado cuando el formulario ya tiene un socio
+elegido (la numeración automática de una parcela nueva depende de saber de
+qué socio es) — sin eso, se muestra deshabilitado con el motivo explicado
+en pantalla. Al guardar la parcela nueva, el Editor Vectorial la deja
+seleccionada automáticamente, igual que ya pasaba con "+ Crear socio
+nuevo" — sin que el usuario tenga que volver a buscarla.
+
+### 11.4 Se cerró la duda pendiente sobre "Instalaciones"
+
+El punto 11(e) de la sección anterior de esta bitácora dejaba anotada una
+duda menor: por qué "Instalaciones" (por ejemplo, una construcción o un
+beneficio dentro de una parcela) no aparecía como opción de tabla destino
+en el Editor Vectorial, junto a Monitoreo y Uso de Suelo. Se investigó a
+fondo antes de tocar nada: revisando el historial completo del código y
+toda la documentación del proyecto, no apareció ninguna razón de negocio
+para excluirla — nunca estuvo, desde el día en que el Editor Vectorial se
+mudó a la Consola QC, simplemente porque la tarea que lo movió pidió
+puntualmente solo esas dos tablas, sin que nadie volviera después a
+revisar si esa limitación seguía teniendo sentido.
+
+Mejor todavía: el resto del sistema (los campos del formulario, la
+restricción de que Instalaciones solo acepta un punto en el mapa —nunca un
+polígono—, y la validación real contra el padrón) ya estaba completamente
+listo para esta tabla desde una tarea anterior, sin que nadie lo hubiera
+conectado. Agregarla terminó siendo un cambio de una sola línea, verificado
+en vivo creando un registro real de prueba y confirmando que todo lo demás
+ya funcionaba tal cual estaba.
+
+**Nota de seguimiento, para más adelante:** "Instalaciones" quedó, a
+propósito, fuera del arreglo del vínculo de cobertura descrito en el punto
+11.1 — hoy no existe ningún cálculo de cobertura que use ese vínculo para
+Instalaciones (a diferencia de Uso de Suelo), así que no hacía falta
+tocarlo todavía. Si en el futuro se construye una validación de cobertura
+equivalente para Instalaciones, hay que revisar en ese momento si el mismo
+arreglo del punto 11.1 debe aplicarse también ahí.
+
+## 12. Qué queda pendiente
+
+**a) Dónde debe exigirse la cobertura completa de verdad — no
+decidido.** Como se explica en el punto 7: la validación de cobertura ya
+existe y funciona, pero hoy es solo informativa. Falta decidir en qué
+paso del proceso (probablemente la exportación DDS) se debe convertir en
+un control real que si bloquee, sin que eso choque con el trabajo diario
+de aprobar subdivisiones sueltas.
+
+**b) Cómo resuelve una persona, en la práctica, un conflicto de código de
+parcela — no construido todavía.** Como se explica en el punto 8.3: hoy,
+cuando el sistema detecta que un código de parcela aparece en dos lugares
+distintos, el registro queda bloqueado (no se puede aprobar ni rechazar)
+pero no existe ningún camino en pantalla para resolver el conflicto —
+alguien tiene que corregirlo a mano, directamente en la base de datos.
+Falta diseñar un flujo real (por ejemplo, renombrar el código equivocado, o
+marcar uno de los dos registros como un error de captura) para que ese
+conflicto se pueda resolver desde la propia Consola QC.
+
+**c) Rediseñar cómo se identifican las parcelas y los socios en el
+padrón, para poder transferir una parcela entre organizaciones — no
+decidido.** Como se explica en el punto 9.2: hoy el código de una parcela
+(y el código de un socio) tiene que ser único en todo el sistema, no por
+organización, así que es imposible hoy transferir una parcela a otra
+organización manteniendo el mismo código. Es el tema grande pendiente de
+esta sesión — necesita una decisión de diseño (no solo código) antes de
+poder estimarse.
+
+> *Resuelto de la vez pasada:* la pregunta sobre si `PADRON_PARCELAS.totalh`
+> era una referencia confiable — el pedido original de esta bitácora
+> mencionaba que la "Fase B" estaba "frenada" por esa investigación, algo
+> que en su momento no se encontró documentado. Esa investigación sí se
+> hizo después, como parte de este mismo tramo (ver punto 7): la
+> respuesta es que `totalh` **no** es confiable y no se usa para bloquear
+> nada. Se retira de la lista de pendientes.
+
+> *Resuelto (2026-08-23, investigación dedicada):* la pregunta sobre si
+> `ORG-COOP-NORTE` fue alguna vez una organización de demostración usada
+> a propósito (por ejemplo en una venta o presentación) antes de existir
+> el script de pruebas automáticas. Se revisó el historial completo del
+> repositorio, no solo los commits recientes, buscando la primerísima
+> aparición del nombre. **Respuesta: no.** El nombre nace exactamente el
+> 16 de agosto de 2026, en el mismo commit que crea por primera vez el
+> script de pruebas automáticas — el propio documento que pidió crear ese
+> script ya usaba `ORG-COOP-NORTE` como nombre de ejemplo, inventado ahí
+> mismo, sin ninguna referencia a algo anterior. Dos días después (18 de
+> agosto), como ese script ya había corrido de verdad contra la base de
+> datos real, quedó como la única organización con datos reales
+> "aprobados" disponibles en ese momento — y por eso se reutilizó, de
+> forma oportunista, para probar otras funciones sin relación (el
+> generador de PDF de trazabilidad, el chequeo de que no se filtran datos
+> personales), incluso apareciendo mencionado en un informe interno de
+> cierre de esa etapa del proyecto. Ese uso posterior podría dar la
+> impresión de algo "oficial", pero en el fondo siempre fue el mismo dato
+> de prueba, reciclado — nunca una organización real ni una demo
+> preparada a propósito. Se retira de la lista de pendientes.
+
+**d) Evaluar pasar el proyecto de Supabase de un plan gratuito a uno
+pago con respaldo automático, antes de cargar la primera organización
+real.** Hoy el proyecto corre en un plan sin respaldos automáticos
+configurados — razonable mientras todo el dato es de prueba, pero un
+riesgo real una vez que haya datos de un cliente real cargados. No se
+había planteado antes en este proyecto; queda como recomendación a
+evaluar antes de ese paso.
+
+> *Resuelto (25 de agosto de 2026):* la duda sobre por qué "Instalaciones"
+> no aparecía como tabla destino en el Editor Vectorial. Se investigó a
+> fondo (ver punto 11.4): no era ninguna decisión de diseño, era el
+> alcance acotado de la tarea que movió el Editor Vectorial a la Consola
+> QC, nunca revisado después. Ya se agregó como tercera opción, junto a
+> Monitoreo y Uso de Suelo. Se retira de la lista de pendientes — queda
+> anotado como seguimiento futuro (no urgente) que si algún día se
+> construye una validación de cobertura para Instalaciones (como la que
+> ya existe para Uso de Suelo, punto 7), hay que revisar si también le
+> hace falta el arreglo del vínculo técnico del punto 11.1.
+
+---
+
+## 13. Para quien quiera el detalle técnico
+
+| Tema | Documento técnico | Commit(s) |
+|---|---|---|
+| Colisión de herramientas de dibujo, popup expuesto, solapamiento auditable, panel en vivo, redondeo, margen turf/PostGIS | [ADR-005](../adr/ADR-005-qc-editor-geometria-y-solapamiento.md) | `0d003e8`, `111727b`, `a62fce6`, `c56f18f`, `4a910a4` |
+| Exclusión de contención propia en el solapamiento (Fase A + margen de tolerancia) | [ADR-005](../adr/ADR-005-qc-editor-geometria-y-solapamiento.md) (secciones "Fase A") | `cba6474`, `d2bcebd`, `f099a75` |
+| Capa de contexto de parcelas vecinas | [ADR-006](../adr/ADR-006-capa-contexto-parcelas-vecinas.md) | `b212424` |
+| Auditoría e integridad referencial de `ID_Organizacion` (incidente de datos huérfanos, parte 1: FK) | [ADR-007](../adr/ADR-007-integridad-referencial-id-organizacion.md) | `a6e817c`, `2391859` |
+| Etiqueta de organización de prueba + guardarail del script E2E (incidente, parte 2: protección futura) | [ADR-008](../adr/ADR-008-etiqueta-organizacion-prueba-y-guardarail-e2e.md) | `488c993` |
+| Fix del mensaje de error vacío en la sincronización de Google Drive | [ADR-009](../adr/ADR-009-fix-mensaje-error-sync-drive.md) | `7eb744e`, `ce4053f` |
+| Regla de reinicio periódico del servidor de desarrollo (`CLAUDE.md`) | — (sin ADR, cambio de documentación de proceso) | `affdc2a` |
+| Vínculo real entre Uso de Suelo y su Monitoreo padre (reemplaza el heurístico de Fase A para este propósito) | [ADR-010](../adr/ADR-010-vinculo-real-uso-suelo-monitoreo.md) | `1ec2c2d` |
+| Validación de cobertura completa, investigación de `totalh`, y el bug crítico del bloqueo circular (encontrado y corregido) | [ADR-011](../adr/ADR-011-cobertura-completa-uso-suelo.md) | `5c6d4f9`, `2ac75d6` |
+| El ETL protege registros ya revisados (Aprobado/Rechazado) de resincronizaciones que los revertían en silencio | [ADR-012](../adr/ADR-012-eudr-etl-protege-registros-revisados.md) | `4de126d` |
+| `audit_logs` aplicada de verdad y conectada a Aprobar/Rechazar (corrección de premisa: la conexión ya existía, la tabla no) | [ADR-013](../adr/ADR-013-audit-logs-conectado-a-consola-qc.md) | `a611779` |
+| Un código de parcela debe corresponder a un único lugar físico — detección, bloqueo en pantalla, guard del lado del servidor, y mensaje en lenguaje claro | [ADR-014](../adr/ADR-014-codigo-parcela-unico-por-ubicacion.md) | `9ad7aa2`, `6611451`, `5ad2aa3` |
+| `PUNTOS_COLUMNS` nunca pedía `id_origen` — el mensaje de error culpaba a una migración ya aplicada; Instalaciones ya se puede aprobar/rechazar | [ADR-015](../adr/ADR-015-fix-puntos-columns-id-origen.md) | `e938d0d` |
+| Autocompletado de Inspecciones excluye socios/parcelas dados de baja; repaso de baja lógica y bloqueo de transferencia entre organizaciones | [ADR-016](../adr/ADR-016-padron-autocompletado-excluye-inactivos.md) | `a7fd9f6` |
+| Editor Vectorial: la barra de dibujo reacciona a la tabla destino y se bloquea con un dibujo sin guardar (cierra el problema de marcadores sobrantes) | [ADR-018](../adr/ADR-018-editor-vectorial-restriccion-por-tabla.md) | `70ff8a7` |
+| "Tipo de Uso" pasa de texto libre a lista desplegable con las 7 categorías reales, misma fuente que el mapa principal | — (sin ADR propio, ver commit) | `0bcae00` |
+| Editor Vectorial: "Código de Socio"/"Código de Parcela" ahora buscan y validan contra el padrón real; "+ Crear socio nuevo" reutiliza el formulario de Productores y Parcelas; herencia de socio/parcela entre geometrías consecutivas | [ADR-019](../adr/ADR-019-editor-vectorial-validacion-padron-y-creacion-socio.md) | `3ecf718` |
+| Hallazgo: registros con socio/parcela de otra organización (Sincronizar Google Drive nunca lo validaba). Aviso informativo en el sincronizador (nunca bloquea la carga) + bloqueo real de "Aprobar" en la Consola QC (Rechazar sigue siempre disponible) | [ADR-020](../adr/ADR-020-validacion-organizacion-socio-parcela.md) | `5c13874` |
+| Vínculo técnico real de cobertura extendido al Editor Vectorial (antes solo cubría datos de sincronización); botón "+ Crear parcela nueva"; corrección documentada de un número de verificación imposible por error de metodología de prueba | [ADR-021](../adr/ADR-021-vinculo-real-editor-vectorial-y-creacion-parcela.md) | `1e0f09d`, `9088eb1` |
+| "Instalaciones" agregada como tabla destino del Editor Vectorial — omisión de scope de una tarea anterior, backend ya listo desde antes | [ADR-022](../adr/ADR-022-instalaciones-en-editor-vectorial-qc.md) | `d8cbb2e` |
+
+**Commits del tramo completo, en orden:** `0d003e8` → `111727b` →
+`a62fce6` → `c56f18f` → `4a910a4` → `b212424` → `a6e817c` → `2391859` →
+`488c993` → `7eb744e` → `ce4053f` → `affdc2a` → `cba6474` → `d2bcebd` →
+`f099a75` → `1ec2c2d` → `5c6d4f9` → `2ac75d6` → `4de126d` → `a611779` →
+`9ad7aa2` → `6611451` → `5ad2aa3` → `e938d0d` → `a7fd9f6` → `70ff8a7` →
+`0bcae00` → `3ecf718` → `5c13874` → `1e0f09d` → `d8cbb2e`.
+
+*(`9088eb1`, entre `1e0f09d` y `d8cbb2e`, es la corrección de
+documentación del número imposible del punto 11.2 — un commit de solo
+texto, igual que `d777f99` y `a66218a`; se deja fuera de esta lista por el
+mismo criterio ya usado para esos dos, aunque sí está mencionado en la
+nota de actualización al principio de este documento.)*

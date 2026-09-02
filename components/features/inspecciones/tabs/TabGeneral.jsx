@@ -1,29 +1,25 @@
 import { useWatch } from 'react-hook-form'
 import { FormField, inputClass } from '@/components/ui/FormField'
 import PadronAutocomplete from '../PadronAutocomplete'
-import { getSupabaseClient } from '@/lib/supabaseClient'
 import { searchSocios, searchParcelas } from '@/lib/padronSearch'
 
-// INVARIANTE: el autocompletado de socio/parcela depende de la política
-// RLS `rls_anon_select_padron_socios`/`rls_anon_select_padron_parcelas`
-// (supabase/migrations/20260818_fix_inspecciones_rls.sql). Sin esa
-// migración aplicada, las búsquedas simplemente no devuelven resultados
-// (RLS filtra silenciosamente) — no rompe el formulario, solo el
+// INVARIANTE: el autocompletado de socio/parcela pasa por
+// lib/actions/padronReadActions.js (Server Actions, Service Role Key)
+// vía las funciones SECURITY DEFINER fn_buscar_padron_socios/
+// fn_buscar_padron_parcelas (supabase/migrations/20260901160000_lecturas_padron_security_definer.sql).
+// Sin esa migración aplicada, las búsquedas fallan con un error real de
+// RPC no encontrada -- no rompe el resto del formulario, solo el
 // autocompletado queda inerte hasta que se aplique.
 function VinculoPadron({ control, setValue, organizationId }) {
   const [idSocio, idParcela] = useWatch({ control, name: ['ID_Socio', 'ID_Parcela'] })
 
   async function handleSearchSocios(query) {
-    const supabase = getSupabaseClient()
-    if (!supabase) return []
-    const rows = await searchSocios(supabase, organizationId, query)
+    const rows = await searchSocios(organizationId, query)
     return rows.map((r) => ({ key: r.ID_Socio, ...r }))
   }
 
   async function handleSearchParcelas(query) {
-    const supabase = getSupabaseClient()
-    if (!supabase) return []
-    const rows = await searchParcelas(supabase, organizationId, idSocio || null, query)
+    const rows = await searchParcelas(organizationId, idSocio || null, query)
     return rows.map((r) => ({ key: r.ID_Parcela_Fija, ...r }))
   }
 

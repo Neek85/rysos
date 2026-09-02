@@ -59,6 +59,14 @@ entre sí mientras el toolbar global de edición no esté presente.
    `EUDR_INSTALACIONES`/`PADRON_PARCELAS` desde acá (pedido explícito del
    prompt). Nuevas props `organizationId`/`onFeatureCreated`. Renderiza
    `<VectorEditorPanel>` junto al mapa (mismo layout que tenía Mapa antes).
+   **Superado por ADR-022** (2026-08-25): la exclusión de
+   `EUDR_INSTALACIONES` era una omisión de scope de esta tarea puntual, no
+   una decisión de negocio — se investigó y se confirmó que no había
+   ninguna razón documentada para excluirla, y el backend ya la soportaba
+   por completo. `QC_DRAWABLE_TABLES` pasó a
+   `['EUDR_MONITOREO', 'EUDR_USO_SUELO', 'EUDR_INSTALACIONES']`.
+   `PADRON_PARCELAS` sigue fuera (eso sí sigue siendo correcto: la consume
+   el Ingestor de Capas Espaciales, no este editor).
 4. **`app/dashboard/qc/page.jsx`**: pasa `organizationId={resolveOrganizationId(records)}`
    (mismo heurístico ya usado en el resto del módulo — limitación conocida
    y ya documentada: sin ningún registro PENDIENTE cargado, no hay forma
@@ -90,5 +98,8 @@ conocida del proyecto, no una prueba "falsa".
   `VectorEditorPanel`/`useVectorEditor`.
 - AC2: El Editor Vectorial de la Consola QC nunca ofrece
   `EUDR_INSTALACIONES`/`PADRON_PARCELAS` como tabla destino.
+  **Superado por ADR-022** (2026-08-25) para `EUDR_INSTALACIONES` — ver
+  nota en el punto 3 arriba. `PADRON_PARCELAS` sigue sin ofrecerse, ese
+  criterio no cambió.
 - AC3: `enableGlobalEditControls: false` en la llamada de `QcConsoleMap.jsx`.
 - AC4: `npm run build` compila sin errores.

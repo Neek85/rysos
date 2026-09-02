@@ -226,6 +226,13 @@ class TestGisSanitizationLive(unittest.TestCase):
             "SRID=4326;POLYGON((-75.0 4.0, -75.0001 4.0, "
             "-75.0001 4.0001, -75.0 4.0001, -75.0 4.0))"
         )
+        # FK real EUDR_USO_SUELO.ID_Organizacion -> ORGANIZACIONES("ID")
+        # (supabase/migrations/20260821_225310_fk_id_organizacion_eudr.sql,
+        # posterior a este test) -- sin esta fila el INSERT de abajo falla
+        # con 23503.
+        self.supabase.table("ORGANIZACIONES").insert(
+            {"ID": "TEST-GIS-SANITIZATION", "es_organizacion_prueba": True}
+        ).execute()
         res = (
             self.supabase.table("EUDR_USO_SUELO")
             .insert(
@@ -242,13 +249,27 @@ class TestGisSanitizationLive(unittest.TestCase):
         self.assertIsNotNone(row.get("area_calculada_ha"))
         self.assertLess(float(row["area_calculada_ha"]), 4.0)
         self.assertTrue(row.get("requiere_revision_area"))
+        # NUNCA por `fid` -- es el feature id nativo del GeoPackage, sin
+        # DEFAULT en esta tabla: un INSERT manual (no vía ETL/QField) como
+        # este lo deja NULL. `.eq("fid", None)` serializa literal a
+        # `fid=eq.None` (postgrest-py base_request_builder.py:302, f-string
+        # sin guardia para None) -- Postgres rechaza esa comparación de
+        # bigint con 22P02 ("invalid input syntax for type bigint: \"None\"").
+        # `id` sí es la PK real de la tabla (docs/schema_live.md) y siempre
+        # viene poblada.
         self.supabase.table("EUDR_USO_SUELO").delete().eq(
-            "fid", row["fid"]
+            "id", row["id"]
         ).execute()
+        self.supabase.table("ORGANIZACIONES").delete().eq("ID", "TEST-GIS-SANITIZATION").execute()
 
     def test_point_geometry_has_null_area(self):
         """AC4: un punto no tiene área — area_calculada_ha y el flag quedan NULL."""
         point_wkt = "SRID=4326;POINT(-75.0 4.0)"
+        # Mismo motivo que en test_small_polygon_is_flagged_not_rejected
+        # arriba -- EUDR_INSTALACIONES.ID_Organizacion tiene la misma FK real.
+        self.supabase.table("ORGANIZACIONES").insert(
+            {"ID": "TEST-GIS-SANITIZATION", "es_organizacion_prueba": True}
+        ).execute()
         res = (
             self.supabase.table("EUDR_INSTALACIONES")
             .insert(
@@ -264,9 +285,13 @@ class TestGisSanitizationLive(unittest.TestCase):
         row = res.data[0]
         self.assertIsNone(row.get("area_calculada_ha"))
         self.assertIsNone(row.get("requiere_revision_area"))
+        # Mismo motivo que en test_small_polygon_is_flagged_not_rejected
+        # arriba -- borrar por `id` (PK real), nunca por `fid` (NULL en un
+        # INSERT manual, `.eq("fid", None)` rompe con 22P02).
         self.supabase.table("EUDR_INSTALACIONES").delete().eq(
-            "fid", row["fid"]
+            "id", row["id"]
         ).execute()
+        self.supabase.table("ORGANIZACIONES").delete().eq("ID", "TEST-GIS-SANITIZATION").execute()
 
     # AC5 (índice GiST presente) no tiene test Live: el proyecto no expone
     # ninguna función RPC para correr SQL arbitrario (pg_indexes) desde

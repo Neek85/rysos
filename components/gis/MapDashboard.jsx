@@ -2,7 +2,16 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
-import { exportTracesDDS, resolveOrganizationId, EUDRValidationError, EXPORT_FORMATS } from '@/lib/eudrDdsExporter'
+import {
+  buildTracesPayload,
+  downloadTraceabilityPackage,
+  resolveOrganizationId,
+  resolveMonitoreoIdsForCobertura,
+  attachCoberturaSummary,
+  EUDRValidationError,
+  EXPORT_FORMATS,
+} from '@/lib/eudrDdsExporter'
+import { LAND_USE_STYLES } from '@/lib/gisLandUseStyles'
 
 const EVIDENCIA_BUCKET = 'evidencias_eudr'
 const SIGNED_URL_TTL_SECONDS = 3600
@@ -40,16 +49,10 @@ function normalizeKey(value) {
     .trim()
 }
 
-// Las 7 subdivisiones de uso de suelo (EUDR_USO_SUELO, siempre poligono).
-const LAND_USE_STYLES = [
-  { key: 'produccion', label: 'Producción', color: '#16a34a', fillColor: '#22c55e', fillOpacity: 0.35, icon: '🟢' },
-  { key: 'crecimiento', label: 'Crecimiento', color: '#65a30d', fillColor: '#84cc16', fillOpacity: 0.35, icon: '🌱' },
-  { key: 'pan llevar', label: 'Pan Llevar', color: '#d97706', fillColor: '#f59e0b', fillOpacity: 0.35, icon: '🟧' },
-  { key: 'inverna pasto', label: 'Inverna/Pasto', color: '#ca8a04', fillColor: '#eab308', fillOpacity: 0.35, icon: '🌾' },
-  { key: 'rastrojo purma', label: 'Rastrojo/Purma', color: '#92400e', fillColor: '#b45309', fillOpacity: 0.35, icon: '🍂' },
-  { key: 'bosque', label: 'Bosque', color: '#14532d', fillColor: '#15803d', fillOpacity: 0.45, icon: '🌲' },
-  { key: 'otras areas', label: 'Otras áreas', color: '#6b7280', fillColor: '#9ca3af', fillOpacity: 0.3, icon: '🔘' },
-]
+// Las 7 subdivisiones de uso de suelo (EUDR_USO_SUELO, siempre poligono)
+// -- LAND_USE_STYLES ahora vive en lib/gisLandUseStyles.js (ADR-019),
+// unica fuente compartida con el <select> de "Tipo de Uso" del Editor
+// Vectorial (lib/gisTargetTables.js / VectorEditorTools.jsx).
 const DEFAULT_LAND_USE_STYLE = {
   label: 'Sin clasificar',
   color: '#64748b',
@@ -346,14 +349,20 @@ export default function MapDashboard() {
     return () => clearTimeout(timer)
   }, [exportToast])
 
-  // Genera y descarga UNA de las 2 modalidades reales de exportación DDS
-  // (elegida por el usuario en `exportFormat`, ver EXPORT_FORMATS en
+  // Genera y descarga UNA de las 2 modalidades reales de exportación (elegida
+  // por el usuario en `exportFormat`, ver EXPORT_FORMATS en
   // lib/eudrDdsExporter.js) a partir de los registros aprobados ya
   // cargados — nunca ambas a la vez (antes de
-  // specs/gis_mapa_dashboard_polish.md, exportTracesDDS descargaba los 2
-  // archivos siempre en el mismo click). La validación multi-tenant y la
-  // regla de polígono obligatorio (>= 4 ha) viven en lib/eudrDdsExporter.js
-  // — acá solo se traduce el resultado a estado de UI (spinner + toast).
+  // specs/gis_mapa_dashboard_polish.md, la función descargaba los 2 archivos
+  // siempre en el mismo click). La validación multi-tenant y la regla de
+  // polígono obligatorio (>= 4 ha) viven en lib/eudrDdsExporter.js — acá solo
+  // se traduce el resultado a estado de UI (spinner + toast).
+  //
+  // ADR-017: antes de descargar, se intenta adjuntar cobertura de Uso de
+  // Suelo (Fase B, fn_cobertura_uso_suelo_parcela) como nota informativa —
+  // UNA sola llamada batched a /api/gis/dds-cobertura (esa RPC no acepta
+  // anon key desde el navegador, ver esa migración). Un fallo de red/RPC acá
+  // nunca bloquea la exportación: se descarga igual, sin cobertura adjunta.
   async function handleExportDDS() {
     if (exporting) return
     setExporting(true)
@@ -362,16 +371,39 @@ export default function MapDashboard() {
       const organizationId = resolveOrganizationId(records)
       if (!organizationId) {
         throw new EUDRValidationError(
-          'No hay registros aprobados cargados para generar la DDS.'
+          'No hay registros aprobados cargados para generar el paquete de trazabilidad.'
         )
       }
-      const payload = exportTracesDDS(records, organizationId, exportFormat)
+
+      let payload = buildTracesPayload(records, organizationId)
+
+      const coberturaLookups = resolveMonitoreoIdsForCobertura(records)
+      if (coberturaLookups.length > 0) {
+        try {
+          const res = await fetch('/api/gis/dds-cobertura', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              organizationId,
+              monitoreoIds: coberturaLookups.map((l) => l.monitoreoId),
+            }),
+          })
+          if (res.ok) {
+            const { result } = await res.json()
+            payload = attachCoberturaSummary(payload, records, result)
+          }
+        } catch {
+          // Informativo únicamente — nunca debe bloquear la exportación.
+        }
+      }
+
+      const exported = downloadTraceabilityPackage(payload, exportFormat)
       const formatLabel = EXPORT_FORMATS.find((f) => f.value === exportFormat)?.label || exportFormat
       setExportToast({
         type: 'success',
         message:
-          `${formatLabel} exportado: ${payload.total_plots} parcela(s), ` +
-          `${payload.total_hectares} ha certificadas.`,
+          `${formatLabel} exportado: ${exported.total_plots} parcela(s), ` +
+          `${exported.total_hectares} ha certificadas.`,
       })
     } catch (err) {
       setExportToast({
@@ -379,7 +411,7 @@ export default function MapDashboard() {
         message:
           err instanceof EUDRValidationError
             ? err.message
-            : err?.message || 'No se pudo generar la DDS.',
+            : err?.message || 'No se pudo generar el paquete de trazabilidad.',
       })
     } finally {
       setExporting(false)
@@ -435,7 +467,13 @@ export default function MapDashboard() {
       const { data, error: err } = await supabase
         .from('vw_monitoreo_web')
         .select(
-          'tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,productor_nombre,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,cumple_eudr,geom_geojson'
+          // ADR-028: id_producto_predominante/producto_codigo/producto_nombre
+          // agregados -- vw_monitoreo_web ya los expone (rama "poligono";
+          // NULL en rama "punto"), pero un SELECT explícito no los deja
+          // pasar sin este agregado (CLAUDE.md: agregar una columna a la
+          // vista no la hace visible por sí sola). buildTracesPayload (vía
+          // pickProducto en lib/eudrDdsExporter.js) los necesita en `records`.
+          'registro_id,tabla_origen,ID_Organizacion,ID_Parcela_Fija,parcela_codigo,parcela_nombre,area_ha,productor,productor_nombre,clasificacion,evidencia_foto,estado_revision,fecha_monitoreo,observaciones,cumple_eudr,geom_geojson,id_producto_predominante,producto_codigo,producto_nombre'
         )
         .eq('ID_Organizacion', organizationId)
 
@@ -716,7 +754,7 @@ export default function MapDashboard() {
               onChange={(e) => setExportFormat(e.target.value)}
               disabled={exporting}
               className="rounded border-0 bg-transparent px-1 py-0.5 text-xs font-medium text-green-900 focus:outline-none disabled:opacity-50"
-              aria-label="Modalidad de exportación DDS"
+              aria-label="Modalidad del Paquete de Trazabilidad"
             >
               {EXPORT_FORMATS.map((f) => (
                 <option key={f.value} value={f.value}>
@@ -736,11 +774,14 @@ export default function MapDashboard() {
                   Generando…
                 </>
               ) : (
-                <>📄 Exportar DDS</>
+                <>📄 Exportar Paquete de Trazabilidad</>
               )}
             </button>
           </div>
         </div>
+        <p className="text-right text-[11px] leading-tight text-gray-400">
+          Paquete de datos para entregar al comprador/importador, quien presenta la declaración final ante la UE.
+        </p>
       </div>
 
       {exportToast && (

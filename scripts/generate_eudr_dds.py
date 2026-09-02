@@ -1,6 +1,17 @@
 """
-Generador de Declaración de Debida Diligencia (DDS) EUDR.
-Reglamento UE 2023/1115 — formato compatible con plataforma TRACES EU.
+Generador del Paquete de Trazabilidad EUDR (contraparte Python de
+lib/eudrDdsExporter.js). Reglamento UE 2023/1115.
+
+CORRECCIÓN (2026-08-23, ver docs/adr/ADR-017-formato-real-exportacion-trazabilidad.md):
+el dict que arma build_traces_payload() (declaration_type/regulation/
+organization_id/total_plots/total_hectares/geojson) es una convención
+INTERNA de RYZOS, no un estándar oficial de TRACES ni de la Comisión
+Europea — RYZOS no presenta la DDS directamente ante TRACES, arma el
+paquete de datos para que el comprador/importador europeo la presente. El
+esquema oficial y público que sí exige la Comisión Europea aplica solo al
+GeoJSON de geolocalización (properties ProducerName/ProducerCountry/
+ProductionPlace/Area, geometrías Point/MultiPoint/Polygon/MultiPolygon/
+GeometryCollection — nunca LineString/MultiLineString), no a este wrapper.
 """
 
 import json
@@ -16,7 +27,8 @@ class EUDRDDSGenerator:
         self.organization_id = organization_id
 
     def build_traces_payload(self, approved_records: list[dict[str, Any]]) -> dict[str, Any]:
-        """Transforma registros aprobados en el formato estandarizado TRACES EU."""
+        """Transforma registros aprobados en la hoja de resumen interna de RYZOS
+        (NO un estándar oficial de TRACES — ver ADR-017)."""
         features = []
         total_hectares = 0.0
 

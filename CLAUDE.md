@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+This project is also worked on with Gemini under the same "Senior RYZOS Architect" role (not just Claude) — see `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1 for the multi-AI collaboration protocol, including the mandatory second-review gate for SQL/RLS/migrations/security tasks before they reach Claude Code CLI.
+
 ## Commands
 
 ### Python (backend/ETL/GIS scripts + tests)
@@ -36,6 +38,23 @@ unit tests under `tests/*.mjs`, run with Node's built-in test runner:
 are not wired into CI** — `.github/workflows/test_and_deploy.yml` only runs
 `python -m pytest tests/ -v --tb=short`, so a regression in one of those
 `lib/` files would not fail the pipeline today.
+
+**Dev server hygiene (Windows/PowerShell):** always kill `node` processes,
+delete `.next`, and restart `npm run dev` clean after running `npm run
+build` — a `next dev` process left running across a `build` ends up
+serving a `.next/` it no longer matches (dev-mode manifests pointing at
+unhashed chunk names that the production build just overwrote with hashed
+ones), which renders any route with no CSS and hydration that never
+resolves. Additionally, in long, intensive Claude Code sessions, restart
+`npm run dev` **periodically even without an intervening build** — two
+real, independently-diagnosed incidents in the same session (2026-08-21)
+both traced back to a long-lived `next dev`/spawned-child process quietly
+entering a broken state with no visible error until much later: the
+`/dashboard/mapa` stale-build-cache incident above, and
+`app/api/gis/sync-drive/route.js`'s `child_process.spawn('python', ...)`
+failing with Windows `STATUS_DLL_INIT_FAILED` (`0xC0000142`) and zero
+captured output — both resolved by simply restarting the dev server, with
+no code change required.
 
 ### Database (Supabase PostGIS)
 
@@ -109,9 +128,9 @@ see the RLS gotcha above) — writes go through Next.js Server Actions
 multi-tenant isolation is enforced explicitly in that file
 (`assertMatchesExistingOrg`, `assertParcelaMatchesOrg`,
 `assertSocioExists`) rather than by a policy. Deactivating a record
-(`activo = false`, never a physical `DELETE` — the padrón is shared live
-with another repo and IDs may be referenced from `INSPECCIONES`/
-`EUDR_MONITOREO` without a real FK) cascades from socio to that socio's
+(`activo = false`, never a physical `DELETE` — IDs may be referenced from
+`INSPECCIONES`/`EUDR_MONITOREO` without a real FK, see ADR-007) cascades
+from socio to that socio's
 parcelas (`deactivateSocio`) but deliberately stops there — it does not
 touch `EUDR_MONITOREO` or any EUDR/WebGIS view, so monitoring history
 survives a producer leaving the padrón. CSV bulk import

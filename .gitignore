@@ -33,3 +33,6 @@ Thumbs.db
 
 # E2E ETL Drive — artefactos generados localmente (scripts/run_e2e_etl_test.py)
 temp_drive/
+
+# Padrón sintético generado localmente (scripts/generar_padron_sintetico.mjs)
+scratch/

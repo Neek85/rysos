@@ -14,7 +14,7 @@ from scripts.etl_drive_to_supabase import DriveZipETLPipeline, EVIDENCIA_BUCKET
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASE_DIR = PROJECT_ROOT / "temp_drive"
 
-ORG_ID = "ORG-COOP-NORTE"
+ORG_ID = "ORG-TEST-E2E"
 ZIP_NAME = "monitoreo_campo_e2e.zip"
 PHOTO_NAME = "foto_campo_01.jpg"
 SOURCE_CRS = "EPSG:32718"  # UTM 18S — coordenadas de campo reales antes de reproyectar
@@ -106,8 +106,66 @@ def verify_photo_criterion(result: dict) -> str:
     return storage_path
 
 
-def run_e2e(base_dir: Path, mock_supabase: MagicMock | None = None) -> dict:
-    """Orquesta el escenario E2E completo y devuelve resultados + evidencias de verificacion."""
+
+class UnsafeOrgIdError(Exception):
+    """El ID_Organizacion que el script va a usar no está marcado como de prueba."""
+
+
+# GUARDARAIL DE ENTORNO (2026-08-22, ver
+# docs/adr/ADR-008-etiqueta-organizacion-prueba-y-guardarail-e2e.md):
+# antes de escribir cualquier fila real, confirma en vivo que ORG_ID tiene
+# es_organizacion_prueba = true en ORGANIZACIONES. Si la fila no existe o
+# no está marcada como de prueba, aborta sin escribir nada — nunca debe
+# ser posible que una corrida real de este script escriba contra una
+# organización real por error de configuración (ORG_ID mal copiado, .env
+# apuntando al ambiente equivocado, etc.). Motivado por el incidente de
+# ADR-007: antes de esto, el script escribía con ORG_ID = "ORG-COOP-NORTE"
+# sin fila correspondiente en ORGANIZACIONES ni forma de detectarlo en
+# código — solo se descubrió por auditoría manual del schema.
+def assert_org_is_test_marked(supabase, org_id: str) -> None:
+    response = (
+        supabase.table("ORGANIZACIONES").select("ID,es_organizacion_prueba").eq("ID", org_id).execute()
+    )
+    rows = response.data or []
+    if not rows or not rows[0].get("es_organizacion_prueba"):
+        raise UnsafeOrgIdError(
+            f'Guardarail E2E: "{org_id}" no existe en ORGANIZACIONES o no tiene '
+            f"es_organizacion_prueba = true. Abortando sin escribir nada — este script "
+            f"nunca debe poder escribir contra una organización no marcada explícitamente "
+            f"como de prueba. Ver docs/adr/ADR-008-etiqueta-organizacion-prueba-y-guardarail-e2e.md."
+        )
+
+
+# HALLAZGO REAL (2026-08-21, ver docs/adr/ADR-007-integridad-referencial-id-organizacion.md):
+# este script, en modo REAL (con SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY
+# reales), insertaba filas de verdad en EUDR_MONITOREO usando ORG_ID =
+# "ORG-COOP-NORTE" — un código de organización de prueba que nunca tuvo
+# fila correspondiente en ORGANIZACIONES, y el script no las limpiaba al
+# terminar. Corridas repetidas (confirmado: 6 filas huérfanas
+# acumuladas en EUDR_MONITOREO) dejaban basura permanente en la
+# instancia viva. Este teardown borra, en un `finally` (corre tanto si
+# el test pasa como si falla a mitad de camino), únicamente las filas
+# que ESTE run creó (por `id_monitoreo`, nunca un `DELETE ... WHERE
+# "ID_Organizacion" = ORG_ID` sin acotar — evita borrar corridas
+# anteriores que hayan quedado por otro motivo, o cualquier fila real
+# que coincidiera por casualidad con el mismo ID_Organizacion). Sigue
+# funcionando sin cambios con el nuevo ORG_ID = "ORG-TEST-E2E" — nunca
+# dependió del valor de ORG_ID, solo de los ids que este run insertó.
+def teardown_e2e_rows(pipeline: DriveZipETLPipeline, inserted_ids: list[str]) -> None:
+    if not inserted_ids:
+        return
+    for row_id in inserted_ids:
+        pipeline.supabase.table("EUDR_MONITOREO").delete().eq("id_monitoreo", row_id).execute()
+
+
+def run_e2e(base_dir: Path, mock_supabase: MagicMock | None = None, cleanup: bool = True) -> dict:
+    """Orquesta el escenario E2E completo y devuelve resultados + evidencias de verificacion.
+
+    `cleanup=True` (default): borra, en un `finally`, las filas reales que
+    este run insertó en EUDR_MONITOREO — corre incluso si una verificación
+    intermedia lanza `AssertionError`. `cleanup=False` es solo para
+    depuración manual (inspeccionar las filas insertadas a propósito).
+    """
     supabase_url = os.getenv("SUPABASE_URL", "https://fake.supabase.co")
     supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "fake-key")
 
@@ -117,30 +175,41 @@ def run_e2e(base_dir: Path, mock_supabase: MagicMock | None = None) -> dict:
     gdf_reprojected = verify_reprojection(zip_path, base_dir / "_verify_reproj")
 
     pipeline = build_pipeline(base_dir, supabase_url, supabase_key, mock_supabase=mock_supabase)
-    result = pipeline.process_package(zip_path, execute_move=True)
+    if mock_supabase is None:
+        assert_org_is_test_marked(pipeline.supabase, ORG_ID)
 
-    archived_zip = verify_archive_criterion(archive_dir)
-    storage_path = verify_photo_criterion(result)
+    inserted_ids: list[str] = []
+    try:
+        result = pipeline.process_package(zip_path, execute_move=True)
+        inserted_ids = list(result.get("inserted_ids") or [])
 
-    if mock_supabase is not None:
-        insert_payload = mock_supabase.table.return_value.upsert.call_args[0][0]
-        estado_revision = insert_payload["estado_revision"]
-    else:
-        response = (
-            pipeline.supabase.table("EUDR_MONITOREO")
-            .select("estado_revision")
-            .eq("id_monitoreo", result["inserted_ids"][0])
-            .execute()
-        )
-        estado_revision = response.data[0]["estado_revision"]
+        archived_zip = verify_archive_criterion(archive_dir)
+        storage_path = verify_photo_criterion(result)
 
-    return {
-        "result": result,
-        "archived_zip": archived_zip,
-        "storage_path": storage_path,
-        "gdf_epsg": gdf_reprojected.crs.to_epsg(),
-        "estado_revision": estado_revision,
-    }
+        if mock_supabase is not None:
+            insert_payload = mock_supabase.table.return_value.upsert.call_args[0][0]
+            estado_revision = insert_payload["estado_revision"]
+        else:
+            response = (
+                pipeline.supabase.table("EUDR_MONITOREO")
+                .select("estado_revision")
+                .eq("id_monitoreo", result["inserted_ids"][0])
+                .execute()
+            )
+            estado_revision = response.data[0]["estado_revision"]
+
+        return {
+            "result": result,
+            "archived_zip": archived_zip,
+            "storage_path": storage_path,
+            "gdf_epsg": gdf_reprojected.crs.to_epsg(),
+            "estado_revision": estado_revision,
+        }
+    finally:
+        # mock_supabase: no hay nada real que borrar (modo simulado).
+        # cleanup=False: depuración manual, se deja la fila a propósito.
+        if cleanup and mock_supabase is None:
+            teardown_e2e_rows(pipeline, inserted_ids)
 
 
 def main() -> int:
@@ -156,6 +225,11 @@ def main() -> int:
         )
         mock_supabase = MagicMock()
         mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+        # ADR-012: simula "el registro todavia no existe" para el chequeo previo al upsert.
+        select_mock = mock_supabase.table.return_value.select.return_value
+        select_mock.eq.return_value.execute.return_value.data = []
+        select_mock.eq.return_value.eq.return_value.execute.return_value.data = []
+        select_mock.eq.return_value.eq.return_value.neq.return_value.execute.return_value.data = []
 
     print(f"[E2E-DRIVE] Base dir: {DEFAULT_BASE_DIR}")
     outcome = run_e2e(DEFAULT_BASE_DIR, mock_supabase=mock_supabase)

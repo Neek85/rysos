@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import { LAYER_LABELS, EDITABLE_FIELDS } from '@/lib/eudrQcActions'
 import { describeDeforestationBadge } from '@/lib/qcTopologyValidation'
+import { calcularPctCobertura, buildCoberturaAvisoMensaje } from '@/lib/qcCoberturaUsoSuelo'
+import { buildConflictoParcelaMensaje } from '@/lib/qcCodigoParcelaUnico'
 
 // Mismo bucket/TTL que components/gis/MapDashboard.jsx::loadPhoto — el
 // bucket evidencias_eudr es privado, no hay URL pública directa. No existía
@@ -54,6 +56,12 @@ export default function QcDetailEditor({
   geometryDraft,
   isEditingGeometry,
   onToggleGeometryEdit,
+  // true mientras hay una sesión de dibujo de geometría nueva en curso en
+  // el Editor Vectorial (mutua exclusión, ver
+  // docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md) — deshabilita
+  // el toggle para EMPEZAR a editar este registro, pero nunca bloquea
+  // terminar una edición ya en curso (page.jsx ya excluye ese caso).
+  geometryEditDisabled,
   onSaveAttributes,
   onSaveGeometry,
   motivo,
@@ -79,6 +87,52 @@ export default function QcDetailEditor({
   const [localError, setLocalError] = useState(null)
   const [photoUrl, setPhotoUrl] = useState(null)
   const canValidateTopology = record.tabla_origen !== 'EUDR_INSTALACIONES'
+  // Cobertura de la parcela (Fase B, ver ADR-011) — solo aplica a
+  // subdivisiones de Uso de Suelo (es la tabla cuya suma se compara
+  // contra el perímetro de Monitoreo).
+  const esUsoSuelo = record.tabla_origen === 'EUDR_USO_SUELO'
+  const [coberturaResult, setCoberturaResult] = useState(null)
+  const [coberturaLoading, setCoberturaLoading] = useState(false)
+  const [coberturaError, setCoberturaError] = useState(null)
+  // Código de parcela único por ubicación (ADR-014) — solo aplica a
+  // EUDR_MONITOREO (record.id_origen === record.id_monitoreo para esta
+  // tabla, ver lib/eudrQcActions.js): EUDR_USO_SUELO/EUDR_INSTALACIONES no
+  // tienen ID_Parcela_Fija propio, heredan la parcela de su Monitoreo
+  // padre, así que el conflicto (si existe) ya se refleja al revisar ese
+  // Monitoreo, no acá.
+  const esMonitoreo = record.tabla_origen === 'EUDR_MONITOREO'
+  const [conflictoParcela, setConflictoParcela] = useState(null)
+  const [conflictoLoading, setConflictoLoading] = useState(false)
+  const [conflictoError, setConflictoError] = useState(null)
+  // Organización real del socio/parcela referenciado (ADR-020) — a
+  // diferencia del bloque de arriba, corre para las 3 tablas EUDR_* (no
+  // solo Monitoreo): EUDR_USO_SUELO/EUDR_INSTALACIONES también tienen
+  // ID_Parcela_Fija (aliasing de id_parcela, ver POLIGONOS_COLUMNS/
+  // PUNTOS_COLUMNS en lib/eudrQcActions.js) y son igual de vulnerables al
+  // mismo gap (confirmado en la investigación: el ETL de Drive nunca
+  // valida organización para ninguna de las 3).
+  const [orgMismatch, setOrgMismatch] = useState(null)
+  const [orgMismatchLoading, setOrgMismatchLoading] = useState(false)
+  const [orgMismatchError, setOrgMismatchError] = useState(null)
+  // Fuente de verdad para el texto de ayuda de "Ajustar geometría": el
+  // tipo real de geometría del registro (record.geom, normalmente ya un
+  // objeto GeoJSON — ver el comentario de parseGeometry en
+  // components/gis/QcConsoleMap.jsx, que igual lo trata como
+  // potencialmente string por las dudas), NUNCA tabla_origen. Un
+  // EUDR_MONITOREO puede ser Point si el técnico QField lo capturó así
+  // (ver ST_Dimension() en fn_validar_topologia_eudr) — inferir por
+  // nombre de tabla habría sido incorrecto para esos casos.
+  const recordGeometry =
+    typeof record.geom === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(record.geom)
+          } catch {
+            return null
+          }
+        })()
+      : record.geom
+  const isPointRecord = recordGeometry?.type === 'Point'
 
   // Firma la URL de la foto de evidencia solo cuando hay una para este
   // registro — `key={record.key}` en el padre (page.jsx) ya remonta este
@@ -97,6 +151,106 @@ export default function QcDetailEditor({
         if (!error && data?.signedUrl) setPhotoUrl(data.signedUrl)
       })
   }, [record.evidencia_foto])
+
+  // Cobertura de la parcela (ver ADR-011): se busca automáticamente al
+  // seleccionar un registro de Uso de Suelo (no detrás de un botón manual
+  // como "Validar Topología") — para que el dato ya esté disponible apenas
+  // se abre el registro, sin depender de que alguien decida revisarlo por
+  // su cuenta. Es puramente informativo (nunca bloquea "Aprobar" — ver
+  // ADR-011, corrección del círculo imposible original).
+  // `key={record.key}` en el padre ya remonta este componente al cambiar
+  // de selección, así que no hace falta un guard de "cancelled" adicional
+  // (mismo criterio que el efecto de la foto, arriba).
+  useEffect(() => {
+    if (!esUsoSuelo) return
+    setCoberturaLoading(true)
+    setCoberturaError(null)
+    fetch('/api/qc/cobertura-uso-suelo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // record.id_origen (no record.registro_id) es el id real de la fila
+      // — mismo campo que usa resolveUpdateTarget (lib/eudrQcActions.js)
+      // y la llamada existente a /api/qc/validate-spatial (page.jsx). Bug
+      // real encontrado en vivo: probando en el navegador, el panel
+      // mostraba "Registro EUDR_USO_SUELO 1 no encontrado" porque
+      // record.registro_id no es el id real de la fila para este origen
+      // de datos (vw_monitoreo_poligonos/vw_monitoreo_puntos).
+      body: JSON.stringify({ uso_suelo_id: record.id_origen }),
+    })
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.error) {
+          setCoberturaError(json.error)
+          return
+        }
+        setCoberturaResult(json.result)
+      })
+      .catch((err) => setCoberturaError(err?.message || 'No se pudo calcular la cobertura de la parcela.'))
+      .finally(() => setCoberturaLoading(false))
+  }, [esUsoSuelo, record.id_origen])
+
+  // Código de parcela único por ubicación (ver ADR-014): mismo patrón que
+  // el efecto de cobertura arriba — se busca automáticamente al
+  // seleccionar un registro de Monitoreo, no detrás de un botón manual.
+  // A diferencia de cobertura (que pasó a ser puramente informativa tras
+  // el círculo imposible de ADR-011), esto SÍ bloquea Aprobar/Rechazar a
+  // propósito: la regla de negocio ("un código = un único lugar físico")
+  // es absoluta, confirmada por el usuario, no una inferencia de datos —
+  // y a diferencia de cobertura, no hay circularidad posible acá (un
+  // conflicto entre dos registros existentes no depende de que ninguno de
+  // los dos se apruebe primero).
+  useEffect(() => {
+    if (!esMonitoreo) return
+    setConflictoLoading(true)
+    setConflictoError(null)
+    fetch('/api/qc/validar-codigo-parcela', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monitoreo_id: record.id_origen }),
+    })
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.error) {
+          setConflictoError(json.error)
+          return
+        }
+        setConflictoParcela(json.result)
+      })
+      .catch((err) => setConflictoError(err?.message || 'No se pudo validar el código de parcela.'))
+      .finally(() => setConflictoLoading(false))
+  }, [esMonitoreo, record.id_origen])
+
+  // Organización real del socio/parcela referenciado (ver ADR-020): mismo
+  // patrón que el efecto de arriba (busca automáticamente al seleccionar un
+  // registro, no detrás de un botón manual), pero SOLO bloquea Aprobar —
+  // decisión explícita, a diferencia del conflicto de código de parcela de
+  // arriba (que bloquea ambos): nunca hay que cerrar la salida de descartar
+  // un registro problemático, ver render de los botones más abajo.
+  useEffect(() => {
+    setOrgMismatchLoading(true)
+    setOrgMismatchError(null)
+    fetch('/api/qc/validar-organizacion-socio-parcela', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ID_Organizacion: record.ID_Organizacion,
+        ID_Parcela_Fija: record.ID_Parcela_Fija,
+        tabla_origen: record.tabla_origen,
+        id_monitoreo: record.id_monitoreo,
+        fecha_monitoreo: record.fecha_monitoreo,
+      }),
+    })
+      .then((res) => res.json())
+      .then((json) => {
+        if (json.error) {
+          setOrgMismatchError(json.error)
+          return
+        }
+        setOrgMismatch(json.result)
+      })
+      .catch((err) => setOrgMismatchError(err?.message || 'No se pudo validar la organización del socio/parcela.'))
+      .finally(() => setOrgMismatchLoading(false))
+  }, [record.id_origen, record.ID_Organizacion, record.ID_Parcela_Fija, record.tabla_origen, record.id_monitoreo])
 
   async function handleSaveAttributes() {
     setLocalError(null)
@@ -177,7 +331,9 @@ export default function QcDetailEditor({
           <button
             type="button"
             onClick={onToggleGeometryEdit}
-            className={`rounded border px-3 py-1 text-xs font-semibold ${
+            disabled={geometryEditDisabled}
+            title={geometryEditDisabled ? 'Terminá o cancelá el dibujo en curso en el Editor Vectorial primero.' : undefined}
+            className={`rounded border px-3 py-1 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
               isEditingGeometry
                 ? 'border-amber-400 bg-amber-50 text-amber-700'
                 : 'border-gray-300 text-gray-700 hover:bg-white'
@@ -198,8 +354,11 @@ export default function QcDetailEditor({
         </div>
         {isEditingGeometry && (
           <p className="text-[11px] text-gray-400">
-            Arrastrá los vértices (o el marcador) directamente sobre el mapa. "Guardar Cambios de Geometría"
-            aparece cuando haya un cambio — al guardar, se vuelve a ejecutar el test espacial automáticamente.
+            {isPointRecord
+              ? 'Arrastrá el marcador directamente sobre el mapa.'
+              : 'Arrastrá los vértices directamente sobre el mapa.'}{' '}
+            &quot;Guardar Cambios de Geometría&quot; aparece cuando haya un cambio — al guardar, se vuelve a ejecutar el
+            test espacial automáticamente.
           </p>
         )}
       </div>
@@ -273,6 +432,94 @@ export default function QcDetailEditor({
         </div>
       )}
 
+      {esUsoSuelo && (
+        <div className="space-y-2 rounded-lg border border-gray-100 bg-gray-50 p-3">
+          <p className="text-xs font-semibold text-gray-500">Cobertura de la parcela</p>
+
+          {coberturaLoading && <p className="text-[11px] text-gray-400">Calculando cobertura…</p>}
+          {coberturaError && <p className="text-[11px] text-red-600">{coberturaError}</p>}
+
+          {coberturaResult && !coberturaResult.vinculo_disponible && (
+            <p className="rounded bg-gray-100 p-2 text-[11px] text-gray-600">ℹ {coberturaResult.mensaje}</p>
+          )}
+
+          {coberturaResult?.vinculo_disponible && (
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                  Área Monitoreo: {coberturaResult.area_monitoreo_ha?.toFixed?.(2)} ha
+                </span>
+                <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                  Subdivisiones aprobadas: {coberturaResult.suma_uso_suelo_aprobado_ha?.toFixed?.(2)} ha
+                </span>
+                <Badge
+                  ok={!coberturaResult.hueco_cobertura}
+                  okLabel={`Cobertura ${calcularPctCobertura(coberturaResult)}%`}
+                  badLabel={`Cobertura ${calcularPctCobertura(coberturaResult)}%`}
+                />
+              </div>
+
+              {/* Aviso informativo, nunca bloqueante — ver ADR-011 sección
+                  "Corrección: de bloqueante a informativo". Mismo estilo
+                  ámbar que la alerta de "Solapado X%" de Fase A. */}
+              {coberturaResult.hueco_cobertura && (
+                <p className="rounded bg-amber-50 p-2 text-[11px] text-amber-800">
+                  ⚠ {buildCoberturaAvisoMensaje(coberturaResult)}
+                </p>
+              )}
+
+              {/* Sub-sección deliberadamente de menor énfasis (fondo blanco
+                  liso, texto gris, sin badge de color) — totalh nunca
+                  participa en el cálculo de hueco_cobertura, ver ADR-011. */}
+              <div className="rounded border border-gray-100 bg-white p-2">
+                <p className="text-[10px] font-medium text-gray-400">
+                  Dato del Padrón — puede no ser confiable, ver ADR-011
+                </p>
+                {typeof coberturaResult.totalh_padron_ha === 'number' ? (
+                  <p className="text-[11px] text-gray-500">
+                    totalh: {coberturaResult.totalh_padron_ha.toFixed(2)} ha
+                    {typeof coberturaResult.divergencia_totalh_pct === 'number' &&
+                      ` (diverge ${coberturaResult.divergencia_totalh_pct}% del área real de Monitoreo)`}
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-gray-400">Sin dato de totalh en el Padrón.</p>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {esMonitoreo && conflictoLoading && (
+        <p className="text-[11px] text-gray-400">Verificando unicidad del código de parcela…</p>
+      )}
+      {esMonitoreo && conflictoError && <p className="text-[11px] text-red-600">{conflictoError}</p>}
+      {/* Bloqueante de verdad (rojo, no ámbar) — a diferencia de los avisos
+          de Fase A/B (Solapado X%, Cobertura parcial), que son puramente
+          informativos, ver ADR-014: la unicidad de código de parcela es
+          una regla de negocio absoluta confirmada por el usuario, no una
+          heurística. Mismo estilo de mensaje que el error ya existente en
+          lib/eudrQcActions.js::resolveUpdateTarget ("No se puede aplicar
+          la decisión..."). */}
+      {esMonitoreo && conflictoParcela?.tiene_conflicto && (
+        <p className="rounded border border-red-200 bg-red-50 p-2 text-xs font-medium text-red-700">
+          ⛔ {buildConflictoParcelaMensaje(conflictoParcela)}
+        </p>
+      )}
+
+      {orgMismatchLoading && (
+        <p className="text-[11px] text-gray-400">Verificando organización del socio/parcela…</p>
+      )}
+      {orgMismatchError && <p className="text-[11px] text-red-600">{orgMismatchError}</p>}
+      {/* Mismo estilo bloqueante (rojo) que el conflicto de código de
+          parcela arriba (ADR-014) — ver ADR-020: a diferencia de ese, solo
+          deshabilita Aprobar (más abajo), nunca Rechazar. */}
+      {orgMismatch?.tieneConflicto && (
+        <p className="rounded border border-red-200 bg-red-50 p-2 text-xs font-medium text-red-700">
+          ⛔ {orgMismatch.mensaje}
+        </p>
+      )}
+
       {localError && <p className="rounded bg-red-50 p-2 text-xs text-red-600">{localError}</p>}
 
       <textarea
@@ -287,7 +534,7 @@ export default function QcDetailEditor({
         <button
           type="button"
           onClick={onApprove}
-          disabled={busy}
+          disabled={busy || conflictoParcela?.tiene_conflicto || orgMismatch?.tieneConflicto}
           className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? 'Procesando…' : '✓ Aprobar'}
@@ -295,7 +542,7 @@ export default function QcDetailEditor({
         <button
           type="button"
           onClick={onReject}
-          disabled={busy || !motivo.trim()}
+          disabled={busy || !motivo.trim() || conflictoParcela?.tiene_conflicto}
           className="flex-1 rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? 'Procesando…' : '✕ Rechazar'}

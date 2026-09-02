@@ -13,7 +13,7 @@ import { computeNextParcelaCode, computeSuggestedParcelaId } from '@/lib/parcela
 import GeometryUploadField from './GeometryUploadField'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 
-function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, onSaved, onCancel }) {
+function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, productos, onSaved, onCancel }) {
   const isEdit = Boolean(parcela)
   const [geometry, setGeometry] = useState(null)
 
@@ -32,7 +32,9 @@ function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, onSav
   } = useForm({
     resolver: zodResolver(parcelaSchema),
     defaultValues: parcela
-      ? { ...PARCELA_DEFAULT_VALUES, ...parcela }
+      ? // id_producto_predominante: null (DB) -> '' (opción "Sin especificar"
+        // del <select>) -- un <select> no controlado no debe recibir null.
+        { ...PARCELA_DEFAULT_VALUES, ...parcela, id_producto_predominante: parcela.id_producto_predominante || '' }
       : { ...PARCELA_DEFAULT_VALUES, ID_Socio: socioId, ID_Parcela_Fija: suggestedId, parcela_codigo: suggestedCode },
   })
 
@@ -74,6 +76,20 @@ function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, onSav
 
       <FormField label="Nombre de la Parcela">
         <input type="text" className={inputClass(false)} {...register('parcela_nombre')} />
+      </FormField>
+
+      {/* ADR-028: dato maestro editable, uuid FK -> PRODUCTOS. Solo
+          catálogo AGRICOLA activo (sin productos PECUARIO todavía, ver
+          specs/multi_producto_cafe_cacao.md sección 8.1). */}
+      <FormField label="Producto Predominante" error={errors.id_producto_predominante?.message}>
+        <select className={inputClass(errors.id_producto_predominante)} {...register('id_producto_predominante')}>
+          <option value="">Sin especificar</option>
+          {productos.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.nombre}
+            </option>
+          ))}
+        </select>
       </FormField>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -124,8 +140,9 @@ function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, onSav
   )
 }
 
-export default function ParcelaFormModal({ socio, organizationId, onClose }) {
+export default function ParcelaFormModal({ socio, organizationId, onClose, onParcelaCreated }) {
   const [parcelas, setParcelas] = useState([])
+  const [productos, setProductos] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [editingParcela, setEditingParcela] = useState(null)
@@ -143,7 +160,7 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
     }
     setLoading(true)
     try {
-      const rows = await fetchParcelasBySocio(supabase, socio.ID_Socio)
+      const rows = await fetchParcelasBySocio(socio.ID_Socio, organizationId)
       setParcelas(rows)
     } catch (err) {
       setError(err?.message || 'Error al cargar parcelas.')
@@ -161,10 +178,35 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socio.ID_Socio])
 
-  function handleSaved() {
+  // ADR-028: catálogo global (RLS: SELECT abierto para anon), no depende
+  // de socio/organización -- se carga una sola vez, no en `reload()`.
+  useEffect(() => {
+    const supabase = getSupabaseClient()
+    if (!supabase) return
+    supabase
+      .from('PRODUCTOS')
+      .select('id, codigo, nombre')
+      .eq('vertical', 'AGRICOLA')
+      .eq('activo', true)
+      .order('nombre')
+      .then(({ data, error: fetchError }) => {
+        if (!fetchError && data) setProductos(data)
+      })
+  }, [])
+
+  // `result` viene de createParcela/updateParcela ({ id, created }) —
+  // `onParcelaCreated` (ADR-021, opcional, undefined en /dashboard/socios
+  // que no la usa) solo se dispara en un ALTA real, nunca en una edición,
+  // para que el Editor Vectorial pueda seleccionar automáticamente la
+  // parcela recién creada sin tener que volver a buscarla (mismo patrón
+  // ya usado para "+ Crear socio nuevo" en ADR-019).
+  function handleSaved(result) {
     setEditingParcela(null)
     setShowNewForm(false)
     reload()
+    if (result?.created) {
+      onParcelaCreated?.(result)
+    }
   }
 
   async function handleConfirmDeactivate() {
@@ -212,6 +254,7 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
                   socioId={socio.ID_Socio}
                   organizationId={organizationId}
                   parcela={p}
+                  productos={productos}
                   onSaved={handleSaved}
                   onCancel={() => setEditingParcela(null)}
                 />
@@ -253,6 +296,7 @@ export default function ParcelaFormModal({ socio, organizationId, onClose }) {
                 socioId={socio.ID_Socio}
                 organizationId={organizationId}
                 existingParcelas={parcelas}
+                productos={productos}
                 onSaved={handleSaved}
                 onCancel={() => setShowNewForm(false)}
               />

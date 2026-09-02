@@ -17,8 +17,28 @@
 //    creado y traduce sus eventos a callbacks planos.
 // 2. useVectorEditor + VectorEditorPanel (export default) — hook + panel
 //    lateral que consumen lib/gisVectorEditor.js para el flujo de guardado.
+//
+// ADR-019: los campos `padronEntity` de TARGET_TABLE_FIELDS
+// (lib/gisTargetTables.js) — Código de Socio/Código de Parcela — ya no
+// son texto libre. PadronEntityField (más abajo) los reemplaza por un
+// autocompletado real contra PADRON_SOCIOS/PADRON_PARCELAS (mismo
+// lib/padronSearch.js y PadronAutocomplete que ya usa Inspecciones), con
+// una opción "+ Crear socio nuevo" que reutiliza SocioFormModal
+// (components/features/socios/) como overlay — nunca se duplica su
+// validación (sociosActions.js). El rechazo real de un código inventado
+// vive del lado del servidor, en lib/actions/gisActions.js.
+//
+// ADR-021: mismo patrón para "+ Crear parcela nueva" (reutiliza
+// ParcelaFormModal), solo disponible cuando ya hay un socio elegido en el
+// mismo formulario — ver PadronEntityField/onCreateParcela más abajo.
+// El valor técnico real que se guarda en EUDR_USO_SUELO.id_parcela
+// (vínculo con su Monitoreo padre para fn_cobertura_uso_suelo_parcela,
+// ADR-010) se resuelve enteramente del lado del servidor
+// (lib/actions/gisActions.js::resolveQfieldRelationId) — este archivo
+// nunca maneja ese identificador técnico directamente, solo el código
+// legible de PADRON_PARCELAS de siempre.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { uploadGeoSpatialFeature } from '@/lib/actions/gisActions'
 import {
   TARGET_TABLE_LABELS,
@@ -27,6 +47,39 @@ import {
   GIS_TARGET_TABLES,
 } from '@/lib/gisTargetTables'
 import { evaluateGeometry, isGeometryAllowedForTable } from '@/lib/gisVectorEditor'
+import { searchSocios, searchParcelas } from '@/lib/padronSearch'
+import PadronAutocomplete from '@/components/features/inspecciones/PadronAutocomplete'
+import SocioFormModal from '@/components/features/socios/SocioFormModal'
+import ParcelaFormModal from '@/components/features/socios/ParcelaFormModal'
+
+/**
+ * Valores iniciales de `fieldValues` para una geometría recién finalizada
+ * (ADR-019, instrucción de herencia entre geometrías consecutivas): en
+ * vez de limpiar incondicionalmente a `{}`, precarga (editable, nunca
+ * forzado) el ID_Socio/ID_Parcela_Fija/id_parcela del último registro
+ * guardado con éxito en la misma sesión de trabajo (`identity`, ver
+ * `lastIdentityRef` en useVectorEditor) — útil para el caso real de crear
+ * un perímetro y luego varias subdivisiones del mismo socio/parcela
+ * seguidas. Solo precarga los campos `padronEntity` que existan para la
+ * `targetTable` ACTUAL (ej. EUDR_USO_SUELO no tiene campo de socio, así
+ * que `identity.socio` simplemente no se usa ahí) — el resto de los
+ * campos (`tipo_uso`, `tipo_infra`, etc.) siempre arranca vacío.
+ */
+function buildInitialFieldValues(targetTable, identity) {
+  const fields = TARGET_TABLE_FIELDS[targetTable] || []
+  const next = {}
+  fields.forEach((f) => {
+    if (f.padronEntity === 'socio' && identity.socio) next[f.key] = identity.socio
+    if (f.padronEntity === 'parcela' && identity.parcela) next[f.key] = identity.parcela
+  })
+  return next
+}
+
+// Mapeo botón de geoman -> tipo de geometría que produce, para la
+// restricción reactiva por tabla destino de abajo (useVectorEditor). Solo
+// estos 2 botones existen en este editor (ver drawMarker/drawPolygon en
+// attachVectorEditor — el resto de drawX está en false a propósito).
+const DRAW_BUTTON_GEOMETRY_TYPES = { drawMarker: 'Point', drawPolygon: 'Polygon' }
 
 // ---------------------------------------------------------------
 // attachVectorEditor — capa imperativa sobre geoman
@@ -83,10 +136,21 @@ export function attachVectorEditor(map, L, { onDraftChange, onFinalize, enableGl
     onDraftChange?.(evaluateGeometry(layer.toGeoJSON().geometry))
   }
 
-  // Vértice agregado mientras se dibuja (antes de terminar) — geoman
-  // entrega la capa "de trabajo" en construcción vía e.workingLayer.
-  function handleVertexAdded(e) {
-    evaluateLayer(e.workingLayer)
+  // Vértice agregado mientras se dibuja (antes de terminar) — HALLAZGO
+  // REAL (Fase 2, ver docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md):
+  // geoman dispara `pm:vertexadded` sobre la capa "de trabajo" en
+  // construcción (`this._layer` dentro de geoman, propagate:false — no
+  // llega nunca a `map`), no sobre `map` como se podría asumir por
+  // analogía con `pm:create`/`pm:remove` (esos sí se disparan
+  // explícitamente sobre `this._map`). `map.on('pm:vertexadded', ...)`
+  // nunca se ejecutaba — confirmado en vivo con un log temporal (0
+  // disparos pese a colocar vértices reales). Patrón correcto: escuchar
+  // `pm:drawstart` (ese SÍ llega a `map`, con `workingLayer` en el
+  // payload) y enganchar `pm:vertexadded` directo sobre esa capa de
+  // trabajo — mismo objeto durante toda la sesión de dibujo, confirmado
+  // en vivo (3 disparos reales para 3 vértices colocados).
+  function handleDrawStart(e) {
+    e.workingLayer?.on('pm:vertexadded', () => evaluateLayer(e.workingLayer))
   }
 
   function handleCreate(e) {
@@ -100,12 +164,12 @@ export function attachVectorEditor(map, L, { onDraftChange, onFinalize, enableGl
     onDraftChange?.(null)
   }
 
-  map.on('pm:vertexadded', handleVertexAdded)
+  map.on('pm:drawstart', handleDrawStart)
   map.on('pm:create', handleCreate)
   map.on('pm:remove', handleRemove)
 
   return function detach() {
-    map.off('pm:vertexadded', handleVertexAdded)
+    map.off('pm:drawstart', handleDrawStart)
     map.off('pm:create', handleCreate)
     map.off('pm:remove', handleRemove)
     map.pm.removeControls()
@@ -130,6 +194,15 @@ export function attachVectorEditor(map, L, { onDraftChange, onFinalize, enableGl
  * nunca `EUDR_INSTALACIONES`/`PADRON_PARCELAS` desde acá); default a
  * `GIS_TARGET_TABLES` completo para no romper otro futuro consumidor que
  * sí necesite las 4. `enableGlobalEditControls`: ver attachVectorEditor.
+ *
+ * `externalDrawDisabled` (default `false`): permite a un llamador externo
+ * (QcConsoleMap.jsx, mientras `editingKey` está activo — ver
+ * docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md) forzar los 2
+ * botones de dibujo a deshabilitado además de las 2 razones internas de
+ * abajo. Único punto que llama `map.pm.Toolbar.setButtonDisabled` en todo
+ * el editor (ver ADR-018) — antes había una segunda llamada duplicada en
+ * QcConsoleMap.jsx que solo conocía la razón "editingKey" y podía
+ * pisar/ser pisada por esta, según el orden de ejecución de efectos.
  */
 export function useVectorEditor({
   mapRef,
@@ -138,6 +211,7 @@ export function useVectorEditor({
   organizationId,
   targetTables = GIS_TARGET_TABLES,
   enableGlobalEditControls = true,
+  externalDrawDisabled = false,
   onSaved,
 }) {
   const [targetTable, setTargetTable] = useState(targetTables[0])
@@ -147,13 +221,30 @@ export function useVectorEditor({
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState(null) // { type: 'success' | 'error', message }
 
+  // targetTable cambia en cada render pero el efecto de abajo (que engancha
+  // onFinalize UNA sola vez, dependencia [mapReady]) necesita leer su valor
+  // ACTUAL en el momento en que geoman termina una geometría — no el valor
+  // de cuando se enganchó. Mismo motivo por el que existe lastIdentityRef.
+  const targetTableRef = useRef(targetTable)
+  useEffect(() => {
+    targetTableRef.current = targetTable
+  }, [targetTable])
+
+  // Último ID_Socio/ID_Parcela_Fija/id_parcela guardado con éxito en esta
+  // sesión de trabajo (ADR-019, instrucción de herencia) — un ref, no
+  // estado: nada en la UI renderiza a partir de esto directamente, solo lo
+  // lee onFinalize (vía buildInitialFieldValues) al precargar la próxima
+  // geometría. Mutado directamente en handleSave, sin pasar por setState,
+  // para no forzar un re-render extra por cada guardado.
+  const lastIdentityRef = useRef({ socio: null, parcela: null })
+
   useEffect(() => {
     if (!mapReady || !mapRef.current || !leafletRef.current) return undefined
     return attachVectorEditor(mapRef.current, leafletRef.current, {
       onDraftChange: setDraft,
       onFinalize: (layer) => {
         setDrawnLayer(layer)
-        setFieldValues({})
+        setFieldValues(buildInitialFieldValues(targetTableRef.current, lastIdentityRef.current))
         setResult(null)
       },
       enableGlobalEditControls,
@@ -161,6 +252,39 @@ export function useVectorEditor({
     // mapRef/leafletRef son refs estables — solo re-engancha si mapReady cambia.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady])
+
+  // Restricción reactiva de los botones de dibujo (ADR-018) — combina 3
+  // razones para deshabilitar cada botón, cualquiera alcanza:
+  // 1. `externalDrawDisabled` (ver arriba) — editingKey activo en la
+  //    Consola QC.
+  // 2. `drawnLayer` sin resolver (ni guardado ni cancelado) — cierra de
+  //    raíz el problema de "capas huérfanas": no se puede iniciar una
+  //    geometría nueva mientras la anterior siga pendiente, sin importar
+  //    su tipo.
+  // 3. El tipo de geometría de ESE botón no está en
+  //    TARGET_TABLE_GEOMETRY_TYPES[targetTable] — ya no se puede ni
+  //    empezar a dibujar un Point con "Uso de Suelo" seleccionado (antes
+  //    el error solo aparecía al Guardar, con el marcador ya puesto en el
+  //    mapa).
+  // Corre DESPUÉS del efecto de arriba en cada render (orden de
+  // declaración de hooks) — el toolbar ya existe para cuando esto se
+  // ejecuta la primera vez que mapReady pasa a true.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!mapReady || !map) return
+    const allowedTypes = TARGET_TABLE_GEOMETRY_TYPES[targetTable] || []
+    const hasUnresolvedDraft = !!drawnLayer
+    Object.entries(DRAW_BUTTON_GEOMETRY_TYPES).forEach(([buttonName, geometryType]) => {
+      const shouldDisable = externalDrawDisabled || hasUnresolvedDraft || !allowedTypes.includes(geometryType)
+      try {
+        map.pm.Toolbar.setButtonDisabled(buttonName, shouldDisable)
+      } catch {
+        // El botón todavía no existe (carrera de montaje/desmontaje) — nada que hacer.
+      }
+    })
+    // mapRef es un ref estable — no hace falta como dependencia.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetTable, drawnLayer, externalDrawDisabled, mapReady])
 
   const handleCancel = useCallback(() => {
     drawnLayer?.remove()
@@ -202,6 +326,15 @@ export function useVectorEditor({
       const pendienteNote =
         targetTable === 'PADRON_PARCELAS' ? '' : ' Queda PENDIENTE de revisión — ya aparece en la lista de esta consola.'
       setResult({ type: 'success', message: `Geometría guardada correctamente.${pendienteNote}` })
+      // Recuerda el socio/parcela de ESTE guardado para precargar la
+      // próxima geometría (ver buildInitialFieldValues) — solo sobreescribe
+      // cuando este guardado sí traía un valor, para no perder la memoria
+      // de la sesión al guardar una tabla que no tiene ese campo (ej.
+      // EUDR_USO_SUELO no tiene ID_Socio).
+      lastIdentityRef.current = {
+        socio: fieldValues.ID_Socio || lastIdentityRef.current.socio,
+        parcela: fieldValues.ID_Parcela_Fija || fieldValues.id_parcela || lastIdentityRef.current.parcela,
+      }
       drawnLayer.remove()
       setDrawnLayer(null)
       setDraft(null)
@@ -217,6 +350,7 @@ export function useVectorEditor({
     targetTable,
     setTargetTable,
     targetTables,
+    organizationId,
     draft,
     drawnLayer,
     fieldValues,
@@ -226,6 +360,119 @@ export function useVectorEditor({
     handleSave,
     handleCancel,
   }
+}
+
+// ---------------------------------------------------------------
+// PadronEntityField — autocompletado real contra PADRON_SOCIOS/
+// PADRON_PARCELAS (ADR-019) para un campo `padronEntity: 'socio' |
+// 'parcela'` de TARGET_TABLE_FIELDS (lib/gisTargetTables.js). Reutiliza
+// PadronAutocomplete (components/features/inspecciones/PadronAutocomplete.jsx)
+// y lib/padronSearch.js sin modificarlos — mismo mecanismo exacto que ya
+// usa TabGeneral.jsx en el formulario de Inspecciones (searchSocios/
+// searchParcelas ya excluyen `activo = false`, ver ADR-016), así que solo
+// puede seleccionarse un socio/parcela que exista y esté activo: no hay
+// forma de escribir el código a mano, `onChange` solo se dispara desde
+// `onSelect` de un resultado real de búsqueda.
+// `scopeParcelaSearchToSocio`: cuando este campo es de tipo 'parcela' Y el
+// mismo fields[] trae un campo 'socio' con valor ya elegido (hoy solo pasa
+// en EUDR_MONITOREO, que tiene ambos), acota la búsqueda de parcelas a las
+// de ESE socio (mismo `searchParcelas(supabase, org, socioId, query)` que
+// ya soporta ese 3er parámetro) — en EUDR_USO_SUELO/EUDR_INSTALACIONES
+// (sin campo de socio) queda `null`, búsqueda sin acotar, igual que hoy.
+// `onCreateParcela` (ADR-021): solo se pasa (no undefined) cuando este
+// campo de parcela tiene un campo de socio hermano en el mismo fields[] —
+// hoy únicamente `EUDR_MONITOREO.ID_Parcela_Fija` — porque crear una
+// parcela nueva necesita saber para qué socio (ParcelaFormModal calcula el
+// correlativo real vía lib/parcelaDefaults.js a partir de eso). Sin un
+// campo hermano de socio en la tabla actual (EUDR_USO_SUELO/
+// EUDR_INSTALACIONES) no hay ningún socio del que colgar la parcela nueva,
+// así que el botón directamente no se ofrece ahí — no es un botón
+// deshabilitado sin motivo, es que la pregunta "¿de qué socio?" no tiene
+// sentido en ese formulario.
+function PadronEntityField({
+  field,
+  value,
+  onChange,
+  organizationId,
+  scopeParcelaSearchToSocio,
+  onCreateSocio,
+  onSocioSelected,
+  onCreateParcela,
+  socioSeleccionado,
+}) {
+  const isSocio = field.padronEntity === 'socio'
+  const isParcela = field.padronEntity === 'parcela'
+
+  async function handleSearch(query) {
+    if (!organizationId) return []
+    if (isSocio) {
+      const rows = await searchSocios(organizationId, query)
+      return rows.map((r) => ({ key: r.ID_Socio, ...r }))
+    }
+    const rows = await searchParcelas(organizationId, scopeParcelaSearchToSocio || null, query)
+    return rows.map((r) => ({ key: r.ID_Parcela_Fija, ...r }))
+  }
+
+  return (
+    <div>
+      <PadronAutocomplete
+        label={`${field.label}${field.required ? ' *' : ''}`}
+        placeholder={isSocio ? 'Nombre, DNI o código de finca…' : 'Código o nombre de parcela…'}
+        disabled={!organizationId}
+        search={handleSearch}
+        renderResult={(r) =>
+          isSocio ? (
+            <>
+              <p className="font-medium text-gray-800">{r.socio_nombre_completo || 'Sin nombre'}</p>
+              <p className="text-xs text-gray-400">
+                {r.socio_dni ? `DNI ${r.socio_dni}` : ''}
+                {r.codigo_finca ? ` · ${r.codigo_finca}` : ''}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="font-medium text-gray-800">{r.parcela_codigo || 'Sin código'}</p>
+              <p className="text-xs text-gray-400">
+                {r.parcela_nombre || ''}
+                {r.totalh ? ` · ${r.totalh} ha` : ''}
+              </p>
+            </>
+          )
+        }
+        onSelect={(r) => {
+          if (isSocio) {
+            onChange(r.ID_Socio)
+            onSocioSelected?.(r)
+          } else {
+            onChange(r.ID_Parcela_Fija)
+          }
+        }}
+      />
+      {value && <p className="mt-1 text-[11px] text-emerald-700">✓ Seleccionado: {value}</p>}
+      {isSocio && (
+        <button
+          type="button"
+          onClick={onCreateSocio}
+          className="mt-1 text-[11px] font-semibold text-green-800 hover:underline"
+        >
+          + Crear socio nuevo
+        </button>
+      )}
+      {isParcela && onCreateParcela && (
+        <>
+          <button
+            type="button"
+            onClick={onCreateParcela}
+            disabled={!socioSeleccionado}
+            className="mt-1 text-[11px] font-semibold text-green-800 hover:underline disabled:cursor-not-allowed disabled:text-gray-400 disabled:no-underline"
+          >
+            + Crear parcela nueva
+          </button>
+          {!socioSeleccionado && <p className="mt-0.5 text-[11px] text-gray-400">Seleccioná o creá un socio primero.</p>}
+        </>
+      )}
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------
@@ -239,6 +486,7 @@ export default function VectorEditorPanel({ editor }) {
     targetTable,
     setTargetTable,
     targetTables,
+    organizationId,
     draft,
     drawnLayer,
     fieldValues,
@@ -250,6 +498,23 @@ export default function VectorEditorPanel({ editor }) {
   } = editor
   const fields = TARGET_TABLE_FIELDS[targetTable]
   const allowedTypes = (TARGET_TABLE_GEOMETRY_TYPES[targetTable] || []).join(' o ')
+  // Overlay de "+ Crear socio nuevo" (ADR-019) — `socioModalFieldKey`
+  // recuerda CUÁL campo abrió el modal (hoy solo EUDR_MONITOREO.ID_Socio
+  // es padronEntity:'socio', pero esto no asume que sea el único) para
+  // saber a qué key de fieldValues escribir el ID_Socio del socio recién
+  // creado que devuelve SocioFormModal.
+  const [socioModalFieldKey, setSocioModalFieldKey] = useState(null)
+  const socioField = fields.find((f) => f.padronEntity === 'socio')
+  // Overlay de "+ Crear parcela nueva" (ADR-021) — mismo patrón exacto que
+  // el de socio, un campo más abajo. `socioDisplayName`: ParcelaFormModal
+  // necesita `socio.socio_nombre_completo` solo para el título del modal
+  // ("Parcelas de X") — se guarda acá al elegir un socio (búsqueda real, o
+  // el resultado de "+ Crear socio nuevo", que ahora también devuelve el
+  // nombre, ver ADR-021 en sociosActions.js) para no tener que volver a
+  // consultarlo. Si por algún motivo no se conoce (no debería pasar en el
+  // flujo normal), cae al propio código de socio como texto de respaldo.
+  const [parcelaModalFieldKey, setParcelaModalFieldKey] = useState(null)
+  const [socioDisplayName, setSocioDisplayName] = useState('')
 
   return (
     <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-3 text-xs">
@@ -271,33 +536,94 @@ export default function VectorEditorPanel({ editor }) {
         <p className="mt-1 text-[11px] text-gray-400">Acepta geometría: {allowedTypes}.</p>
       </div>
 
+      {/* Panel de información en vivo (Fase 2, recalculado en cada
+          vértice vía pm:vertexadded — ver attachVectorEditor arriba) —
+          área/perímetro con el mismo redondeo que fn_calcular_area_ha
+          server-side (lib/geo/areaUtils.js::AREA_HA_DECIMALS), validez
+          geométrica (@turf/kinks) y el aviso informativo de la regla
+          "parcelas >= 4.0 ha requieren Polygon" (lib/eudrDdsExporter.js::
+          MIN_POLYGON_HECTARES) — nunca bloqueante, ninguno de estos
+          impide guardar. */}
       {draft && (
         <div className="space-y-1 rounded bg-gray-50 p-2">
           {draft.areaHa != null && (
             <p>
-              Área estimada: <span className="font-semibold">{draft.areaHa.toFixed(2)} ha</span>
+              Área estimada: <span className="font-semibold">{draft.areaHa.toFixed(4)} ha</span>
+            </p>
+          )}
+          {draft.perimetroM != null && (
+            <p>
+              Perímetro estimado: <span className="font-semibold">{draft.perimetroM} m</span>
             </p>
           )}
           {draft.selfIntersects && <p className="text-red-600">⚠ El polígono tiene auto-intersecciones.</p>}
+          {draft.polygonBelowThreshold && (
+            <p className="text-amber-600">
+              ℹ Área cercana o menor a 4.0 ha (con margen de precisión cliente/servidor) — un Point también
+              podría ser válido para esta parcela según la regla EUDR; el valor exacto se recalcula al guardar.
+            </p>
+          )}
         </div>
+      )}
+
+      {drawnLayer && drawnLayer.toGeoJSON?.().geometry?.type === 'Point' && (
+        <p className="rounded bg-gray-50 p-2 text-[11px] text-gray-500">
+          ℹ Un Point no tiene área medible — si la parcela real mide 4.0 ha o más, usa Polygon en su lugar.
+        </p>
       )}
 
       {drawnLayer && (
         <div className="space-y-1.5 border-t border-gray-100 pt-2">
-          {fields.map((f) => (
-            <div key={f.key}>
-              <label className="mb-0.5 block text-[11px] text-gray-500">
-                {f.label}
-                {f.required ? ' *' : ''}
-              </label>
-              <input
-                type="text"
+          {fields.map((f) =>
+            f.padronEntity ? (
+              <PadronEntityField
+                key={f.key}
+                field={f}
                 value={fieldValues[f.key] || ''}
-                onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
-                className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
+                onChange={(v) => setFieldValues((prev) => ({ ...prev, [f.key]: v }))}
+                organizationId={organizationId}
+                scopeParcelaSearchToSocio={
+                  f.padronEntity === 'parcela' && socioField ? fieldValues[socioField.key] || null : null
+                }
+                onCreateSocio={() => setSocioModalFieldKey(f.key)}
+                onSocioSelected={(r) => setSocioDisplayName(r.socio_nombre_completo || '')}
+                onCreateParcela={
+                  f.padronEntity === 'parcela' && socioField ? () => setParcelaModalFieldKey(f.key) : undefined
+                }
+                socioSeleccionado={
+                  f.padronEntity === 'parcela' && socioField ? Boolean(fieldValues[socioField.key]) : undefined
+                }
               />
-            </div>
-          ))}
+            ) : (
+              <div key={f.key}>
+                <label className="mb-0.5 block text-[11px] text-gray-500">
+                  {f.label}
+                  {f.required ? ' *' : ''}
+                </label>
+                {f.options ? (
+                  <select
+                    value={fieldValues[f.key] || ''}
+                    onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                    className="w-full rounded border border-gray-200 px-2 py-1 text-xs text-gray-700"
+                  >
+                    <option value="">Seleccionar…</option>
+                    {f.options.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={fieldValues[f.key] || ''}
+                    onChange={(e) => setFieldValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                    className="w-full rounded border border-gray-200 px-2 py-1 text-xs"
+                  />
+                )}
+              </div>
+            )
+          )}
           <div className="flex justify-end gap-2 pt-1">
             <button
               type="button"
@@ -332,6 +658,55 @@ export default function VectorEditorPanel({ editor }) {
         >
           {result.message}
         </p>
+      )}
+
+      {/* Overlay de "+ Crear socio nuevo" (ADR-019) — SocioFormModal es un
+          `position: fixed` de pantalla completa (ver su propio JSX), así
+          que renderizarlo acá dentro no cambia dónde aparece en pantalla;
+          al ser solo una capa más de React sobre el mismo árbol, dibujar
+          o cancelar mientras está abierto nunca se ve afectado: drawnLayer/
+          draft viven en useVectorEditor, completamente ajenos a este
+          estado local. Reutiliza sociosActions.js sin duplicar ninguna
+          validación (DNI/Código de Finca duplicados, etc.) — decisión
+          confirmada explícitamente para esta tarea. */}
+      {socioModalFieldKey && (
+        <SocioFormModal
+          socio={null}
+          organizationId={organizationId}
+          onClose={() => setSocioModalFieldKey(null)}
+          onSaved={(savedSocio) => {
+            setFieldValues((prev) => ({ ...prev, [socioModalFieldKey]: savedSocio.id }))
+            setSocioDisplayName(savedSocio.socio_nombre_completo || '')
+            setSocioModalFieldKey(null)
+          }}
+        />
+      )}
+
+      {/* Overlay de "+ Crear parcela nueva" (ADR-021) — mismo criterio que
+          el overlay de socio arriba: ParcelaFormModal reutilizado tal cual
+          (nunca se reimplementa createParcela/el correlativo automático de
+          lib/parcelaDefaults.js), `socio` es un objeto mínimo armado acá
+          con lo que ya se tiene en pantalla (el código ya viene validado
+          por PadronEntityField; el nombre es solo para el título del
+          modal, ver socioDisplayName arriba) — ParcelaFormModal solo
+          necesita `ID_Socio`/`socio_nombre_completo` de ese objeto, nunca
+          la fila completa de PADRON_SOCIOS. `onParcelaCreated` (nuevo,
+          opcional en ParcelaFormModal — /dashboard/socios no lo usa y
+          sigue exactamente igual) selecciona la parcela recién creada sin
+          que el usuario tenga que volver a buscarla. */}
+      {parcelaModalFieldKey && socioField && (
+        <ParcelaFormModal
+          socio={{
+            ID_Socio: fieldValues[socioField.key],
+            socio_nombre_completo: socioDisplayName || fieldValues[socioField.key],
+          }}
+          organizationId={organizationId}
+          onClose={() => setParcelaModalFieldKey(null)}
+          onParcelaCreated={(savedParcela) => {
+            setFieldValues((prev) => ({ ...prev, [parcelaModalFieldKey]: savedParcela.id }))
+            setParcelaModalFieldKey(null)
+          }}
+        />
       )}
     </div>
   )

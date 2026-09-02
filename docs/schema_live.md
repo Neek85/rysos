@@ -1,11 +1,20 @@
 # Schema Live — Snapshot Manual
 
 > **Nota de alcance:** este documento es un snapshot manual derivado de leer
-> `supabase/migrations/*.sql` en orden cronológico. No existe ningún script
-> `npm run sync-schema` en este repo (no hay conexión Postgres viva ni
-> Service Role Key disponible en este entorno de desarrollo) — para mantenerlo
-> al día, volver a generarlo a mano tras cada migración nueva, o pedir que se
-> regenere leyendo el historial completo de `supabase/migrations/`.
+> `supabase/migrations/*.sql` en orden cronológico, verificado puntualmente
+> contra la instancia real vía REST cuando hace falta confirmar algo (ver
+> las notas fechadas abajo). No existe ningún script `npm run sync-schema`
+> en este repo — para mantenerlo al día, volver a generarlo a mano tras
+> cada migración nueva, o pedir que se regenere leyendo el historial
+> completo de `supabase/migrations/`. **Corrección (2026-08-21):** la
+> frase anterior de esta nota decía "no hay conexión Postgres viva ni
+> Service Role Key disponible en este entorno de desarrollo" — eso es
+> falso, ambas están disponibles en `.env.local` (`NEXT_PUBLIC_SUPABASE_URL`
+> + `SUPABASE_SERVICE_ROLE_KEY`) y se usaron repetidamente durante toda
+> la sesión para verificar en vivo (lectura de tablas sin política `anon`,
+> conteos, introspección de FK vía PostgREST). No hay un cliente `psql`
+> directo, pero sí hay forma real de consultar la instancia — no asumir
+> lo contrario en tareas futuras.
 >
 > **Instancia Supabase:** `jhtocgxlozfuzullrtol`. Ninguna migración de este
 > repo se aplica automáticamente contra esa instancia — todas requieren
@@ -33,6 +42,16 @@
 > fortification, flags de área en las vistas, guardado atómico de
 > Inspecciones, fix RLS Inspecciones) ya está aplicada encima — la consulta
 > de esta tarea no pidió esas columnas nuevas.
+> Actualizado: 2026-08-21 — investigación puntual (no una regeneración
+> completa): agrega `fn_parcelas_vecinas_eudr` (única función creada desde
+> la última actualización real, 2026-08-20, que faltaba documentar acá) y
+> documenta con detalle real `ORGANIZACIONES` (columnas confirmadas con
+> Service Role Key, las 2 filas reales que existen, ausencia confirmada de
+> FK hacia esa tabla desde las 5 tablas transaccionales principales, y el
+> origen real de `"ORG-COOP-NORTE"` — dato de un E2E test real, no un
+> huérfano accidental). El resto del documento se revisó y sigue
+> reflejando el estado real (última actualización completa: 2026-08-20,
+> commit `529ac0a`).
 > Actualizado: 2026-08-18, tras construir el Padrón Web de Socios y Fincas
 > (`specs/padron_web_socios.md`, `/dashboard/socios`) — confirma el schema
 > real completo de `PADRON_SOCIOS`/`PADRON_PARCELAS` (antes solo
@@ -50,9 +69,80 @@ repo (Supabase Studio / otra herramienta). Las columnas listadas son solo las
 referenciadas por las migraciones y vistas de este repo; puede haber columnas
 adicionales no documentadas aquí.
 
+> **Actualización (2026-08-25, ADR-023):** `PADRON_SOCIOS`/`PADRON_PARCELAS`
+> dejaron de estar en esta situación — ver
+> `supabase/migrations/20260825183000_baseline_padron_socios_parcelas.sql`
+> (`CREATE TABLE IF NOT EXISTS`, adopción de documentación, sin cambio de
+> comportamiento). Quedan en esta sección solo `ORGANIZACIONES` y las 3
+> tablas `EUDR_*` del núcleo GIS, que siguen sin `CREATE TABLE` versionado.
+> Esa misma tarea confirmó, vía introspección OpenAPI de PostgREST, dos
+> columnas fuera de lo documentado más abajo (no corregidas en el prosa de
+> esta sección todavía, ver el archivo de migración para el detalle
+> completo): `PADRON_SOCIOS.normas_internas_17` (`text`, sin ningún uso
+> conocido en el repo) y `PADRON_PARCELAS.hbp`/`otros_cultivo` son `text`
+> en la instancia real, no `numeric` como el resto de las columnas de
+> hectáreas.
+>
+> **Actualización (2026-08-25, ADR-024):** la discrepancia de
+> `hbp`/`otros_cultivo` anotada arriba tiene migración lista —
+> `supabase/migrations/20260825142426_normaliza_tipo_hbp_otros_cultivo.sql`
+> (`ALTER COLUMN ... TYPE numeric`, pendiente de aplicación manual). Una
+> vez aplicada, ambas columnas pasan a `numeric`, igual que
+> `hcp`/`hcc`/`ho`/`hip`/`hrp` en la misma tabla — la línea de la sección
+> "`public."PADRON_PARCELAS"`" más abajo que las lista junto al resto de
+> columnas de hectáreas queda correcta recién en ese momento.
+
 ### `public."ORGANIZACIONES"`
-- `"ID"` — PK de tenant (texto), comparado contra el claim JWT `ID_Organizacion`.
+- Columnas reales confirmadas en vivo con Service Role Key (2026-08-21 —
+  `anon` no tiene política `SELECT` acá, solo `authenticated`, así que no
+  es introspeccionable con la anon key): `"ID"` (PK de tenant, texto —
+  código manual como `"COOP-JS"`/`"COOP-ND"`, comparado contra el claim
+  JWT `ID_Organizacion`), `"Nombre_Organizacion"`, `"RUC"`,
+  `"Direccion_Fiscal"`, `"Representante_Legal"`, `"Logo"`, `"Config"`
+  (jsonb, **`NULL`** en las 2 filas reales hoy — sin estructura definida
+  todavía, ver `ORGANIZACIONES.Config.gis.radio_contexto_vecinos_m` en
+  `docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md` para el primer uso
+  real), `creado_en`, `actualizado_en`, `creado_por`. **Pendiente de
+  aplicación manual (ver ADR-008 abajo):** `es_organizacion_prueba
+  boolean NOT NULL DEFAULT false` — no existe todavía en la instancia
+  real (confirmado en vivo, 2026-08-22: `column
+  ORGANIZACIONES.es_organizacion_prueba does not exist`).
+- **Solo 2 filas reales existen hoy: `"COOP-JS"` (COOP. JESUS SOLIDARIO)
+  y `"COOP-ND"` (Asociacion Miladro de Jesus).** Una 3ra fila,
+  `"ORG-TEST-E2E"`, queda pendiente de creación por la misma migración
+  (organización de prueba explícita para `scripts/run_e2e_etl_test.py`).
 - RLS: solo `SELECT` (asimetría deliberada — Tarea 9.1).
+- **Sin FK real desde ninguna tabla transaccional** (confirmado en vivo,
+  2026-08-21, vía PostgREST — `?select=*,ORGANIZACIONES(*)` contra
+  `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES`/
+  `PADRON_SOCIOS`/`PADRON_PARCELAS` devuelve `PGRST200`, "no matches
+  were found" para las 5 — `ID_Organizacion` es una convención de texto
+  sin constraint en todo el schema, no solo en la tabla que se esté
+  mirando puntualmente). Un valor de `ID_Organizacion` que no exista en
+  `ORGANIZACIONES` no genera ningún error de escritura.
+- **`"ORG-COOP-NORTE"` fue dato real de prueba E2E (RESUELTO, ver
+  ADR-007/ADR-008):** apareció en 6 filas de `EUDR_MONITOREO`, 4 de
+  `EUDR_USO_SUELO`, 4 de `EUDR_INSTALACIONES` sin fila correspondiente en
+  `ORGANIZACIONES` — origen: `scripts/run_e2e_etl_test.py` corrido
+  repetidas veces contra la instancia viva sin teardown. Las 14 filas
+  fueron borradas (commit `2391859`, confirmado en vivo con conteos en 0
+  antes de pushear) y el script ya no usa este `ORG_ID` — reemplazado por
+  `"ORG-TEST-E2E"` (ver abajo). Se deja esta entrada como registro
+  histórico del incidente.
+- **Migración pendiente de aplicación manual
+  (`20260822_021532_es_organizacion_prueba.sql`, ver
+  ADR-008):** agrega `es_organizacion_prueba boolean NOT NULL DEFAULT
+  false` (DEFAULT seguro — sin marcar explícitamente, se trata como
+  organización real) e inserta/actualiza una fila real
+  `"ORG-TEST-E2E"` (`Nombre_Organizacion = "Organización de Prueba — NO
+  ES CLIENTE REAL"`, `es_organizacion_prueba = true`) para que
+  `scripts/run_e2e_etl_test.py` tenga una organización de prueba real y
+  etiquetada en vez de un `ID_Organizacion` sin fila correspondiente. El
+  script aborta (`assert_org_is_test_marked`) si el `ORG_ID` que va a
+  usar no tiene `es_organizacion_prueba = true` en el momento de
+  correr — hasta que esta migración se aplique manualmente, correr el
+  script en modo real fallará con `UnsafeOrgIdError` (comportamiento
+  esperado: sin la fila, es más seguro abortar que escribir).
 
 ### `public."PADRON_SOCIOS"`
 Schema real completo confirmado en vivo el 2026-08-18 (`specs/padron_web_socios.md`,
@@ -79,19 +169,31 @@ código manual ej. `COOP-JS-001`), `ID_Organizacion`, `ID_Socio`, `socio_dni`/
 `socio_nombre_completo` (copias desnormalizadas del socio — más superficie de
 PII a cuidar en cualquier vista/export que use esta tabla), `parcela_codigo`,
 `parcela_nombre`, `hcp`/`hcc`/`ho`/`hip`/`hrp`/`hbp`/`otros_cultivo` (hectáreas
-por categoría de uso, nomenclatura heredada de AppSheet), `totalh` (suma de
-las categorías), `geom` (**`NULL` en la mayoría de registros reales
-confirmados** — no asumir que siempre hay geometría), `creado_en`,
+por categoría de uso, nomenclatura heredada de AppSheet — desde ADR-028
+los labels de `hcp`/`hcc` en la UI ya no dicen "Café", ver abajo), `totalh`
+(suma de las categorías), `geom` (**`NULL` en la mayoría de registros
+reales confirmados** — no asumir que siempre hay geometría), `creado_en`,
 `actualizado_en`, `creado_por`, `hr`.
 - RLS: igual patrón que `PADRON_SOCIOS` — sin escritura `anon`.
+- **Nuevo (2026-08-26, ADR-028):** `id_producto_predominante uuid NULL
+  REFERENCES PRODUCTOS(id)` — dato maestro editable desde
+  `ParcelaFormModal.jsx` (`/dashboard/socios`). Backfilleado a `CAFE` para
+  todas las filas existentes al aplicar la migración; nuevas parcelas
+  pueden quedar `NULL` si el usuario no selecciona producto.
 
 ### Módulo Padrón Web de Socios y Fincas (2026-08-18, `/dashboard/socios`)
 
 Primer módulo de escritura del proyecto que **no** usa una política RLS
-`anon` nueva. `PADRON_SOCIOS`/`PADRON_PARCELAS` son el padrón maestro,
-compartido en vivo con otro repositorio
-(`docs/audits/auditoria_backend_inspecciones.md`) — abrir escritura `anon`
-expondría DNI/nombre real a cualquiera con la anon key pública. En su lugar:
+`anon` nueva. `PADRON_SOCIOS`/`PADRON_PARCELAS` son el padrón maestro del
+proyecto. **Corrección de premisa (2026-08-26, ver
+[ADR-023](adr/ADR-023-backend-inspecciones-ya-no-comparte-base.md)):**
+hasta el 2026-08-25 esta sección decía que estaban "compartidas en vivo
+con otro repositorio" (`backend-inspecciones`,
+`docs/audits/auditoria_backend_inspecciones.md`) — ADR-023 confirmó que
+eso ya no aplica. Abrir escritura `anon` seguiría exponiendo DNI/nombre
+real a cualquiera con la anon key pública de todos modos — motivo
+suficiente por sí solo para mantener esta decisión, independiente de si
+el padrón se comparte o no con otro sistema. En su lugar:
 
 - **Lectura:** `lib/sociosSearch.js`, vía la anon key existente (mismo
   patrón que `fetchInspecciones` — sin filtro explícito por
@@ -171,6 +273,30 @@ expondría DNI/nombre real a cualquiera con la anon key pública. En su lugar:
 - **Nuevo (2026-08-18):** índice GiST `idx_gist_eudr_monitoreo_geom` sobre
   `geom_inspeccion`; índice btree `idx_eudr_monitoreo_org` sobre
   `"ID_Organizacion"`.
+- **Nuevo (2026-08-23):** `qfield_relation_id` — GUID crudo que QField
+  genera para el registro padre de una subdivisión/instalación (ver
+  ADR-010); índice `idx_eudr_monitoreo_qfield_relation_id`
+  (`supabase/migrations/20260823_145038_qfield_relation_id_monitoreo.sql`).
+- **`UNIQUE("ID_Organizacion", "ID_Parcela_Fija", fecha_monitoreo)`
+  (constraint `eudr_monitoreo_org_parcela_fecha_key`) — NO aparece en
+  ninguna migración de este repo (la tabla se creó fuera de él);
+  confirmado empíricamente el 2026-08-26 disparando un `23505` real al
+  insertar 2 filas de prueba con la misma combinación. Implicación
+  operativa: **2 visitas de monitoreo de la misma parcela nunca pueden
+  compartir `fecha_monitoreo` exacta** — relevante para
+  `scripts/etl_drive_to_supabase.py` si algún reintento de ingesta llega a
+  reenviar el mismo evento de campo (fallaría con `23505` en vez de
+  duplicar la fila; el ETL ya usa `upsert` sobre la PK `id_monitoreo`, no
+  sobre esta combinación, así que no debería chocar en el flujo normal,
+  pero un INSERT manual — como los que hacen los tests Live — sí puede
+  pisarlo si no varía `fecha_monitoreo` entre filas de una misma parcela).
+  También implica que el desempate por `creado_en DESC` agregado al
+  `LEFT JOIN LATERAL` `mon` de `vw_monitoreo_web`
+  (`supabase/migrations/20260826140000_fix_id_parcela_fija_guid_qfield.sql`,
+  spec sección 5.1) es hoy inalcanzable en la práctica para ese `LATERAL`
+  específico (que matchea por `"ID_Parcela_Fija"`, no por
+  `qfield_relation_id`) — ver `AI_STATE.md` (entrada 2026-08-26b) para el
+  detalle completo.
 
 ### `public."EUDR_USO_SUELO"`
 - `fid` (feature id nativo del GeoPackage), `id` (PK real de la tabla),
@@ -178,6 +304,15 @@ expondría DNI/nombre real a cualquiera con la anon key pública. En su lugar:
 - **Nuevo (2026-08-18):** `area_calculada_ha`, `requiere_revision_area`,
   trigger `trg_gis_sanitize_eudr_uso_suelo`, índices GiST/`ID_Organizacion`
   (mismo patrón que `EUDR_MONITOREO`, ver arriba).
+- **Nuevo (2026-08-26, ADR-028):** `id_producto_predominante uuid NULL
+  REFERENCES PRODUCTOS(id)` — foto por evento, NO editable directamente;
+  poblada por el trigger `trg_set_producto_predominante_uso_suelo`
+  (`BEFORE INSERT`, nunca lanza excepción — deja `NULL` si la cadena de
+  resolución no matchea) que copia el valor de
+  `PADRON_PARCELAS.id_producto_predominante` resolviendo `id_parcela`
+  (GUID crudo de QField) → `EUDR_MONITOREO.qfield_relation_id` → su
+  `ID_Parcela_Fija`. Sin backfill de filas existentes (a diferencia de
+  `PADRON_PARCELAS` arriba) — solo aplica hacia adelante.
 
 ### `public."EUDR_INSTALACIONES"`
 - `fid`, `id` (inferido por simetría con `EUDR_USO_SUELO`, no confirmado
@@ -230,7 +365,25 @@ duplicado por compatibilidad con proyectos QGIS antiguos) e `id_monitoreo`
 (uuid nunca nulo — sintético vía `uuid_generate_v5` para filas que no son de
 `EUDR_MONITOREO`).
 
+> **Nuevo (2026-08-26, ADR-028):** `vw_monitoreo_poligonos` (solo esta,
+> `vw_monitoreo_puntos` no se tocó) gana `id_producto_predominante` al
+> final de cada rama del `UNION ALL` — `NULL::uuid` en la rama
+> `EUDR_MONITOREO` (esa tabla no tiene la columna), `u.id_producto_predominante`
+> en la rama `EUDR_USO_SUELO`. `CREATE OR REPLACE VIEW`, sin `DROP`.
+
 ### `public.vw_monitoreo_web`
+
+> **Nuevo (2026-08-26, ADR-028):** rama "poligono" gana
+> `id_producto_predominante` (leído directo de
+> `vw_monitoreo_poligonos`, NO vía el `JOIN` contra `PADRON_PARCELAS` de
+> abajo, que está roto para filas de origen `EUDR_USO_SUELO`) más
+> `producto_codigo`/`producto_nombre` resueltos con un `LEFT JOIN`
+> adicional contra `PRODUCTOS`. Rama "punto": las 3 columnas `NULL`
+> (`EUDR_INSTALACIONES` no tiene producto). `components/gis/MapDashboard.jsx`
+> necesitó agregar las 3 columnas a su `.select(...)` explícito (línea
+> ~470) para que lleguen a `records` — agregarlas a la vista sola no
+> alcanza.
+
 Consumida por `components/gis/MapDashboard.jsx` **y** por
 `app/trace/[lot_hash]/page.jsx` (Portal Público de Trazabilidad,
 auditado 2026-08-18 — ver `specs/trace_public_audit.md`). El portal público
@@ -257,15 +410,27 @@ se serializa en la respuesta HTML. Sin gaps encontrados en esta auditoría.
 > o los hashes Python/JS del mismo lote no coincidirán. Ver
 > `specs/trace_public_audit.md` para el detalle completo.
 
-> **Exportador TRACES UE — dónde vive realmente cada pieza (auditado
-> 2026-08-18, `specs/traces_eudr_dossier_audit.md`):** el botón real de
-> descarga DDS (`exportTracesDDS`, JSON + GeoJSON con coordenadas a 6
-> decimales y regla de polígono obligatorio ≥ 4 ha, `lib/eudrDdsExporter.js`)
-> vive en `/dashboard/mapa` (`components/gis/MapDashboard.jsx::handleExportDDS`),
-> **no** en `/dashboard/lotes` — esa ruta es solo una vista de simulación
-> del QR de trazabilidad pública (dice explícitamente "no persiste nada" en
-> su propio código). Ambos consumen `vw_monitoreo_web`, que ya filtra
-> `estado_revision = 'APROBADO'`. **Dossier Comercial PDF (`scripts/generate_dossier_pdf.py`)
+> **Exportador de Paquete de Trazabilidad EUDR — dónde vive realmente cada
+> pieza (auditado 2026-08-18, `specs/traces_eudr_dossier_audit.md`;
+> corregido 2026-08-23, `docs/adr/ADR-017-formato-real-exportacion-trazabilidad.md`):**
+> el botón real de descarga (`downloadTraceabilityPackage`, JSON + GeoJSON
+> con coordenadas a 6 decimales y regla de polígono obligatorio ≥ 4 ha,
+> `lib/eudrDdsExporter.js` — antes `exportTracesDDS`, renombrado en
+> ADR-017) vive en `/dashboard/mapa`
+> (`components/gis/MapDashboard.jsx::handleExportDDS`), **no** en
+> `/dashboard/lotes` — esa ruta es solo una vista de simulación del QR de
+> trazabilidad pública (dice explícitamente "no persiste nada" en su propio
+> código). Ambos consumen `vw_monitoreo_web`, que ya filtra
+> `estado_revision = 'APROBADO'`. **Desde ADR-017, el GeoJSON descargado
+> (format='geojson') ya NO es el mismo objeto que el JSON completo
+> (format='json') proyectado sin más** — es una proyección aparte
+> (`buildOfficialEuGeoJson`) al esquema oficial de geolocalización de la UE
+> (properties `ProducerName`/`ProducerCountry`/`ProductionPlace`/`Area`,
+> geometrías nunca LineString/MultiLineString); el JSON completo sigue
+> siendo la hoja de resumen interna de RYZOS (ya no descrita como "DDS
+> oficial"), y opcionalmente incluye `cobertura_uso_suelo` (Fase B,
+> informativo, resuelto vía el nuevo `/api/gis/dds-cobertura` con Service
+> Role Key — `fn_cobertura_uso_suelo_parcela` no acepta anon key). **Dossier Comercial PDF (`scripts/generate_dossier_pdf.py`)
 > no tiene ningún punto de entrada desde la aplicación web** — es una clase
 > Python pura, probada, sin `if __name__ == "__main__"`, y esta app Next.js
 > no tiene ningún Route Handler (`find app -iname "route.js"` → vacío) que
@@ -402,6 +567,30 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
 | `public.trg_sanitize_geom_monitoreo/uso_suelo/instalaciones()` | `trigger` | **Nuevo (2026-08-18).** Aplican las dos funciones de arriba a la columna de geometría de su tabla y setean `area_calculada_ha`/`requiere_revision_area`. |
 | `public.fn_guardar_inspeccion_completa(...)` | `jsonb` (`{id, created}`) | **Nuevo (2026-08-18).** Guardado atómico de `INSPECCIONES` + 6 `CAP_*` en una sola transacción — reemplaza 7 llamadas REST independientes que antes no eran atómicas. Sin `SECURITY DEFINER` (corre con el rol del llamador). Llamada desde `lib/inspeccionesActions.js::saveInspeccion()` vía `supabase.rpc(...)`. |
 | `public.fn_validar_topologia_eudr(p_tabla_origen text, p_registro_id text)` | `jsonb` | **Nuevo (2026-08-20), actualizada el mismo día.** Validación topológica bajo demanda (`ST_IsValid`/`ST_IsSimple`/solapamiento contra otros `APROBADO` de la misma org/`fn_calcular_area_ha`) para un registro `EUDR_MONITOREO`/`EUDR_USO_SUELO` — rechaza `EUDR_INSTALACIONES` (siempre puntual). Sin `SECURITY DEFINER`; se llama solo desde `app/api/qc/validate-spatial/route.js` con el Service Role Key. El campo `deforestacion` cruza contra `EUDR_COBERTURA_BOSCOSA_2020` SI esa tabla tiene filas (`anio_perdida > 2020` + `ST_Intersects`) — mientras siga vacía (estado por defecto), sigue devolviendo `{disponible:false,...}` igual que su primera versión. |
+| `public.fn_parcelas_vecinas_eudr(p_organizacion_id text, p_geom geometry, p_radio_m numeric DEFAULT 500, p_excluir_id uuid DEFAULT NULL, p_limite integer DEFAULT 25)` | `TABLE(id uuid, geom geometry, codigo_socio text, total_encontrados integer, total_devueltos integer)` | **Nuevo (2026-08-21), pendiente de aplicación manual.** Capa de contexto de parcelas vecinas (`EUDR_MONITOREO` `APROBADO` dentro de un radio, `ST_DWithin` sobre `::geography`) para la Consola QC — ver `docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md`. Sin `SECURITY DEFINER`; se llama solo desde `lib/actions/qcActions.js::fetchParcelasVecinas` con el Service Role Key (nunca expuesta a `anon` — `p_organizacion_id` lo decide el llamador, exponerla abriría fuga cross-tenant). |
+| `public.fn_set_producto_predominante_uso_suelo()` | `trigger` | **Nuevo (2026-08-26, ADR-028), pendiente de aplicación manual.** `BEFORE INSERT` sobre `EUDR_USO_SUELO` (`trg_set_producto_predominante_uso_suelo`) — resuelve `id_parcela` (GUID QField) → `EUDR_MONITOREO.qfield_relation_id` → `ID_Parcela_Fija` → `PADRON_PARCELAS.id_producto_predominante`, copiándolo a `NEW.id_producto_predominante`. Nunca lanza excepción: si la cadena no resuelve, deja `NULL` y el `INSERT` continúa. |
+| `public.fn_crear_socio_con_certificaciones(p_id_socio text, p_organizacion text, p_socio jsonb, p_certificaciones jsonb)` | `jsonb` (`{id, id_socio}`) | **Aplicada (2026-09-01, ADR previo sin número asignado en este archivo — retroactivo, faltaba documentar).** Alta atómica de un socio nuevo + sus certificaciones (`PADRON_SOCIOS` + `SOCIO_CERTIFICACIONES`) en una sola invocación — reemplaza 3 llamadas independientes del importador masivo. Sin `SECURITY DEFINER` (corre con el rol del llamador) — `EXECUTE` revocado de `PUBLIC`/`anon`/`authenticated`, `GRANT` único a `service_role`. Llamada desde `lib/actions/sociosActions.js::createSocio()` con la Service Role Key. |
+| `public.fn_listar_padron_socios(p_organizacion text, p_search text DEFAULT NULL, p_cert_org_estatus text DEFAULT NULL, p_departamento text DEFAULT NULL, p_cert_flags text[] DEFAULT NULL, p_page int DEFAULT 0, p_page_size int DEFAULT 15)` | `TABLE(...)` — todas las columnas de `PADRON_SOCIOS` que ya exponía `SOCIO_COLUMNS` (incluye `socio_fecha_nacimiento`/`socio_fecha_ingreso` como `date`, no `text` — bug real corregido en el hotfix, ver abajo) + `activo boolean` + `total_count bigint` (paginación en una sola llamada, `COUNT(*) OVER()`) | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`, `SET search_path = public`, `EXECUTE` solo para `service_role`. Reemplaza `lib/sociosSearch.js::fetchSocios` leyendo `PADRON_SOCIOS` directo con `anon` (RLS efectivamente sin restricción — ver ADR-031). Llamada desde `lib/actions/padronReadActions.js::fnListarPadronSocios`. **Hotfix aplicado el mismo día** (`20260901161000_fix_fecha_columns_fn_listar_padron_socios.sql`): la versión original declaraba esas 2 columnas como `text`, Postgres real las tiene como `date` — `DROP FUNCTION` + `CREATE` (no se puede cambiar el tipo de retorno con `REPLACE`), repite el `REVOKE`/`GRANT` completo porque un `DROP` los resetea. |
+| `public.fn_listar_padron_parcelas_por_socio(p_organizacion text, p_socio_id text)` | `TABLE(ID_Parcela_Fija, ID_Organizacion, ID_Socio, parcela_codigo, parcela_nombre, hcp, hcc, ho, hip, hrp, hbp, otros_cultivo, totalh, geom, activo, id_producto_predominante)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Reemplaza `lib/sociosSearch.js::fetchParcelasBySocio`. |
+| `public.fn_buscar_padron_socios(p_organizacion text, p_query text)` | `TABLE(ID_Socio, ID_Organizacion, codigo_finca, socio_nombre_completo, socio_dni)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Autocompletado — reemplaza `lib/padronSearch.js::searchSocios` (usado por Inspecciones **y** por el editor vectorial de la Consola QC, `VectorEditorTools.jsx`). |
+| `public.fn_buscar_padron_parcelas(p_organizacion text, p_socio_id text DEFAULT NULL, p_query text DEFAULT NULL)` | `TABLE(ID_Parcela_Fija, ID_Organizacion, ID_Socio, parcela_codigo, parcela_nombre, totalh)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Reemplaza `lib/padronSearch.js::searchParcelas`. |
+| `public.fn_padron_socios_existentes(p_organizacion text, p_id_socios text[] DEFAULT '{}', p_dnis text[] DEFAULT '{}', p_codigos_finca text[] DEFAULT '{}')` | `TABLE(ID_Socio, socio_dni, codigo_finca)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Detección de duplicados en el preview de importación masiva — reemplaza 3 consultas paralelas de `lib/padronCsv.js::applySocioDbChecks` con 1 sola llamada. |
+| `public.fn_padron_parcelas_existentes(p_organizacion text, p_ids text[] DEFAULT '{}', p_codigos text[] DEFAULT '{}')` | `TABLE(ID_Parcela_Fija, parcela_codigo)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Mismo propósito que la anterior, para `lib/padronCsv.js::applyParcelaDbChecks`. |
+| `public.fn_padron_socios_ids_todos(p_organizacion text)` | `TABLE(ID_Socio)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Todos los `ID_Socio` (activos e inactivos) de la organización, para calcular el siguiente código libre en la plantilla descargable de Socios (`lib/padronCsv.js::downloadSocioTemplate`). |
+| `public.fn_padron_socios_sample_activos(p_organizacion text, p_limit int DEFAULT 2)` | `TABLE(ID_Socio)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. `ID_Socio` reales y activos de ejemplo para la plantilla de Parcelas (`lib/padronCsv.js::downloadParcelaTemplate`). |
+| `public.fn_padron_parcelas_codigos_e_ids(p_organizacion text)` | `TABLE(parcela_codigo, ID_Parcela_Fija)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Códigos/IDs de parcela ya usados, para calcular los siguientes libres en la plantilla de Parcelas. |
+| `public.fn_enriquecer_parcela_qc(p_organizacion text, p_ids text[])` | `TABLE(ID_Parcela_Fija, parcela_codigo, parcela_nombre)` | **Aplicada (2026-09-01, ADR-031).** `SECURITY DEFINER`. Reemplaza `lib/eudrQcActions.js::enrichWithParcelaInfo` (Consola QC, enriquecimiento de registros `PENDIENTE`) — **la versión anterior no filtraba por organización en absoluto**, hallazgo real encontrado durante el refactor, no solo el defecto ya conocido de `PADRON_SOCIOS`. |
+| `public.fn_exportar_padron_socios(p_organizacion text)` | `TABLE(ID_Socio, ID_Organizacion, codigo_finca, socio_nombre_completo, socio_dni, socio_genero, socio_fecha_nacimiento date, celular_socio, socio_departamento, socio_provincia, socio_distrito, localidad, socio_fecha_ingreso date, cert_org_estatus, id uuid)` | **Aplicada (2026-09-01, fase 1b — hallazgo colateral de ADR-031).** `SECURITY DEFINER`, sin parámetros de filtro (confirmado que `exportSociosCsv` nunca respetó ningún filtro de la UI — siempre exporta el padrón activo completo). Reemplaza la consulta directa a `PADRON_SOCIOS` con `anon` en `lib/padronCsv.js::exportSociosCsv`, que había quedado devolviendo CSV vacío tras el lockdown de `fn_listar_padron_socios`/RLS. Columnas = `SOCIO_EXPORT_COLUMNS` + `id` (subconjunto más chico que `fn_listar_padron_socios`, no una copia). Llamada desde `lib/actions/padronReadActions.js::fnExportarPadronSocios`. Verificado en vivo: 12/12 tests (`tests/test_padron_read_functions_live.mjs`) + CSV real descargado desde `/dashboard/socios` con 618 filas, todas `ID_Organizacion = COOP-AROMAS-VALLE`, 0 IDs duplicados. |
+| `public.fn_exportar_padron_parcelas(p_organizacion text)` | `TABLE(ID_Parcela_Fija, ID_Organizacion, ID_Socio, parcela_codigo, parcela_nombre, hcp, hcc, ho, hip, hrp, hbp, otros_cultivo, totalh)` | **Aplicada (2026-09-01, fase 1b — hallazgo colateral de ADR-031).** `SECURITY DEFINER`, sin parámetros de filtro (mismo motivo que la anterior). A diferencia de `fn_listar_padron_parcelas_por_socio` (filtra por `p_socio_id`), esta cubre toda la organización — función nueva, no una reutilización. Reemplaza la consulta directa a `PADRON_PARCELAS` con `anon` en `lib/padronCsv.js::exportParcelasCsv`. Llamada desde `lib/actions/padronReadActions.js::fnExportarPadronParcelas`. Verificado en vivo: 12/12 tests + CSV real con 821 filas, todas `ID_Organizacion = COOP-AROMAS-VALLE`, 0 IDs duplicados. |
+
+**Nota sobre las 12 funciones de ADR-031 (fase 1 + fase 1b):** todas
+comparten el mismo patrón — `SECURITY DEFINER` + `SET search_path =
+public` + `REVOKE EXECUTE` explícito de `PUBLIC`/`anon`/`authenticated`
++ `GRANT` único a `service_role`, consumidas exclusivamente vía
+`lib/actions/padronReadActions.js` (Server Actions, nunca directo desde
+un componente `'use client'`). Confirmado en vivo: `anon` recibe `42501
+permission denied` al intentar llamarlas (no solo "función no
+encontrada") — ver `tests/test_padron_read_functions_live.mjs`.
 
 ## Tablas nuevas fuera del núcleo EUDR/Padrón
 
@@ -435,6 +624,21 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
   `estado_revision` de `approveRecord`/`rejectRecord`) — ver la spec para
   el razonamiento completo.
 
+- **`public."PRODUCTOS"`** (2026-08-26, ADR-028, pendiente de aplicación
+  manual): catálogo global — `id uuid PK`, `codigo text UNIQUE`, `nombre
+  text`, `vertical text CHECK IN ('AGRICOLA','PECUARIO')`, `activo
+  boolean`, `creado_en timestamptz`. Sembrado con 2 filas (`CAFE`,
+  `CACAO`, ambas `AGRICOLA`). RLS: `SELECT` abierto para `anon`
+  (`USING (true)`, mismo patrón que `CERTIFICACIONES_CATALOGO` de
+  ADR-027, no documentado en este archivo).
+- **`public."ORGANIZACION_PRODUCTOS"`** (2026-08-26, ADR-028, pendiente
+  de aplicación manual): membresía N-a-N organización↔producto — `id
+  uuid PK`, `id_organizacion text NOT NULL REFERENCES ORGANIZACIONES("ID")`,
+  `id_producto uuid NOT NULL REFERENCES PRODUCTOS(id)`, `activo boolean`,
+  `creado_en timestamptz`, `UNIQUE(id_organizacion, id_producto)`. Sin
+  seed — se llena por organización cuando corresponda. RLS: `SELECT`
+  para `anon` con `USING (id_organizacion IS NOT NULL)`.
+
 ## Índices espaciales
 
 Antes de `20260818_gis_core_sanitization.sql` **no existía ningún índice
@@ -453,11 +657,30 @@ Supabase Auth** (`signInWithPassword` no aparece en ningún archivo del repo).
 Las políticas `authenticated`-only de Tarea 9.1 sobre `EUDR_*`/`PADRON_*`
 **no aplican** al tráfico real del frontend — ese tráfico funciona porque las
 vistas (`vw_monitoreo_web`, etc.) corren con el privilegio de su dueño
-(`postgres`), no del rol que realmente consulta (`anon`). Un `SELECT` directo
-a `PADRON_PARCELAS` con la anon key devuelve 0 filas. El módulo de
+(`postgres`), no del rol que realmente consulta (`anon`). El módulo de
 Inspecciones (`INSPECCIONES` + `CAP_*`) sí escribe directo con la anon key, y
 por eso tiene políticas `anon`-abiertas explícitas (`fix_inspecciones_rls`,
 2026-08-18) — ver ese archivo para el razonamiento de seguridad completo.
+**Ese mismo patrón (`anon`-abierto) resultó ser un incidente real de
+seguridad cuando se replicó para lectura en `PADRON_SOCIOS`/`PADRON_PARCELAS`
+— ver ADR-031 y la corrección abajo.**
+
+> **Corrección (2026-09-01, ADR-031):** el párrafo original de esta
+> sección decía "un `SELECT` directo a `PADRON_PARCELAS` con la anon key
+> devuelve 0 filas" — **eso era falso desde el 2026-08-18** (fecha en que
+> se agregó `rls_anon_select_padron_socios`/`_parcelas` para el
+> autocompletado de Inspecciones): la condición real de esas políticas,
+> `USING ("ID_Organizacion" IS NOT NULL)`, es efectivamente sin
+> restricción — un `SELECT` directo con la anon key devolvía el padrón
+> **completo** de **todas** las organizaciones (confirmado en vivo:
+> 618 socios reales de `COOP-AROMAS-VALLE`, incluido DNI/nombre/celular,
+> alcanzables sin sesión). Cerrado bloqueando esas 2 políticas a
+> `USING (false)` para `anon` y reemplazando los 6 caminos de lectura
+> reales por las 10 funciones `SECURITY DEFINER` de la sección
+> "Funciones" arriba — ver ADR-031 para el detalle completo. Hoy sí es
+> cierto que un `SELECT` directo devuelve 0 filas, pero por el motivo
+> correcto (política `USING (false)`), no por el que decía este párrafo
+> originalmente.
 
 ### Auditoría RLS Multi-Tenant (2026-08-18, `20260818_rls_multi_tenant_fortification.sql`)
 
@@ -472,7 +695,7 @@ Zero-Trust y por qué — **riesgo aceptado por diseño, no un descuido**:
 |---|---|
 | `INSPECCIONES` | Frontend escribe con anon key sin sesión real; política exige solo `ID_Organizacion IS NOT NULL`, no coincidencia contra JWT (no hay JWT real que comparar). |
 | `CAP_DATOS_SOCIO`, `CAP_MIC`, `CAP_CONSERVACION`, `CAP_BIENESTAR`, `CAP_RIESGOS`, `CAP_GESTION` | No tienen columna `ID_Organizacion` propia (dependen de `ID_Inspeccion → INSPECCIONES`); política `USING (true)` para `anon`+`authenticated`. |
-| `PADRON_SOCIOS` / `PADRON_PARCELAS` (solo la política `anon` de lectura) | Habilitada para autocompletado del formulario de Inspecciones; la escritura sigue exclusiva de `authenticated` + `auth_org_id()` desde Tarea 9.1, sin cambios. |
+| ~~`PADRON_SOCIOS` / `PADRON_PARCELAS` (solo la política `anon` de lectura)~~ | **CERRADO (2026-09-01, ADR-031)** — la política `anon` de lectura habilitada para el autocompletado de Inspecciones resultó ser un incidente real (`USING` efectivamente sin restricción, padrón completo de cualquier organización legible sin sesión). Reemplazada por `USING (false)` + 10 funciones `SECURITY DEFINER`, ver sección "Funciones" arriba. La escritura sigue igual que siempre (exclusiva de `authenticated`/Service Role Key, sin cambios). |
 
 Cerrar este riesgo requiere implementar Supabase Auth real (sesión con JWT
 que lleve el claim `ID_Organizacion`) — no está en el alcance de ninguna

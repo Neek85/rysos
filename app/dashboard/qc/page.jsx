@@ -7,14 +7,17 @@ import nextDynamic from 'next/dynamic'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import {
   fetchPendingRecords,
-  approveRecord,
-  rejectRecord,
-  updateRecordAttributes,
-  updateRecordGeometry,
+  fetchComparisonGeometries,
   resolveOrganizationId,
   LAYER_LABELS,
   EUDRQcError,
 } from '@/lib/eudrQcActions'
+import {
+  approveQcRecord,
+  rejectQcRecord,
+  updateQcRecordAttributes,
+  updateQcRecordGeometry,
+} from '@/lib/actions/qcActions'
 import { EUDRValidationError } from '@/lib/eudrDdsExporter'
 import QcDetailEditor from './components/QcDetailEditor'
 import QcTable from './components/QcTable'
@@ -68,6 +71,23 @@ export default function QcConsolePage() {
   const [validationResults, setValidationResults] = useState({})
   const [validatingKey, setValidatingKey] = useState(null)
   const [validationError, setValidationError] = useState(null)
+  // Capa de comparación de solapamiento (specs/consola_qc_layout_y_validacion.md,
+  // addendum solapamiento auditable) — geometrías APROBADAS reales contra
+  // las que "Ejecutar Test Espacial" detectó solapamiento para el registro
+  // seleccionado. Se limpia al cambiar de registro (ver el efecto de
+  // [selectedKey] más abajo), nunca sobrevive apuntando a otra capa.
+  const [comparisonFeatures, setComparisonFeatures] = useState([])
+  // Exclusión mutua entre "crear registro nuevo" (Editor Vectorial, toolbar
+  // de dibujo dentro de QcConsoleMap) y "Ajustar Geometría" (editar un
+  // registro existente ya seleccionado) — ver
+  // docs/adr/ADR-005-qc-editor-geometria-y-solapamiento.md, hallazgo
+  // confirmado en vivo: ambos mecanismos podían estar activos a la vez.
+  // QcConsoleMap reporta acá cuando hay un dibujo en curso (borrador o
+  // capa ya dibujada sin guardar) para deshabilitar el botón "Ajustar
+  // Geometría" en QcDetailEditor.jsx — la dirección inversa (editingKey
+  // deshabilita el toolbar de dibujo) la maneja QcConsoleMap.jsx
+  // directamente contra la API de geoman.
+  const [isDrawSessionActive, setIsDrawSessionActive] = useState(false)
 
   async function loadPending() {
     const supabase = getSupabaseClient()
@@ -104,6 +124,7 @@ export default function QcConsolePage() {
   useEffect(() => {
     setEditingGeometryKey(null)
     setGeometryDraft(null)
+    setComparisonFeatures([])
   }, [selectedKey])
 
   const filteredRecords = useMemo(() => {
@@ -118,16 +139,14 @@ export default function QcConsolePage() {
 
   async function handleDecision(kind) {
     if (!selectedRecord || actionBusyKey) return
-    const supabase = getSupabaseClient()
-    if (!supabase) return
 
     setActionBusyKey(selectedRecord.key)
     try {
       const organizationId = resolveOrganizationId(records)
       if (kind === 'approve') {
-        await approveRecord(supabase, selectedRecord, organizationId)
+        await approveQcRecord(selectedRecord, organizationId)
       } else {
-        await rejectRecord(supabase, selectedRecord, motivo, organizationId)
+        await rejectQcRecord(selectedRecord, motivo, organizationId)
       }
 
       logQcDecisionAudit(selectedRecord, kind === 'approve' ? 'APROBADO' : 'RECHAZADO', organizationId, motivo)
@@ -160,7 +179,11 @@ export default function QcConsolePage() {
   // automáticamente para toda la lista: cada corrida es una llamada real
   // a fn_validar_topologia_eudr, solo cuando el usuario la pide desde
   // QcDetailEditor ("Ejecutar Test Espacial") para el registro
-  // seleccionado.
+  // seleccionado. También la usa "Validar Todos PENDIENTES" (QcTable.jsx)
+  // en modo batch — por eso la capa de comparación de solapamiento (ver
+  // fetchComparisonGeometries) solo se calcula cuando `record` es el
+  // registro ACTUALMENTE seleccionado, nunca durante un batch sobre
+  // registros que el usuario no está mirando en el mapa.
   async function handleValidateTopology(record) {
     setValidationError(null)
     setValidatingKey(record.key)
@@ -173,6 +196,27 @@ export default function QcConsolePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error || 'No se pudo validar la topología.')
       setValidationResults((prev) => ({ ...prev, [record.key]: data.result }))
+
+      if (record.key === selectedKey) {
+        const solapados = data.result?.registros_solapados
+        if (data.result?.solapa && solapados?.length > 0) {
+          // Fallo acá no debe mostrarse como "no se pudo validar la
+          // topología" — la validación en sí ya tuvo éxito (arriba), solo
+          // no se pudo dibujar la capa de comparación visual.
+          try {
+            const supabase = getSupabaseClient()
+            if (supabase) {
+              const organizationId = resolveOrganizationId(records)
+              const comparisons = await fetchComparisonGeometries(supabase, solapados, organizationId)
+              setComparisonFeatures(comparisons)
+            }
+          } catch {
+            setComparisonFeatures([])
+          }
+        } else {
+          setComparisonFeatures([])
+        }
+      }
     } catch (err) {
       setValidationError(err?.message || 'No se pudo validar la topología.')
     } finally {
@@ -189,6 +233,14 @@ export default function QcConsolePage() {
   // ya cubiertos por 8 tests reales tal como están). `detalles` incluye
   // el último resultado de "Ejecutar Test Espacial" para este registro si
   // existe (nunca PII — solo topología/solapamiento/deforestación).
+  //
+  // `origen: 'consola_qc_web'` (ADR-013): no hay sesión de Supabase Auth
+  // en este frontend (anon key sin sesión, ver el gotcha de RLS en
+  // CLAUDE.md), así que no existe un "quién" real (usuario/sesión) para
+  // registrar — este campo deja constancia de que la decisión vino de la
+  // Consola QC WebGIS, a diferencia de scripts/qgis_qc_actions.py (el otro
+  // flujo real que escribe estado_revision, que hoy no inserta en
+  // audit_logs — fuera de alcance de ADR-013).
   async function logQcDecisionAudit(record, accion, organizationId, motivoTexto) {
     if (!organizationId) return
     try {
@@ -201,6 +253,7 @@ export default function QcConsolePage() {
           tabla_origen: record.tabla_origen,
           entidad_id: record.id_origen,
           detalles: {
+            origen: 'consola_qc_web',
             validacion: validationResults[record.key] || null,
             motivo: accion === 'RECHAZADO' ? motivoTexto : null,
           },
@@ -236,20 +289,16 @@ export default function QcConsolePage() {
 
   async function handleSaveAttributes(attributes) {
     if (!selectedRecord) return
-    const supabase = getSupabaseClient()
-    if (!supabase) return
     const organizationId = resolveOrganizationId(records)
-    await updateRecordAttributes(supabase, selectedRecord, attributes, organizationId)
+    await updateQcRecordAttributes(selectedRecord, attributes, organizationId)
     setRecords((prev) => prev.map((r) => (r.key === selectedRecord.key ? { ...r, ...attributes } : r)))
     setToast({ type: 'success', message: `Atributos actualizados: ${displayParcela(selectedRecord)}.` })
   }
 
   async function handleSaveGeometry(geometry) {
     if (!selectedRecord || !geometry) return
-    const supabase = getSupabaseClient()
-    if (!supabase) return
     const organizationId = resolveOrganizationId(records)
-    await updateRecordGeometry(supabase, selectedRecord, geometry, organizationId)
+    await updateQcRecordGeometry(selectedRecord, geometry, organizationId)
     setRecords((prev) => prev.map((r) => (r.key === selectedRecord.key ? { ...r, geom: geometry } : r)))
     setEditingGeometryKey(null)
     setGeometryDraft(null)
@@ -329,8 +378,19 @@ export default function QcConsolePage() {
         </p>
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
-        <section className="max-h-[600px] space-y-2 overflow-y-auto rounded-xl border border-gray-200 bg-white p-3 lg:col-span-1">
+      {/* Layout de 3 columnas (lista | mapa | panel de edición fijo) — ver
+          specs/consola_qc_layout_y_validacion.md. Antes el panel de edición
+          vivía debajo del mapa en la misma columna (grid-cols-4, mapa+panel
+          en col-span-3 apilados), obligando a hacer scroll de página para
+          llegar a Aprobar/Rechazar al seleccionar un registro. Ahora el
+          panel es su propia columna con `sticky` + scroll interno propio
+          (`overflow-y-auto`) — la página nunca necesita scrollear para
+          llegar a los botones de acción; si el panel es más alto que la
+          pantalla, scrollea DENTRO de su propia columna, no la página
+          entera. Mismas proporciones relativas que antes (lista 25%, antes
+          mapa+panel 75% combinados → ahora mapa 50% + panel 25%). */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <section className="max-h-[600px] space-y-2 overflow-y-auto rounded-xl border border-gray-200 bg-white p-3 lg:col-span-3">
           <QcTable
             records={filteredRecords}
             selectedKey={selectedKey}
@@ -342,7 +402,7 @@ export default function QcConsolePage() {
           />
         </section>
 
-        <section className="space-y-3 lg:col-span-3">
+        <section className="lg:col-span-6">
           <QcConsoleMap
             records={filteredRecords}
             selectedKey={selectedKey}
@@ -351,15 +411,20 @@ export default function QcConsolePage() {
             onGeometryChange={handleGeometryChange}
             organizationId={resolveOrganizationId(records)}
             onFeatureCreated={loadPending}
+            comparisonFeatures={comparisonFeatures}
+            onDrawSessionActiveChange={setIsDrawSessionActive}
           />
+        </section>
 
-          {selectedRecord && (
+        <section className="lg:col-span-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+          {selectedRecord ? (
             <QcDetailEditor
               key={selectedRecord.key}
               record={selectedRecord}
               geometryDraft={geometryDraft}
               isEditingGeometry={editingGeometryKey === selectedRecord.key}
               onToggleGeometryEdit={handleToggleGeometryEdit}
+              geometryEditDisabled={isDrawSessionActive && editingGeometryKey !== selectedRecord.key}
               onSaveAttributes={handleSaveAttributes}
               onSaveGeometry={handleSaveGeometry}
               motivo={motivo}
@@ -372,6 +437,10 @@ export default function QcConsolePage() {
               validationError={validationError}
               onValidateTopology={handleValidateTopology}
             />
+          ) : (
+            <p className="rounded-xl border border-dashed border-gray-200 p-4 text-center text-xs text-gray-400">
+              Seleccioná un registro de la lista para ver sus detalles.
+            </p>
           )}
         </section>
       </div>
