@@ -1,5 +1,5 @@
 # ESTADO DEL PROYECTO RYZOS
-*Última actualización: 1 de septiembre, 2026*
+*Última actualización: 2 de septiembre, 2026*
 
 > Este documento es la "bitácora" del proyecto. Aquí se anota qué se hizo, qué falta y qué decisiones están pendientes. No contiene reglas técnicas fijas (esas viven en el prompt orquestador RYZOS V3.1) — esto es solo el día a día.
 
@@ -150,6 +150,27 @@
   descargados desde `/dashboard/socios` confirmados con 618 socios / 821
   parcelas, ambos con `ID_Organizacion = COOP-AROMAS-VALLE` únicamente,
   0 IDs duplicados. Ver [ADR-031](adr/ADR-031-lecturas-padron-security-definer.md).
+
+- **(2026-09-02) Fix certificaciones desactualizadas en /dashboard/socios
+  (modal, listado y filtros):** El modal de edición de socio, la columna
+  "CERTIFICACIÓN" del listado y sus 2 filtros (`p_cert_org_estatus`,
+  `p_cert_flags`) leían las columnas `cert_*`/`cert_org_estatus` de
+  `PADRON_SOCIOS`, congeladas desde ADR-027 y sin escritura desde la
+  normalización a `SOCIO_CERTIFICACIONES`/`CERTIFICACIONES_CATALOGO` —
+  ningún consumidor se había migrado a leer del catálogo real. Cerrado en
+  2 partes: `resolveSocioCertFlags` (`lib/actions/sociosActions.js`)
+  resuelve en vivo los 8 flags (presencia de fila, sin importar `estado`)
+  y `cert_org_estatus` (misma certificación más reciente que ya usaba
+  `fetchSocioCertOrgEstatus`) para el modal; `fn_listar_padron_socios`
+  reescrita (`20260901180000_fix_cert_org_estatus_listado.sql`,
+  `SECURITY DEFINER`, con rollback preparado antes de aplicar y aplicada
+  manualmente en Supabase Studio) para exponer los mismos valores reales
+  en el listado y filtros, vía 2 `LEFT JOIN LATERAL`. Verificado con
+  12/12 tests live (incluye `EXECUTE` revocado para `anon`), valores
+  exactos confirmados contra un caso real (`COOP-AROMAS-VALLE-002`),
+  filtro de certificación probado en positivo y negativo, build limpio,
+  692/692 suite completa, y confirmación visual manual en pantalla.
+  Commit `097648a`. Ver [ADR-031](adr/ADR-031-lecturas-padron-security-definer.md).
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
