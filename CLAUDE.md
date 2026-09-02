@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+This project is also worked on with Gemini under the same "Senior RYZOS Architect" role (not just Claude) — see `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1 for the multi-AI collaboration protocol, including the mandatory second-review gate for SQL/RLS/migrations/security tasks before they reach Claude Code CLI.
+
 ## Commands
 
 ### Python (backend/ETL/GIS scripts + tests)
