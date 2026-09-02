@@ -2216,3 +2216,102 @@ diseño real):
 comillas). No se aplicó nada en Supabase, no aplica a esta tarea. No se
 hizo commit todavía — pendiente de confirmación antes de push a
 `staging`, mismo flujo del resto de la sesión.
+
+## 2026-09-02b — Gate temporal de contraseña compartida (`middleware.js`) para `/dashboard/**` + hallazgo real en el `lot_hash` público
+
+**Contexto:** preparación para desplegar en Vercel. Mientras se diseña
+el login real por organización/rol (proyecto aparte), se agrega un gate
+de contraseña compartida (HTTP Basic Auth, un solo usuario/clave) sobre
+`/dashboard/**` y las rutas internas de `/api/qc/**`/`/api/gis/**` que
+las respaldan — nunca sobre `/trace/[lot_hash]`/`/api/trace/**`, el
+portal público de trazabilidad, que debe seguir accesible sin
+contraseña.
+
+**Reconocimiento previo (solo lectura, ver el reporte completo entregado
+al usuario ese turno):**
+- `process.env.*` reales: `NEXT_PUBLIC_SUPABASE_URL`,
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` (públicas), `SUPABASE_SERVICE_ROLE_KEY`,
+  `SUPABASE_URL` (fallback), `PYTHON_BIN`, `RYZOS_DRIVE_ROOT` (esta
+  última se lee indirecto vía `resolveDriveRoot(process.env)` en
+  `lib/driveSyncTrigger.js`, no con el patrón literal
+  `process.env.RYZOS_DRIVE_ROOT` — a propósito, para poder testear sin
+  mockear `process.env` global).
+- `.gitignore` cubre `.env`/`.env.*`/`*.env` (con `!.env.example`
+  explícito); `git log --all --full-history -- .env .env.local
+  .env.production` → vacío, ningún archivo de entorno real fue
+  comiteado nunca. Solo `.env.example` está trackeado, y contiene
+  únicamente placeholders.
+- `app/api/**` (8 rutas): ninguna hace un dump directo de
+  `PADRON_SOCIOS`/`PADRON_PARCELAS`/`INSPECCIONES`/`CAP_*`. Solo
+  `app/api/qc/validar-organizacion-socio-parcela/route.js` consulta
+  `PADRON_SOCIOS`/`PADRON_PARCELAS` server-side (Service Role Key, vía
+  `checkSocioParcelaOrganizacion`), pero devuelve solo un resultado de
+  validación, no los campos PII. El resto de `/api/qc/**`/`/api/gis/**`
+  toca únicamente tablas EUDR/GIS (sin PII) o no toca la base en
+  absoluto. Todas son consumidas exclusivamente por `/dashboard/qc`/
+  `/dashboard/mapa` — nunca pensadas para ser alcanzables desde fuera de
+  esas pantallas, por eso quedan bajo el mismo gate aunque casi ninguna
+  devuelva PII directo.
+- `vercel.json` **ya existía** (no fue creado en esta tarea) y ya
+  cumple `specs/despliegue_vercel.md` §2/§3 exacto — mismo
+  `framework: "nextjs"` y el mismo bloque de 5 cabeceras de seguridad
+  (`X-Content-Type-Options`/`X-Frame-Options`/`Referrer-Policy`/
+  `Permissions-Policy`/`Strict-Transport-Security`) que la spec
+  describe, verificado leyendo ambos archivos, no asumido.
+- `package.json` sin campo `engines` — Vercel usará su default de Node
+  si no se especifica; no bloqueante, señalado como hallazgo para quien
+  configure el proyecto en el dashboard de Vercel.
+
+**Hallazgo real, no bloqueante — el `lot_hash` público NO usa HMAC+salt,
+contradice `CLAUDE.md`/`docs/RYZOS_ORQUESTADOR_V3.1.md` §1:**
+`lib/traceabilityHash.js::generateLotHash` y su contraparte
+`scripts/generate_lot_qr.py::generate_lot_hash` (deben coincidir byte a
+byte, documentado en el propio archivo) generan el hash con
+`hashlib.sha256`/`crypto.subtle.digest('SHA-256')` **plano, sin ninguna
+clave secreta ni salt por organización** — los invariantes documentados
+en `CLAUDE.md`/`RYZOS_ORQUESTADOR_V3.1.md` §1 dicen explícitamente
+"HMAC-SHA256 con salt secreto por organización... nunca hash plano de
+datos sensibles". El código real no implementa eso. **Por qué no es
+bloqueante hoy:** los campos que entran al hash
+(`organization_id`/`total_plots`/`total_hectares`/`id_monitoreo`) no son
+PII — ningún DNI, nombre, ni dato sensible se hashea acá; la
+sanitización real de PII pasa por un mecanismo separado
+(`PII_FIELDS`/`buildPublicSanitizedPayload`, que sí filtra
+`socio_dni`/`socio_nombre_completo`/etc. de las properties antes de
+exponerlas). **Queda como pendiente de decisión, no corregido en esta
+tarea:** o se implementa el HMAC+salt real que la documentación
+promete, o se corrige la documentación para reflejar lo que el código
+realmente hace hoy — cualquiera de las 2 es una decisión del arquitecto,
+no algo para resolver de paso en una tarea de despliegue.
+
+**`middleware.js` (raíz del proyecto, JS plano, sin TypeScript) — ya
+redactado, revisado línea por línea y aprobado sin cambios de código en
+el turno anterior:**
+- `matcher: ['/dashboard/:path*', '/api/qc/:path*', '/api/gis/:path*']`
+  — `/trace/:path*`/`/api/trace/:path*` y todos los assets estáticos
+  quedan fuera por construcción (matcher positivo, no una exclusión
+  sobre "todo").
+- HTTP Basic Auth: usuario fijo no secreto `"ryzos"` + contraseña desde
+  `process.env.DASHBOARD_GATE_PASSWORD`. Decodifica con `atob` (Web API
+  estándar, no `Buffer` — el middleware de Next.js corre en Edge
+  Runtime por defecto, donde `Buffer` no está garantizado).
+- **Fail-closed real:** si `DASHBOARD_GATE_PASSWORD` no está definida,
+  el middleware bloquea con 401 igual, nunca deja pasar sin contraseña
+  por una variable de entorno faltante.
+- 401 responde con `WWW-Authenticate: Basic realm="RYZOS interno"` —
+  dispara el diálogo nativo del navegador, sin UI propia.
+
+**Verificado en la rama `feature/dashboard-password-gate`:**
+- `npm run build`: compila limpio, **nueva línea en el output
+  confirmando que Next.js compiló el middleware** (`ƒ Middleware 26.7
+  kB`), mismos 8 warnings preexistentes (ninguno nuevo de
+  `middleware.js`), 0 errores.
+- `npm run lint`: exit code 0, mismos 8 warnings, sin hallazgos nuevos.
+- No hizo falta el protocolo de "2 intentos y detenerse" — ambos
+  pasaron a la primera.
+
+**Contrato de datos:** variable de entorno nueva `DASHBOARD_GATE_PASSWORD`
+(string, server-only, sin prefijo `NEXT_PUBLIC_`) — **requerida en
+Production y Preview de Vercel**; sin ella el gate bloquea todo
+`/dashboard/**` con 401 permanente (fail-closed, comportamiento
+esperado, no un bug). Sin cambios de schema SQL en esta tarea.

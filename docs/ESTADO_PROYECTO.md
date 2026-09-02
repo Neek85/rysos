@@ -172,6 +172,30 @@
   692/692 suite completa, y confirmación visual manual en pantalla.
   Commit `097648a`. Ver [ADR-031](adr/ADR-031-lecturas-padron-security-definer.md).
 
+- **(2026-09-02) Gate temporal de contraseña compartida para
+  `/dashboard/**` (preparación para desplegar en Vercel):** mientras se
+  diseña el login real por organización/rol (proyecto aparte),
+  `middleware.js` nuevo exige HTTP Basic Auth (usuario fijo `ryzos` +
+  contraseña desde `DASHBOARD_GATE_PASSWORD`, variable nueva requerida
+  en Production/Preview de Vercel) sobre `/dashboard/**` y las rutas
+  internas de `/api/qc/**`/`/api/gis/**` que las respaldan.
+  `/trace/[lot_hash]`/`/api/trace/**` (portal público de trazabilidad)
+  quedan explícitamente fuera del gate. Fail-closed: sin la variable de
+  entorno definida, bloquea con 401 en vez de dejar pasar sin
+  contraseña. Verificado: `npm run build` compila limpio con el
+  middleware incluido en el bundle, `npm run lint` sin hallazgos nuevos.
+  `vercel.json` (cabeceras de seguridad + `framework: "nextjs"`) ya
+  existía de una preparación anterior y ya cumple
+  `specs/despliegue_vercel.md`. **Hallazgo colateral, pendiente de
+  decisión, no bloqueante:** `lib/traceabilityHash.js`/
+  `scripts/generate_lot_qr.py` generan el `lot_hash` público con
+  SHA-256 plano, sin HMAC ni salt por organización — contradice el
+  invariante documentado en `CLAUDE.md`/
+  [RYZOS_ORQUESTADOR_V3.1.md](RYZOS_ORQUESTADOR_V3.1.md) §1. No es
+  explotable hoy porque ningún campo PII entra al hash (la sanitización
+  real de PII es un mecanismo aparte), pero queda pendiente decidir si
+  se implementa el HMAC+salt real o se corrige la documentación.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
