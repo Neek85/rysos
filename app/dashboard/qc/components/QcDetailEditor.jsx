@@ -357,7 +357,7 @@ export default function QcDetailEditor({
             {isPointRecord
               ? 'Arrastrá el marcador directamente sobre el mapa.'
               : 'Arrastrá los vértices directamente sobre el mapa.'}{' '}
-            "Guardar Cambios de Geometría" aparece cuando haya un cambio — al guardar, se vuelve a ejecutar el
+            &quot;Guardar Cambios de Geometría&quot; aparece cuando haya un cambio — al guardar, se vuelve a ejecutar el
             test espacial automáticamente.
           </p>
         )}

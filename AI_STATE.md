@@ -2140,3 +2140,79 @@ con el resto de archivos de esta ronda (`lib/actions/sociosActions.js`,
 `components/features/socios/SocioFormModal.jsx`,
 `supabase/migrations/20260901180000_fix_cert_org_estatus_listado.sql`,
 `supabase/migrations/rollback/20260901180000_ROLLBACK.sql`).
+
+## 2026-09-02 — `npm run lint` habilitado (bloqueo documentado desde `2026-08-25` resuelto)
+
+**Causa raíz real (confirmada antes de tocar nada, ver
+`specs/setup_eslint.md`):** no era un bug de Next.js ni del proyecto —
+simplemente no existía ningún archivo de configuración de ESLint
+(`.eslintrc.json`) ni `eslint`/`eslint-config-next` estaban instalados.
+`next lint` sin configuración previa dispara un asistente **interactivo**
+(elegir Strict/Base/Cancel, luego auto-instala dependencias) — eso es lo
+que bloqueaba el comando en esta sesión no interactiva, documentado
+desde `2026-08-25` y repetido en varias entradas posteriores sin
+resolverse hasta ahora.
+
+**Fix:** `eslint@^8.57.1` + `eslint-config-next@^14.2.35` (misma
+minor/patch que `next@14.2.35`, ya instalado) agregados a
+`devDependencies`, `.eslintrc.json` (`{ "extends":
+"next/core-web-vitals" }`) y `.eslintignore`
+(`node_modules/`/`.next/`/`out/`/`dist/`/`public/` — estos 2 últimos no
+existen hoy en el repo, excluidos igual de forma preventiva) creados
+ANTES de correr `next lint` por primera vez, para que nunca dispare el
+asistente interactivo. El script `"lint": "next lint"` ya existía en
+`package.json` desde antes de esta tarea — no hizo falta agregarlo, solo
+confirmarlo.
+
+**Resultado real de `npm run lint` (primera corrida):** 2 errores reales
+(bloqueantes, exit code ≠ 0), 8 warnings. Los 2 errores eran el mismo
+tipo (`react/no-unescaped-entities`, comillas `"` literales sin escapar
+dentro de texto JSX) en 2 archivos:
+- `app/dashboard/qc/components/QcDetailEditor.jsx:360` (2 instancias).
+- `components/features/socios/ImportPadronModal.jsx:224` (8 instancias).
+
+**Corregidos ambos** — cambio puramente mecánico (`"` → `&quot;` dentro
+de texto JSX), sin tocar ningún atributo de componente ni lógica; el
+texto renderizado en pantalla es idéntico carácter por carácter. Segunda
+corrida: **exit code 0**, 0 errores.
+
+**8 warnings quedan SIN tocar, documentados acá en vez de forzados**
+(ninguno es un fix mecánico seguro, cada uno requiere una decisión de
+diseño real):
+- `@next/next/no-img-element` (4 casos: `app/dashboard/lotes/page.jsx:107`,
+  `app/dashboard/qc/components/QcDetailEditor.jsx:292`,
+  `app/trace/[lot_hash]/page.jsx:67`) — migrar a `next/image` cambia
+  comportamiento real (requiere `width`/`height`, lazy-loading distinto,
+  posible diferencia visual) — no es un fix de sintaxis.
+- `react-hooks/exhaustive-deps` (3 casos: `QcDetailEditor.jsx:253`
+  falta `record.fecha_monitoreo`, `components/EUDRMap.jsx:65` falta
+  `records`, `components/gis/MapDashboard.jsx:630` falta
+  `renderLayers`) — agregar la dependencia faltante a ciegas puede
+  cambiar el comportamiento real del efecto (re-ejecuciones adicionales,
+  posibles loops) — cada uno necesita revisión puntual de por qué se
+  omitió esa dependencia originalmente, no un fix reflejo.
+
+**Verificado:**
+- `npm run build`: compila limpio, 10 rutas, mismos 8 warnings de ESLint
+  (Next corre lint como parte del build por defecto — confirma que la
+  config quedó bien conectada al pipeline real, no solo al script
+  suelto), 0 errores.
+- `node --test tests/*.mjs`: **692/692 passed, 0 failed** (el cambio no
+  toca ningún módulo `lib/*.js` testeado, solo 2 archivos `.jsx` de
+  texto visible y config nueva).
+- `npm install` reportó 5 vulnerabilidades "high" (transitivas de
+  `eslint@8.x`, que ya está en End-of-Life pero es el único major
+  compatible con `eslint-config-next@14.x` — peer dependency real,
+  `^7.23.0 || ^8.0.0`). **No se corrió `npm audit fix --force`** —
+  fuera de alcance de esta tarea (podría introducir cambios rompientes
+  no relacionados con lint) y no fue pedido; queda como hallazgo para
+  una tarea aparte si el arquitecto la prioriza.
+
+**Archivos nuevos:** `specs/setup_eslint.md`, `plans/setup_eslint_ejecucion.md`,
+`.eslintrc.json`, `.eslintignore`. **Modificados:** `package.json`,
+`package-lock.json` (nuevas devDependencies),
+`app/dashboard/qc/components/QcDetailEditor.jsx`,
+`components/features/socios/ImportPadronModal.jsx` (solo el escape de
+comillas). No se aplicó nada en Supabase, no aplica a esta tarea. No se
+hizo commit todavía — pendiente de confirmación antes de push a
+`staging`, mismo flujo del resto de la sesión.

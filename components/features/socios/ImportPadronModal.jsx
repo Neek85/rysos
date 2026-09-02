@@ -221,7 +221,7 @@ export default function ImportPadronModal({ organizationId, onClose, onImported 
 
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs text-gray-500">
-            Acepta encabezados legibles ("Código de Socio", "DNI", …) o técnicos ("ID_Socio", "socio_dni", …).
+            Acepta encabezados legibles (&quot;Código de Socio&quot;, &quot;DNI&quot;, …) o técnicos (&quot;ID_Socio&quot;, &quot;socio_dni&quot;, …).
           </p>
           <button
             type="button"
