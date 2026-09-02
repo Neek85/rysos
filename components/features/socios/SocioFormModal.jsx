@@ -5,7 +5,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { FormField, inputClass } from '@/components/ui/FormField'
 import { socioSchema, SOCIO_DEFAULT_VALUES, CERT_FLAG_FIELDS } from '@/lib/validations/socios'
-import { createSocio, updateSocio } from '@/lib/actions/sociosActions'
+import { createSocio, updateSocio, resolveSocioCertFlags } from '@/lib/actions/sociosActions'
 import { SocioActionError } from '@/lib/actions/socioActionError'
 import UbigeoSelect from './UbigeoSelect'
 
@@ -40,6 +40,34 @@ export default function SocioFormModal({ socio, organizationId, onClose, onSaved
     return () => {
       document.body.style.overflow = ''
     }
+  }, [])
+
+  // Las 8 columnas cert_* + cert_org_estatus de PADRON_SOCIOS quedaron
+  // congeladas desde ADR-027 -- `socio` (la fila de fn_listar_padron_socios)
+  // trae su valor viejo, no el real. Se resuelven acá desde
+  // SOCIO_CERTIFICACIONES (fuente de verdad real) y se sobreescriben los
+  // defaultValues ya montados -- ver AI_STATE.md "Fix autoselect de
+  // certificaciones en SocioFormModal.jsx" / "Fix cert_org_estatus
+  // desactualizado". `resolveSocioCertFlags` devuelve los 8 flags Y
+  // cert_org_estatus en el mismo objeto -- el loop de abajo ya cubre
+  // ambos sin cableado adicional.
+  useEffect(() => {
+    if (!isEdit) return
+    let cancelled = false
+    resolveSocioCertFlags(socio.ID_Socio, organizationId)
+      .then((flags) => {
+        if (cancelled) return
+        for (const [field, value] of Object.entries(flags)) {
+          setValue(field, value)
+        }
+      })
+      .catch((err) => {
+        console.error('[SocioFormModal] resolveSocioCertFlags:', err)
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function onSubmit(values) {

@@ -1657,3 +1657,486 @@ documentado en `2026-09-01h`, no priorizado). Por eso el reemplazo de
   igual que el resto del incidente, queda para revisión del arquitecto.
   Una vez aplicada, los 6 tests nuevos empiezan a correr solos (mismo
   patrón que la fase 1) sin tocar este archivo.
+
+## 2026-09-01n — Fix autoselect de certificaciones en SocioFormModal.jsx — causa raíz real (paso 1) y verificación del paso 2 (no asumir)
+
+**Tarea:** los 8 dropdowns de certificación del modal de EDICIÓN de socio
+muestran "— Sin dato —" en vez del valor real, aunque el socio SÍ tiene
+datos reales en `SOCIO_CERTIFICACIONES`.
+
+**Causa raíz real (leyendo `SocioFormModal.jsx` línea por línea, no
+memoria):**
+
+```js
+defaultValues: socio ? { ...SOCIO_DEFAULT_VALUES, ...socio } : SOCIO_DEFAULT_VALUES,
+```
+
+El modal nunca hace ningún fetch propio a `SOCIO_CERTIFICACIONES` — toma
+el valor inicial de los 8 `<select>` directo de `socio.cert_nop_usda`/
+`socio.ue_2018_848`/etc., el objeto `row` que ya trae la tabla de
+`/dashboard/socios` (viene de `fn_listar_padron_socios`, ver
+`app/dashboard/socios/page.jsx:338` → `setEditingSocio(row)`). Esas 8
+columnas son las de `PADRON_SOCIOS` — **congeladas desde ADR-027**:
+`socioPayload()` (`lib/actions/sociosActions.js:263`) las excluye
+explícitamente del payload de escritura desde esa migración ("esas
+columnas de PADRON_SOCIOS quedan congeladas en su valor actual... no se
+tocan de acá en adelante"). `fn_listar_padron_socios` (la función
+`SECURITY DEFINER` de ADR-031/fase 1) las sigue devolviendo tal cual
+quedaron congeladas — por eso cualquier socio creado o editado **después**
+de la migración de normalización (`20260825222933_certificaciones_normalizadas.sql`)
+muestra "Sin dato" en el modal aunque tenga certificaciones reales en
+`SOCIO_CERTIFICACIONES` (la fuente de verdad real desde ADR-027).
+Confirmado con el caso del prompt: DNI 46837434 tiene "No" en las 8 según
+`fn_exportar_padron_socios`/el CSV real (0 filas en `SOCIO_CERTIFICACIONES`
+para ese socio), pero el modal muestra "Sin dato" — evidencia directa de
+que el modal lee la columna congelada, no la tabla real.
+
+**Paso 2 — ¿la columna "Certificación" de la tabla de listado tiene el
+mismo bug?** Confirmado con evidencia, **NO es el mismo bug pero SÍ
+comparte la misma causa raíz** (no se puede asumir que "ya funciona
+bien"): `app/dashboard/socios/page.jsx:326` renderiza
+`row.cert_org_estatus` — un campo de texto libre, SEPARADO de los 8
+flags booleanos (correcto que sean campos distintos, eso sí lo asumía
+bien el prompt). Pero `cert_org_estatus` **también** está congelado:
+`socioPayload()` lo excluye igual que los 8 flags, y
+`fn_listar_padron_socios` lo devuelve directo de `PADRON_SOCIOS.cert_org_estatus`
+(ver `supabase/migrations/20260901161000_...sql` línea 60), no del valor
+en vivo de `SOCIO_CERTIFICACIONES.estado` (que sí existe y ya se lee en
+`lib/padronCsv.js::fetchSocioCertOrgEstatus`, usado por `exportSociosCsv`
+pero NO por el listado de `page.jsx`). Conclusión: la columna de listado
+solo muestra el valor correcto para un socio que nunca fue editado desde
+la migración de normalización (2026-08-25) — para cualquiera editado
+después, puede haber quedado desactualizada igual que los 8 flags del
+modal. **Mismo hallazgo aplica al propio `<input>` de `cert_org_estatus`
+dentro del modal** (`register('cert_org_estatus')`) — también lee el
+valor congelado de `socio.cert_org_estatus`, no el valor en vivo.
+**Ninguno de los dos (columna de listado, input del modal) está en el
+alcance pedido en este prompt** (Contrato de Datos limita el fix a
+`CERT_FLAG_FIELDS`, los 8 flags) — se documenta acá como hallazgo
+relacionado, no se toca, queda para que el arquitecto decida si amerita
+una ronda propia.
+
+**Bloqueo real encontrado al diseñar el fix (paso 3) — el prompt asumía
+mal el camino de lectura:** el prompt pidió reutilizar "el mismo patrón
+de consulta a `SOCIO_CERTIFICACIONES` que ya usa `exportSociosCsv`,
+filtrado por `id_socio`". Ese patrón filtra por el **uuid** `id` del
+socio (`SOCIO_CERTIFICACIONES.id_socio` es FK a `PADRON_SOCIOS.id`, no al
+código `ID_Socio`). Pero `fn_listar_padron_socios` (de donde sale el
+`row`/`editingSocio` que recibe el modal) **no devuelve `id`** — confirmado
+leyendo su `RETURNS TABLE` real en
+`supabase/migrations/20260901161000_fix_fecha_columns_fn_listar_padron_socios.sql:37-45`,
+no tiene columna `id`. Ninguna de las funciones `SECURITY DEFINER` de
+ADR-031 expone ese uuid al cliente (`fn_buscar_padron_socios`/
+`fn_padron_socios_existentes` tampoco). Esto NO requiere tocar RLS ni
+crear una función SQL nueva (ver instrucción del prompt de parar si eso
+hiciera falta) — **`lib/actions/sociosActions.js` ya corre con la
+Service Role Key, que bypasea RLS por sí sola**, igual que
+`updateSocio` ya hace `.select('id, ID_Socio')` contra `PADRON_SOCIOS`
+ahí mismo (línea ~421) sin necesitar ninguna función `SECURITY DEFINER`.
+Se resuelve con una función Server Action nueva y simple en ese mismo
+archivo (`resolveSocioCertFlags`), no con SQL nuevo — no hace falta
+pausar para revisión.
+
+## 2026-09-01o — Fix cert_org_estatus desactualizado (mismo defecto que [[2026-09-01n]], campo distinto) — Parte A implementada+testeada, Parte B diseñada y pendiente de revisión
+
+**Tarea:** mismo defecto que el fix de `CERT_FLAG_FIELDS` recién cerrado
+(entrada anterior), pero en `cert_org_estatus` ("Estatus de Certificación
+Orgánica") — tanto el `<input>` del modal como la columna "CERTIFICACIÓN"
+del listado de `/dashboard/socios` siguen leyendo
+`PADRON_SOCIOS.cert_org_estatus`, congelada desde ADR-027. El valor real
+vive en `SOCIO_CERTIFICACIONES.estado` (las 5 filas de
+`ORGANIC_CERT_CODES`).
+
+**Paso 1 — no reinventar la lógica de negocio:** revisado
+`fetchSocioCertOrgEstatus` (`lib/padronCsv.js:190-233`, ya usado por
+`exportSociosCsv`). Criterio real: de las filas orgánicas del socio con
+`estado` no nulo, si todas coinciden se usa ese valor; si divergen, se
+usa la más reciente por `actualizado_en` (con un `console.warn`
+informativo). **Observación que simplificó el diseño de la Parte B:**
+las 2 ramas producen el MISMO valor de retorno que "tomar directamente
+la más reciente por `actualizado_en`" — si todas coinciden, la más
+reciente es trivialmente ese mismo valor; la rama de divergencia en JS
+solo agrega el `console.warn`, no cambia qué valor se devuelve. Por eso
+en SQL alcanza con un único `ORDER BY actualizado_en DESC LIMIT 1`, sin
+necesitar 2 ramas — mismo resultado, sin reimplementar dos veces el
+mismo criterio de "consistente o más reciente".
+
+**Parte A (modal) — IMPLEMENTADA Y TESTEADA, sin SQL nuevo:**
+- `lib/actions/sociosActions.js::resolveSocioCertFlags` (la función de
+  [[2026-09-01n]]) se EXTENDIÓ (no una función hermana — el prompt pidió
+  explícitamente reutilizar el uuid ya resuelto ahí para no pagar un
+  segundo roundtrip de resolución) para además calcular
+  `cert_org_estatus` reusando `fetchSocioCertOrgEstatus` importado de
+  `lib/padronCsv.js` (`import { fetchSocioCertOrgEstatus } from
+  '@/lib/padronCsv'` — seguro de importar en un archivo `'use server'`:
+  `padronCsv.js` no tiene ningún uso de `document`/`Blob` a nivel de
+  módulo, solo dentro de `exportSociosCsv`/`exportParcelasCsv`, que
+  nunca se llaman acá). El objeto devuelto ahora trae los 8 flags + la
+  clave `cert_org_estatus` en el mismo `return`.
+- `components/features/socios/SocioFormModal.jsx`: **NO necesitó
+  cableado adicional** — el `useEffect` ya existente hace
+  `for (const [field, value] of Object.entries(flags)) setValue(field,
+  value)`, y como `flags` ahora incluye `cert_org_estatus`, el mismo
+  loop genérico ya lo cubre. Solo se actualizó el comentario para
+  explicar esto (evitar que un lector futuro busque un `setValue`
+  explícito que no existe ni hace falta).
+- `npm run build` + `node --test tests/*.mjs`: **692/692, 0 fallos, sin
+  tocar Supabase.**
+
+**Parte B (listado, `fn_listar_padron_socios`) — DISEÑADA, NO APLICADA,
+pendiente de tu revisión línea por línea:**
+`supabase/migrations/20260901180000_fix_cert_org_estatus_listado.sql`
+(`BEGIN`/`COMMIT`, `CREATE OR REPLACE FUNCTION` — el `RETURNS TABLE` no
+cambia de forma ni tipos, así que a diferencia del hotfix de fase 1 no
+hace falta `DROP`+`CREATE`). Reemplaza `s.cert_org_estatus` (columna
+congelada) por un `LEFT JOIN LATERAL` contra
+`SOCIO_CERTIFICACIONES`/`CERTIFICACIONES_CATALOGO` con el mismo criterio
+de arriba (`ORDER BY actualizado_en DESC LIMIT 1`, filtrado a los 5
+códigos orgánicos + `estado IS NOT NULL`), `COALESCE(..., '')` para el
+caso sin certificaciones orgánicas (mismo default que
+`fetchSocioCertOrgEstatus`, no `NULL`).
+
+**Decisión de alcance tomada y documentada (no silenciosa):** el prompt
+hablaba de "la función devuelva el `cert_org_estatus` real", enfocado en
+la columna de salida — pero la MISMA función también filtra por
+`p_cert_org_estatus` contra `s.cert_org_estatus` (el filtro "Estatus
+certificación" de la pantalla). Dejar el filtro comparando contra el
+valor viejo mientras la columna visible ya muestra el valor real habría
+dejado la función internamente inconsistente (buscar "Organico" podría
+no encontrar un socio cuya columna visible ya dice "Organico"). Se
+corrigieron los DOS usos con el mismo `LEFT JOIN LATERAL` (una sola vez,
+reusado tanto en el `SELECT` como en el `WHERE` — no duplicado como
+subquery repetida).
+
+**REVOKE/GRANT:** Postgres preserva privilegios en un `REPLACE` que no
+cambia la firma de retorno (comportamiento documentado), pero la
+migración igual REDECLARA `REVOKE`/`GRANT` explícito al final, sin
+asumirlo. Verificación empírica pedida: no hace falta un test nuevo — el
+test ya existente `EXECUTE de fn_listar_padron_socios está revocado
+para anon` (`tests/test_padron_read_functions_live.mjs`) prueba contra
+la función tal cual esté aplicada en cada corrida (no está gateado a
+esta migración en particular) y vuelve a correr solo, confirmando el
+`REVOKE`, en cuanto esto se aplique.
+
+**No se aplicó la migración en Supabase Studio ni se hizo commit de
+nada de esta entrada** — Parte A queda lista (implementada y testeada);
+Parte B queda para tu revisión línea por línea del SQL, mismo flujo que
+fase 1/1b.
+
+## 2026-09-01p — Ampliación de la migración pendiente (20260901180000): verificación de códigos + fix de los 8 flags de p_cert_flags/columnas
+
+**Hallazgo 1 — verificación de los 5 códigos hardcodeados (paso 1,
+ANTES de tocar el SQL):** consulta real de solo lectura vía REST/service
+role a `CERTIFICACIONES_CATALOGO` (`activo = true`):
+
+```
+COMERCIO_JUSTO, COR_CANADA, DS_0442006_AG, FAIR_TRADE_USA, LPO_MX,
+NOP_USDA, RAINFOREST, UE_2018_848
+```
+
+8 códigos activos reales. `ORGANIC_CERT_CODES` (`lib/validations/socios.js:192`)
+= `['NOP_USDA', 'UE_2018_848', 'COR_CANADA', 'DS_0442006_AG', 'LPO_MX']`
+— **sin discrepancia**: los 5 están, activos, y con el mismo string
+exacto que la migración ya tenía hardcodeado. **No hizo falta corregir
+los 5 códigos del `LEFT JOIN LATERAL` de `cert_org_estatus`.**
+
+**Hallazgo 2 (no pedido explícitamente en el paso 1, pero relevante para
+el paso 3) — contradicción con el estado documentado en `2026-09-01n`:**
+se pidió usar DNI 46837434 (`COOP-AROMAS-VALLE-001`, ABEL PEREZ DIAZ)
+como referencia de "todas en No" porque así se había documentado
+(`2026-09-01n`, basado en la premisa del prompt de esa tarea: "0 filas
+en SOCIO_CERTIFICACIONES para ese socio"). **La consulta real de HOY
+contradice eso**: ese mismo socio (uuid `5327b7bf-dd92-4a28-82ae-09a047c79680`)
+tiene HOY 8 filas reales en `SOCIO_CERTIFICACIONES` (las 5 orgánicas con
+`estado = 'E'`, las 3 no orgánicas con `estado = NULL` mismo criterio de
+`syncSocioCertificaciones`) — es decir, con el criterio de presencia
+correcto, sus 8 flags deberían mostrar 'Sí', no 'No'. Investigado sin
+asumir por qué: `SOCIO_CERTIFICACIONES` para `COOP-AROMAS-VALLE` tiene
+**4191 filas totales** hoy, con `actualizado_en` agrupado en una ventana
+de ~15 minutos (03:32:17–03:46:53 UTC, 2026-09-01) — un patrón de
+backfill/seed masivo de TODA la organización, no una edición manual
+puntual de 1 socio. `PADRON_SOCIOS.cert_nop_usda`/etc. (las columnas
+congeladas) siguen en `NULL` para este socio -- no fue de ahí de donde
+salió el backfill. No se investigó más a fondo el origen exacto (fuera
+del alcance de esta tarea, y no bloquea el fix) -- lo que importa: **la
+premisa "0 filas para DNI 46837434" ya no es cierta hoy**, sea porque
+cambió entre tareas o porque nunca se verificó con una consulta real en
+`2026-09-01n` (ahí se verificó la CAUSA en el código, correctamente,
+pero el dato "0 filas" se tomó del prompt sin una consulta live propia
+-- la lección: verificar SIEMPRE con una consulta real cuando el dato en
+sí es la premisa, no solo la causa en el código). Esto no invalida el
+fix de `2026-09-01n`/`2026-09-01o` (la lógica de `resolveSocioCertFlags`
+y de esta migración es correcta para CUALQUIER estado real de
+`SOCIO_CERTIFICACIONES`, sea cual sea) — solo invalida ese ejemplo
+puntual como caso "todo No".
+
+**Paso 3 — caso de prueba real positivo (solo lectura, sin escribir
+nada):** en vez de reusar el DNI 46837434 (ya no sirve como caso "todo
+No", y para no mezclar este hallazgo con el caso de prueba pedido), se
+usa un socio DISTINTO, verificado ahora mismo:
+
+- **`COOP-AROMAS-VALLE-002`, ABEL AGUILAR GUEVARA, DNI 44102527**
+  (uuid `05b4a6c4-9432-40ea-9c08-36a0ca0003e0`) — 6 filas en
+  `SOCIO_CERTIFICACIONES`: `NOP_USDA`, `UE_2018_848`, `COR_CANADA`,
+  `DS_0442006_AG`, `LPO_MX` (`estado = 'E'`), `COMERCIO_JUSTO`
+  (`estado = NULL`). **Faltan `RAINFOREST` y `FAIR_TRADE_USA`** (sin
+  fila = 'No' esperado para esos 2). `cert_org_estatus` esperado = `'E'`
+  (las 5 orgánicas coinciden). Caso de prueba limpio: 6 flags 'Sí', 2
+  flags 'No', `cert_org_estatus = 'E'`.
+- (Referencia adicional, mismo hallazgo de arriba) `COOP-AROMAS-VALLE-001`,
+  ABEL PEREZ DIAZ, DNI 46837434 -- hoy también tiene las 8 filas
+  presentes (8 'Sí' esperados, `cert_org_estatus = 'E'`) -- útil como
+  caso "todas Sí", ya no como caso "todas No".
+
+**Hallazgo 2 del prompt (paso 2) — mismo defecto en los 8 flags de
+`fn_listar_padron_socios` y en el filtro `p_cert_flags`:** confirmado
+igual que `cert_org_estatus` -- `s.cert_nop_usda`/etc. son las columnas
+congeladas de `PADRON_SOCIOS` (mismo `socioPayload()` que ya no las
+escribe), y el filtro `p_cert_flags` (botones "NOP USDA"/"UE 2018/848"/
+etc. de `/dashboard/socios`) compara contra esas mismas 8 columnas
+congeladas -- por eso el filtro por certificación da resultados
+desactualizados. Criterio correcto (igual que `resolveSocioCertFlags` en
+JS, Parte A): PRESENCIA -- existe una fila en `SOCIO_CERTIFICACIONES`
+para ese `id_socio` + código, sin importar `estado`.
+
+**Migración `20260901180000_fix_cert_org_estatus_listado.sql` reescrita
+(mismo archivo, sigue sin aplicar)** -- se agregó un segundo
+`LEFT JOIN LATERAL` (`owned`, `array_agg(cc.codigo)` de TODAS las filas
+de `SOCIO_CERTIFICACIONES` del socio, sin filtrar por `estado`) además
+del `LEFT JOIN LATERAL` ya existente (`cert_real`, sin cambios). Las 8
+columnas de salida pasan a `CASE WHEN 'CODIGO' = ANY(owned.codigos) THEN
+'Sí' ELSE 'No' END`, y el filtro `p_cert_flags` pasa a comparar contra
+`owned.codigos` (`'CODIGO' = ANY(owned.codigos)`) en vez de
+`s.cert_nop_usda = 'Sí'`. `RETURNS TABLE` sin cambios (mismas 27
+columnas/tipos) -- sigue siendo válido `CREATE OR REPLACE FUNCTION`,
+mismo `REVOKE`/`GRANT` redeclarado al final, sin cambios respecto a la
+versión anterior de este mismo archivo.
+
+**No se aplicó nada en Supabase. No se escribió nada en la base** (todas
+las consultas de este turno fueron `SELECT` de solo lectura vía REST con
+la Service Role Key). Migración lista para tu revisión línea por línea.
+
+## 2026-09-01q — Investigación de origen de las 4191 filas de SOCIO_CERTIFICACIONES (COOP-AROMAS-VALLE) — solo lectura, nada aplicado ni escrito
+
+**Paso 1 — ¿coincide con el backfill de `20260825222933_certificaciones_normalizadas.sql`?
+DESCARTADO con evidencia dura, no por deducción:** ese backfill hace
+`INSERT ... SELECT ... WHERE v.valor = 'Sí'`, leyendo el valor de
+`ps.cert_nop_usda`/etc. (las 8 columnas viejas de `PADRON_SOCIOS`) EN EL
+MOMENTO en que corre — si esas columnas están en `NULL`, el backfill no
+inserta nada para ese socio/certificación. Consulta real: `PADRON_SOCIOS`
+con `ID_Organizacion = 'COOP-AROMAS-VALLE' AND cert_nop_usda IS NOT NULL`
+→ **0 de 618 filas**. Las 8 columnas legacy están en `NULL` para el
+100% de los socios reales de esta organización HOY. Con la columna
+fuente en `NULL` en absolutamente todos los casos, ese backfill
+específico no puede haber producido las 4191 filas (produciría 0, no
+4191) -- descartado, no "no coincide pero es posible", sino
+estructuralmente imposible con los datos actuales.
+No se pudo revisar metadata de CUÁNDO se aplicó cada migración: la tabla
+de control (`supabase_migrations.schema_migrations`) no está expuesta
+vía REST (`PGRST106: "Invalid schema: supabase_migrations" -- Only the
+following schemas are exposed: public, graphql_public`) -- mismo límite
+ya documentado en `2026-08-25b` (sin conexión Postgres directa desde
+este entorno).
+
+**Paso 2 — `audit_logs`/`qc_validation_audit_log`:** ambas consultadas
+para `COOP-AROMAS-VALLE` y para la ventana 03:00–04:00 UTC de hoy
+(cualquier organización) -- **0 filas en ambas, en ambos filtros**. Pero
+esto no es una señal fuerte: las 2 tablas están estructuralmente
+acotadas a decisiones Aprobar/Rechazar y resultados de validación
+topológica sobre `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES`
+(`CHECK` constraints explícitos en su definición) -- nunca registran
+nada sobre `PADRON_SOCIOS`/`SOCIO_CERTIFICACIONES`, así que estructuralmente
+no podrían haber capturado esto ni aunque hubiera pasado por ahí.
+Coincide además con el hallazgo ya documentado en la entrada
+`2026-09-01` de hoy: `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES`/
+`INSPECCIONES` tienen 0 filas para `COOP-AROMAS-VALLE` -- no hay
+actividad de QC/GIS registrada para este org en absoluto, con o sin
+relación a este hallazgo.
+
+**Paso 3 — ¿algo de esta sesión escribió contra COOP-AROMAS-VALLE por
+error?** Revisadas las entradas de hoy con capacidad de escritura real
+(`2026-09-01`, `2026-09-01b`, `2026-09-01d`, `2026-09-01e`, `2026-09-01f`):
+- La PRIMERA entrada de todo el día (`2026-09-01`, "Script de limpieza
+  del padrón de COOP-AROMAS-VALLE") ya registra **4191 filas en
+  SOCIO_CERTIFICACIONES como conteo de solo lectura, ANTES de escribir
+  una sola línea de código en esta sesión** -- es decir, las 4191 filas
+  ya existían al momento en que este hilo de trabajo empezó a mirar
+  la base hoy. Esa tarea preparó un script de limpieza (DELETE) que
+  **nunca se aplicó** -- ninguna escritura real ocurrió ahí.
+- `2026-09-01b` (creación de `ORG-TEST-DEMO`): explícito, "`COOP-AROMAS-VALLE`
+  no fue tocada en ningún momento de esta tarea".
+- `2026-09-01d` (hueco de seguridad en `fn_crear_socio_con_certificaciones`):
+  solo diseño/revisión de SQL, "no se aplicó nada de forma autónoma en
+  esta tarea".
+- `2026-09-01e`: bloqueada antes de intentar ninguna carga real (ningún
+  INSERT/UPDATE ejecutado).
+- `2026-09-01f` (ronda de robustez, la que sí ejecutó cargas reales):
+  cada una de las 3 cargas + el propio test de la barrera de seguridad
+  del override verifican explícitamente "`COOP-AROMAS-VALLE` sin cambios
+  (618)" en cada checkpoint, y el mecanismo de override fue diseñado y
+  confirmado en vivo para RECHAZAR `COOP-AROMAS-VALLE` específicamente
+  (`ID=eq.COOP-AROMAS-VALLE & es_organizacion_prueba=eq.true -> []`).
+  Todas las escrituras reales de esa ronda (67 socios, 37 parcelas, ~48+
+  filas de certificaciones) fueron contra `ORG-TEST-DEMO`, verificadas
+  una por una contra la base.
+
+**Conclusión (paso 4, dicho directo):** ninguna acción de este hilo de
+trabajo escribió contra `COOP-AROMAS-VALLE` hoy -- las 4191 filas ya
+existían ANTES de que la primera tarea del día empezara a mirar la base
+(están documentadas como conteo de solo lectura desde el primer momento
+en que alguien -- yo, en esta sesión -- las consultó). El origen real
+(qué proceso las cargó, y cuándo exactamente antes de que este hilo
+empezara) **queda sin explicación desde acá**, no por falta de
+investigación sino por límite real de herramientas: sin conexión
+Postgres directa, sin acceso a `supabase_migrations.schema_migrations`,
+y sin ningún log de aplicación aplicable (los 2 audit logs disponibles
+no cubren este dominio). No hay evidencia de que sea una escritura NO
+explicada de ESTA sesión -- es un estado preexistente del entorno. Los
+valores de `estado` observados (`'E'`, `'T3'`) parecen abreviaturas
+reales de estatus de certificación orgánica (posible "En trámite",
+"Transición año 3"), no basura sintética obvia -- consistente con que
+`COOP-AROMAS-VALLE` es una organización real (no de prueba, ADR-030) y
+esto sea un backfill/carga real de certificaciones hecha por alguien con
+acceso directo a Supabase Studio o un script fuera de este repositorio,
+en algún momento antes de que este hilo de trabajo empezara hoy. Si el
+arquitecto quiere confirmar el origen exacto, necesitaría revisar
+directamente en Supabase Studio (Logs/Database → historial de
+queries, o el historial de migraciones aplicadas) -- fuera del alcance
+de lo que este entorno puede consultar.
+
+## 2026-09-01r — Corrección de un error propio: el "caso de prueba" de `2026-09-01p`/`2026-09-01q` para COOP-AROMAS-VALLE-002 estaba INCOMPLETO — el CSV tenía razón
+
+**Causa raíz del conflicto, confirmada con evidencia:** la consulta que
+generó el "caso de prueba" documentado en `2026-09-01p` NO estaba
+filtrada por `id_socio` -- era un `SELECT ... WHERE id_organizacion =
+'COOP-AROMAS-VALLE' LIMIT 20` genérico contra toda la organización
+(pensado solo para "encontrar algún socio con certificaciones"), y las
+filas de `COOP-AROMAS-VALLE-002` quedaron repartidas dentro de ese lote
+de 20 filas intercaladas con las de OTROS socios. Al leer manualmente
+cuáles de esas 20 filas pertenecían a este socio, se tomaron 6 sin notar
+que una 7ma fila (`FAIR_TRADE_USA`) quedaba fuera de lo que se llegó a
+inspeccionar en ese lote truncado -- no faltaba en la base, faltaba en
+mi lectura del resultado parcial. Lección: nunca inferir el conjunto
+completo de filas de UNA entidad a partir de una muestra genérica
+multi-entidad con `LIMIT` -- consultar esa entidad sola, sin límite.
+
+**Query real, esta vez sí filtrada por `id_socio` (uuid
+`05b4a6c4-9432-40ea-9c08-36a0ca0003e0`, `ID_Socio = 'COOP-AROMAS-VALLE-002'`),
+sin filtrar por código ni por estado, con JOIN a `CERTIFICACIONES_CATALOGO` --
+tabla completa real, 7 filas (no 6):**
+
+| id_certificacion | codigo | nombre | activo | estado | actualizado_en |
+|---|---|---|---|---|---|
+| 0c8023d8-... | NOP_USDA | NOP USDA | true | `E` | 2026-09-01T03:32:18.960401+00:00 |
+| b515fe6e-... | UE_2018_848 | UE 2018/848 | true | `E` | 2026-09-01T03:32:18.960401+00:00 |
+| 1202da49-... | COR_CANADA | COR Canadá | true | `E` | 2026-09-01T03:32:18.960401+00:00 |
+| d33001a0-... | DS_0442006_AG | DS 044-2006-AG | true | `E` | 2026-09-01T03:32:18.960401+00:00 |
+| 2d986ee2-... | LPO_MX | LPO México | true | `E` | 2026-09-01T03:32:18.960401+00:00 |
+| df0d80fe-... | COMERCIO_JUSTO | Comercio Justo | true | `NULL` | 2026-09-01T03:32:18.960401+00:00 |
+| 033b7c40-... | FAIR_TRADE_USA | Fair Trade USA | true | `NULL` | 2026-09-01T03:32:18.960401+00:00 |
+
+**No hay fila para `RAINFOREST`** -- ausencia real, no filtrada.
+
+**Veredicto:** la afirmación (a) -- el CSV `Padron_Socios_20260901.csv`
+-- es la CORRECTA. La (b) -- mi propio reporte anterior -- estaba mal,
+por el motivo de arriba (muestra truncada, no un problema de los datos
+ni de la lógica de la migración). El criterio de PRESENCIA que ya usa
+tanto `resolveSocioCertFlags` (JS, Parte A) como el `LEFT JOIN LATERAL
+owned` de la migración `20260901180000` (SQL, Parte B) es "existe una
+fila, sin importar `estado`" -- bajo ese criterio correcto,
+`COMERCIO_JUSTO` y `FAIR_TRADE_USA` son 'Sí' (ambos TIENEN fila, aunque
+con `estado = NULL`) -- exactamente lo que el CSV ya mostraba. **La
+lógica de la migración SQL y de `resolveSocioCertFlags` está bien tal
+como está escrita hoy -- no hay ningún bug de código que corregir.** El
+único error fue mi verificación manual del caso de prueba (comentario
+de la migración + entrada `2026-09-01p` de este archivo), no el
+comportamiento real del fix.
+
+**Benchmark CORRECTO y confirmado para COOP-AROMAS-VALLE-002 (DNI
+44102527, ABEL AGUILAR GUEVARA), para verificar la migración
+`20260901180000_fix_cert_org_estatus_listado.sql` después de aplicarla:**
+
+| Columna | Valor esperado |
+|---|---|
+| cert_nop_usda | Sí |
+| ue_2018_848 | Sí |
+| cor_canada | Sí |
+| cert_ds_0442006_ag | Sí |
+| cert_lpo_mx | Sí |
+| cert_rainforest | **No** |
+| cert_comercio_justo | Sí |
+| cert_fair_trade_usa | Sí |
+| cert_org_estatus | `E` |
+
+**Pendiente, NO corregido en esta tarea (de solo lectura, sin tocar
+código/migraciones por instrucción explícita):** el comentario dentro de
+`supabase/migrations/20260901180000_fix_cert_org_estatus_listado.sql`
+("Caso de prueba real verificado hoy...") todavía describe el benchmark
+INCORRECTO de `2026-09-01p` (6 flags 'Sí', Rainforest y Fair Trade USA en
+'No') -- ese comentario debe corregirse con la tabla de arriba antes de
+aplicar la migración, para que quien la revise no verifique contra un
+benchmark equivocado. Señalado acá explícitamente; no se tocó el archivo
+en este turno por instrucción directa del prompt ("no toques
+migraciones").
+
+## 2026-09-01s — `20260901180000_fix_cert_org_estatus_listado.sql` APLICADA en Supabase por el arquitecto — verificación en vivo CONFIRMADA, sin commitear todavía
+
+**Aplicada manualmente en Supabase Studio (fuera de esta sesión) por el
+arquitecto.** Esta tarea fue puramente de verificación en vivo contra la
+instancia real, ya con la migración corriendo -- no se aplicó ni se
+modificó nada de código/SQL en este turno.
+
+**Paso 1 -- suite live existente, sin modificar el archivo de test:**
+`node --test tests/test_padron_read_functions_live.mjs` → **12/12
+passed, 0 failed**, incluido "EXECUTE de fn_listar_padron_socios está
+revocado para anon" (sigue en verde -- confirma que el `REVOKE`/`GRANT`
+redeclarado en la migración nueva sigue vigente, no se perdió con el
+`CREATE OR REPLACE`).
+
+**Paso 2 -- llamada real a `fn_listar_padron_socios` (Service Role Key),
+`p_organizacion='COOP-AROMAS-VALLE'`, `p_search='COOP-AROMAS-VALLE-002'`
+-- comparado contra el benchmark de `2026-09-01r`, campo por campo:**
+
+| Campo | Esperado (2026-09-01r) | Real (hoy, post-aplicación) | ¿Coincide? |
+|---|---|---|---|
+| cert_nop_usda | Sí | Sí | ✅ |
+| ue_2018_848 | Sí | Sí | ✅ |
+| cor_canada | Sí | Sí | ✅ |
+| cert_ds_0442006_ag | Sí | Sí | ✅ |
+| cert_lpo_mx | Sí | Sí | ✅ |
+| cert_rainforest | No | No | ✅ |
+| cert_comercio_justo | Sí | Sí | ✅ |
+| cert_fair_trade_usa | Sí | Sí | ✅ |
+| cert_org_estatus | E | E | ✅ |
+
+**Coincidencia exacta, las 9 columnas.** El caso de prueba corregido en
+`2026-09-01r` (7 filas reales, no 6) queda confirmado en producción, no
+solo en la consulta de diagnóstico de esa entrada.
+
+**Paso 3 -- filtro `p_cert_flags` (el que antes comparaba contra las
+columnas congeladas):**
+- `p_cert_flags=['cert_rainforest']` + `p_search='COOP-AROMAS-VALLE-002'`
+  → `[]` (vacío) -- correcto, este socio NO tiene esa certificación
+  (`owned.codigos` real no incluye `RAINFOREST`).
+- `p_cert_flags=['cert_nop_usda']` + mismo `p_search` → devuelve la fila
+  completa de `COOP-AROMAS-VALLE-002` -- correcto, sí la tiene.
+
+Ambos confirman que el filtro ya compara contra `SOCIO_CERTIFICACIONES`
+en vivo (vía el `LEFT JOIN LATERAL owned`), no contra las columnas
+congeladas de `PADRON_SOCIOS` como antes de esta migración.
+
+**Paso 4 -- build y suite completa:**
+- `npm run build`: compila limpio, 10 rutas, sin errores.
+- `npm run dev`: arranca limpio ("Ready in 2.4s"), sin errores de
+  compilación -- verificado y detenido de inmediato (higiene de dev
+  server, `CLAUDE.md`).
+- `node --test tests/*.mjs`: **692/692 passed, 0 failed, 0 skipped.**
+
+**No se hizo commit en esta tarea** -- verificación pura, según lo
+pedido ("NO commitear todavía"). El fix de `cert_org_estatus`/los 8
+flags de `fn_listar_padron_socios` (`20260901180000`) queda confirmado
+en vivo y listo para commitear cuando el arquitecto lo indique, junto
+con el resto de archivos de esta ronda (`lib/actions/sociosActions.js`,
+`components/features/socios/SocioFormModal.jsx`,
+`supabase/migrations/20260901180000_fix_cert_org_estatus_listado.sql`,
+`supabase/migrations/rollback/20260901180000_ROLLBACK.sql`).
