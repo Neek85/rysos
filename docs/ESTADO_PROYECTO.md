@@ -196,6 +196,43 @@
   real de PII es un mecanismo aparte), pero queda pendiente decidir si
   se implementa el HMAC+salt real o se corrige la documentación.
 
+- **(2026-09-02) Primer deploy real a producción — `staging` promovida a
+  `main`:** hasta hoy `main` estaba congelada desde 2026-08-21 (2 commits
+  `"Add files via upload"`, un bootstrap manual vía la interfaz web de
+  GitHub, nunca tocado desde entonces) mientras prácticamente todo el
+  desarrollo real del proyecto — ~90 commits, incluida esta sesión
+  entera — vivía solo en `staging`. Un `git merge staging --ff-only`
+  falló como se esperaba (`main` tenía 2 commits que `staging` no tenía,
+  divergencia real, no un simple "staging va adelante"); el merge
+  real (`3a439a9`) resultó en exactamente 2 conflictos `add/add` —
+  `docs/ESTADO_PROYECTO.md` (este archivo) y
+  [RYZOS_ORQUESTADOR_V3.1.md](RYZOS_ORQUESTADOR_V3.1.md) — porque
+  ambos archivos habían sido creados de forma independiente y sin
+  relación en las 2 ramas: el bootstrap de `main` subió versiones
+  mínimas del 2026-08-21 (37 y 146 líneas), mientras `staging` los creó
+  por su cuenta en un commit distinto (`8f29eb0`) y los mantuvo
+  activamente durante toda la vida real del proyecto (este archivo,
+  ahora; `RYZOS_ORQUESTADOR_V3.1.md` en V3.2, con el protocolo multi-IA
+  de la Sección 4.1). **Resuelto a favor del contenido de `staging`
+  completo en los 2 archivos**, decisión del arquitecto — el bootstrap
+  de `main` quedó descartado por ser anterior a prácticamente todo el
+  trabajo documentado acá (alta de `COOP-AROMAS-VALLE`, importador
+  masivo, el incidente de seguridad fase 1/1b, el fix de
+  certificaciones, este mismo gate). Los otros 2 archivos exclusivos de
+  `main` (`consola_qc_layout_y_validacion.md`/`_plan.md`, sin conflicto,
+  sin relación en `staging`) se conservaron tal cual. Verificado
+  post-merge: `npm run build` y `npm run lint` limpios sobre el
+  resultado ya mergeado (mismos 8 warnings preexistentes, 0 errores,
+  `ƒ Middleware` presente), antes de pushear.
+  `main` queda promovida con todo el trabajo de `staging`: el gate
+  temporal de contraseña compartida (entrada de arriba), el protocolo
+  de colaboración multi-IA (Claude + Gemini), el incidente de seguridad
+  fase 1/1b cerrado ([ADR-031](adr/ADR-031-lecturas-padron-security-definer.md)),
+  el fix de certificaciones desactualizadas, `npm run lint` habilitado,
+  y el resto del historial real del proyecto. `staging` sigue siendo la
+  rama de trabajo activa — no se borró, no cambia el flujo de acá en
+  adelante.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
