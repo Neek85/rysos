@@ -196,6 +196,40 @@
   real de PII es un mecanismo aparte), pero queda pendiente decidir si
   se implementa el HMAC+salt real o se corrige la documentación.
 
+- **(2026-09-02) Login real por organización y rol — Fase A (capa de
+  identidad), diseñada y lista para revisión, NO aplicada todavía:**
+  primer paso de `specs/login_real_organizacion_rol.md` — un proyecto
+  que además fusiona la Fase 2 (pausada) del incidente de seguridad de
+  `PADRON_SOCIOS`/`PADRON_PARCELAS`: cerrar RLS real de
+  `INSPECCIONES`/6 `CAP_*` estaba bloqueado exactamente por no existir
+  sesión `authenticated` real, así que este proyecto la desbloquea.
+  Migración nueva (`20260902213506_login_fase_a_identidad.sql`): tabla
+  `PERFILES_USUARIO_INTERNOS` (vincula `auth.users` con organización +
+  rol `admin`/`tecnico_campo`/`auditor_qc`, sin escritura para
+  `authenticated` — el aprovisionamiento de cuentas es Fase D, server-side
+  con Service Role Key), función nueva `auth_role()` y `auth_org_id()`
+  redefinida (mismo nombre/firma) para resolver la organización desde el
+  perfil en vez de un claim JWT que nunca se puebla. **Inerte en
+  comportamiento hoy** — nadie tiene sesión real todavía, confirmado por
+  diseño y verificado en vivo (`auth_org_id()` sigue devolviendo `null`).
+  5 tests nuevos de aislamiento (`tests/test_login_fase_a_identidad_live.mjs`)
+  con usuarios reales de prueba creados/borrados vía la Admin API de
+  Supabase Auth (capacidad confirmada en vivo antes de escribir el
+  test) — se saltan hasta que se aplique la migración, mismo patrón que
+  el resto de tests Live de esta sesión. `npm run build`/`npm run lint`
+  limpios (0 cambios en `app/`/`components/`/`lib/actions/`,
+  `middleware.js` sin tocar). Esta tarea se hizo con Claude desde el
+  principio — el gate de segunda revisión del protocolo multi-IA
+  ([RYZOS_ORQUESTADOR_V3.1.md](RYZOS_ORQUESTADOR_V3.1.md) §4.1) ya queda
+  cubierto en este mismo flujo, no requiere una revisión aparte.
+  **Hallazgo colateral, no causado por esta tarea:** al correr la suite
+  completa se encontraron 5 tests preexistentes fallando por un cambio
+  de fin de línea (`LF` → `CRLF`) en sus archivos objetivo, efecto
+  colateral de `core.autocrlf=true` al cambiar de rama en la tarea
+  anterior — el código real de esos 5 archivos está intacto, sin
+  relación con este cambio; ver `AI_STATE.md` para el detalle completo,
+  no se tocó nada de eso acá.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

@@ -559,8 +559,9 @@ Vista original de Fase 1 (schema más viejo, columnas `parcela_codigo`/
 
 | Función | Retorno | Uso |
 |---|---|---|
-| `public.auth_org_id()` | `text` | Extrae `ID_Organizacion` del claim JWT (`request.jwt.claims`). Autoritativa desde Tarea 9.1. |
+| `public.auth_org_id()` | `text` | Extrae `ID_Organizacion` del claim JWT (`request.jwt.claims`). Autoritativa desde Tarea 9.1. **Redefinición pendiente (2026-09-02, Fase A del login real, `20260902213506_login_fase_a_identidad.sql`, NO aplicada todavía):** mismo nombre/firma, pasa a `SECURITY DEFINER` + `SET search_path = public`, resuelve `ID_Organizacion` desde `PERFILES_USUARIO_INTERNOS` (nueva) vía `auth.uid()` como fuente primaria, con el claim JWT legacy como fallback. **Inerte en comportamiento hoy** — sin perfiles ni sesiones `authenticated` reales, sigue devolviendo `NULL` igual que la versión actual (confirmado en vivo: `anon` la llama y devuelve `null`). Ver `specs/login_real_organizacion_rol.md`. |
 | `public.get_my_org_id()` | `text` | Alias delgado sobre `auth_org_id()` — preservado por compatibilidad con `trg_set_id_organizacion()`. |
+| `public.auth_role()` | `text` | **Nueva, pendiente de aplicación (2026-09-02, Fase A del login real, misma migración de arriba).** `SECURITY DEFINER`, lee `rol` de `PERFILES_USUARIO_INTERNOS` para `auth.uid()`. Devuelve `NULL` para cualquier sesión sin perfil activo (incluida `anon`) — nunca lanza error. Inerte en comportamiento hoy — ningún código de la app la llama todavía, la tabla que consulta está vacía. |
 | `public.trg_set_id_organizacion()` | `trigger` | Auto-inyecta `ID_Organizacion` en INSERT si viene nulo/vacío. |
 | `public.fn_sanitize_geometry(geometry)` | `geometry` | **Nuevo (2026-08-18).** SRID 4326 + `ST_MakeValid` + `ST_SnapToGrid` a 6 decimales. |
 | `public.fn_calcular_area_ha(geometry)` | `numeric` | **Nuevo (2026-08-18).** Área geodésica en hectáreas; `NULL` para geometrías no poligonales. |
@@ -594,6 +595,25 @@ encontrada") — ver `tests/test_padron_read_functions_live.mjs`.
 
 ## Tablas nuevas fuera del núcleo EUDR/Padrón
 
+- **`public."PERFILES_USUARIO_INTERNOS"`** (2026-09-02, Fase A del login
+  real por organización y rol, `20260902213506_login_fase_a_identidad.sql`,
+  **NO aplicada todavía** — pendiente de revisión, ver
+  `specs/login_real_organizacion_rol.md`/
+  `plans/login_real_organizacion_rol_fase_a_ejecucion.md`): vincula
+  `auth.users.id` (`user_id`, PK/FK, `ON DELETE CASCADE`) con
+  `"ID_Organizacion"` (FK a `ORGANIZACIONES."ID"`) y `rol text CHECK IN
+  ('admin','tecnico_campo','auditor_qc')`, más `nombre_completo`,
+  `activo boolean DEFAULT true`, `creado_en`/`actualizado_en timestamptz`.
+  Sin política de escritura para `authenticated` — el aprovisionamiento
+  de cuentas (Fase D) es exclusivamente vía Service Role Key desde un
+  script server-side; ninguna cuenta interna puede auto-asignarse un rol
+  ni cambiar su propia organización. RLS: 2 políticas de `SELECT`
+  (`rls_select_propio_perfil` — cada usuario ve su propia fila;
+  `rls_select_perfiles_admin_misma_org` — un `admin` ve las filas de su
+  propia organización, vía `auth_role()`/`auth_org_id()`). Índice sobre
+  `"ID_Organizacion"` (sin columna `geometry`, no aplica GiST).
+  **Inerte en comportamiento hoy** — tabla nace vacía, sin ningún
+  usuario `authenticated` real que ejercite sus políticas.
 - **`public.qc_validation_audit_log`** (2026-08-20): auditoría de
   `fn_validar_topologia_eudr` — `tabla_origen`, `registro_id`,
   `"ID_Organizacion"` (código, no PII), `resultado jsonb`, `created_at`.

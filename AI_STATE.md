@@ -2315,3 +2315,114 @@ el turno anterior:**
 Production y Preview de Vercel**; sin ella el gate bloquea todo
 `/dashboard/**` con 401 permanente (fail-closed, comportamiento
 esperado, no un bug). Sin cambios de schema SQL en esta tarea.
+
+## 2026-09-02c — Login real por organización y rol, Fase A (capa de identidad) — diseñada, no aplicada + hallazgo colateral real (CRLF rompe 5 tests preexistentes, sin relación con esta tarea)
+
+**Paso 1 — verificación previa contra la instancia real (antes de
+escribir nada), sin conexión Postgres directa (mismo límite de
+siempre) -- vía REST:**
+- `auth_org_id()` existe, callable por `anon`, devuelve `null` hoy.
+  Definición SQL confirmada cruzando
+  `supabase/migrations/20260816_fase3_seguridad_rls.sql` (única
+  migración del repo que la define, sin redefinición posterior) contra
+  el texto exacto del prompt -- coincide carácter por carácter
+  (`LANGUAGE sql STABLE`, sin `SECURITY DEFINER`, mismo `SELECT`).
+- `public.auth_role()` NO existe (`PGRST202`).
+- `public."PERFILES_USUARIO_INTERNOS"` NO existe (`PGRST205`).
+- `public."ORGANIZACIONES"."ID"` confirmado real (`COOP-AROMAS-VALLE`,
+  `ORG-TEST-DEMO`).
+Ningún hallazgo obligó a detenerse -- el contexto que asumía el prompt
+seguía vigente.
+
+**Entregado (todo sin aplicar/commitear hasta este punto, revisión
+pendiente):**
+- `specs/login_real_organizacion_rol.md` (contenido exacto pedido, sin
+  parafrasear).
+- `plans/login_real_organizacion_rol_fase_a_ejecucion.md` -- incluye una
+  corrección propia sobre un borrador anterior del mismo plan: el caso
+  de aislamiento cross-org exige por definición un perfil real en
+  `COOP-AROMAS-VALLE` (no alcanza con 2 usuarios de la misma org) -- se
+  corrigió antes de escribir el test, no después.
+- `supabase/migrations/20260902213506_login_fase_a_identidad.sql` --
+  mismo diseño exacto del prompt (tabla + 2 políticas de `SELECT` +
+  `auth_role()` nueva + `auth_org_id()` redefinida, ambas
+  `SECURITY DEFINER` con `REVOKE`/`GRANT` explícito). Advertencia de
+  compatibilidad verificada como pedía el prompt: `auth_org_id()` hoy no
+  tiene ningún `GRANT`/`REVOKE` documentado (default de Postgres,
+  `EXECUTE` a `PUBLIC` -- confirmado en vivo, `anon` la llama sin
+  `42501`) -- pasar a `REVOKE ALL FROM PUBLIC` + `GRANT` explícito a
+  `authenticated, anon, service_role` preserva el acceso de esos 3 roles
+  y es un endurecimiento estricto, ningún consumidor actual pierde
+  acceso.
+
+**Capacidad de crear/loguear/borrar usuarios reales de `auth.users`
+confirmada en vivo ANTES de escribir el test (paso 5 del prompt exigía
+esto o detenerse a reportar el gap -- no hizo falta):** Admin API de
+Supabase Auth con la Service Role Key -- `POST /auth/v1/admin/users`
+(crear, HTTP 200), `POST /auth/v1/token?grant_type=password` (login
+real, devuelve un `access_token` de sesión `authenticated` genuina --
+lo que permite probar RLS de verdad, no simulado), `DELETE
+/auth/v1/admin/users/{id}` (borrar, HTTP 200). Probado con 1 usuario
+desechable, creado y borrado en el acto, sin residuo.
+
+**`tests/test_login_fase_a_identidad_live.mjs` (5 tests, mismo patrón
+de `tests/test_padron_read_functions_live.mjs` -- gateado por
+`HAS_CREDENTIALS` + probe propio contra `auth_role`, se salta con
+`PGRST202` hasta que se aplique la migración):**
+1. Aislamiento cross-org (perfil real en `COOP-AROMAS-VALLE`, admin de
+   `ORG-TEST-DEMO` no puede leerlo).
+2. Aislamiento por rol: `tecnico_campo` no puede leer el perfil de otro
+   usuario de su misma organización.
+3. Confirmación positiva (no pedida explícitamente, agregada para no
+   dejar solo la prueba negativa): un `admin` SÍ puede leer el perfil de
+   otro usuario de su misma organización -- sin esto, una política rota
+   que bloqueara a TODOS (incluido admin) pasaría la prueba negativa
+   igual, dando una falsa sensación de seguridad.
+4. `auth_org_id()`/`auth_role()` degradan a `NULL` (no error) para
+   sesión `anon`.
+5. Mismo degrade a `NULL` para una sesión `authenticated` REAL pero sin
+   fila de perfil (caso distinto de `anon`, pedido explícito del
+   prompt: "para una sesión anon/sin perfil").
+
+Corridos ahora mismo: **5/5 se saltan limpio**, sin error, con el
+mensaje esperado (migración no aplicada) -- confirma que el archivo en
+sí no tiene bugs de sintaxis/setup, solo falta que se aplique la
+migración para correr de verdad.
+
+**Hallazgo colateral real, NO causado por esta tarea -- 5 tests
+preexistentes fallando por un problema de fin de línea, no de código:**
+al correr `node --test tests/*.mjs` completo aparecieron 5 fallos
+nuevos respecto del último "692/692" confirmado (`run_e2e_etl_test.py`,
+`test_e2e_teardown.py` x2, la migración `20260821_225310_fk_id_organizacion_eudr.sql`,
+y `ParcelaFormModal.jsx`). Investigado antes de descartarlo como "no es
+mío": ninguno de los 5 archivos fue tocado por esta tarea
+(`git diff HEAD` vacío para los 5). Causa raíz real, confirmada con
+evidencia (no supuesta): `core.autocrlf = true` (config de git de este
+entorno, no algo que yo haya cambiado) reescribió esos archivos de `LF`
+a `CRLF` en el working tree durante los checkouts `main`↔`staging` de
+la tarea anterior (promoción a producción) -- confirmado contando bytes
+con Node (`ParcelaFormModal.jsx`: 328 `CRLF`, 0 `LF` suelto). `git diff
+HEAD` no muestra nada porque `autocrlf` normaliza `CRLF`↔`LF`
+internamente al comparar -- para git, el archivo está intacto. El
+código real está intacto y correcto (confirmado: `.from('PRODUCTOS')`
+con los filtros correctos sigue en el archivo, verificado con una
+búsqueda consciente de `\r\n`). Lo que rompe es que estos 5 tests
+específicos (a diferencia de la inmensa mayoría de la suite) usan
+`indexOf` con un literal que incluye `\n` crudo -- un patrón frágil que
+ya existía, no introducido acá, que nunca se había topado con un
+archivo `CRLF` hasta este checkout. **No se tocó ninguno de los 5
+archivos ni el test** -- fuera de alcance de esta tarea (`"no toques
+código previo"`, instrucción explícita del prompt), y arreglarlo de
+paso sería scope creep sobre una tarea de esquema. Queda como hallazgo
+para una tarea aparte (opciones: normalizar esos 5 archivos de vuelta a
+`LF`, o hacer los 5 tests indiferentes a `\r`).
+
+**Verificado:** `npm run build` limpio (mismos 8 warnings preexistentes,
+`ƒ Middleware` presente, 0 errores). `npm run lint` exit code 0, sin
+hallazgos nuevos. Ningún archivo de `app/`/`components/`/`lib/actions/`
+tocado, `middleware.js` sin tocar -- confirmado con `git diff HEAD`
+antes de reportar.
+
+**No se aplicó nada en Supabase. No se hizo commit todavía en el
+momento de escribir esta entrada** -- migración + specs + plan + tests
+listos para revisión, mismo flujo del resto de la sesión.
