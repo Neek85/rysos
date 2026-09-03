@@ -3081,3 +3081,57 @@ llama, con una sesión real, en el mismo orden.
 
 **No hubo fallos que documentar** -- ambos intentos (creación y edición)
 funcionaron al primer intento.
+
+## 2026-09-03j — ADR-034 aplicado en vivo (Task 10): limpieza de 13 políticas RLS huérfanas en EUDR/PADRON + creación de las 4 políticas oficiales que faltaban en PADRON_SOCIOS/PADRON_PARCELAS
+
+**Aplicación:** `supabase db query --linked -f
+supabase/migrations/20260903180720_limpieza_drift_rls_eudr_padron.sql`
+-- sin errores, al primer intento.
+
+**Verificación estructural (`pg_policies`, las 5 tablas, literal
+completo):**
+```
+EUDR_INSTALACIONES | rls_select_eudr_instalaciones   | SELECT | {authenticated}
+EUDR_INSTALACIONES | rls_write_eudr_instalaciones    | ALL    | {authenticated}
+EUDR_MONITOREO     | rls_select_eudr_monitoreo       | SELECT | {authenticated}
+EUDR_MONITOREO     | rls_write_eudr_monitoreo        | ALL    | {authenticated}
+EUDR_USO_SUELO     | rls_select_eudr_uso_suelo       | SELECT | {authenticated}
+EUDR_USO_SUELO     | rls_write_eudr_uso_suelo        | ALL    | {authenticated}
+PADRON_PARCELAS    | rls_anon_select_padron_parcelas | SELECT | {anon}
+PADRON_PARCELAS    | rls_select_padron_parcelas      | SELECT | {authenticated}
+PADRON_PARCELAS    | rls_write_padron_parcelas       | ALL    | {authenticated}
+PADRON_SOCIOS      | rls_anon_select_padron_socios   | SELECT | {anon}
+PADRON_SOCIOS      | rls_select_padron_socios        | SELECT | {authenticated}
+PADRON_SOCIOS      | rls_write_padron_socios         | ALL    | {authenticated}
+```
+Exactamente **12 políticas** -- coincide con lo esperado del ADR (2×3
+tablas EUDR + 3×2 tablas PADRON). Las 13 huérfanas ya no aparecen; las 4
+`rls_select_padron_*`/`rls_write_padron_*` nuevas sí; `rls_anon_select_*`
+(ADR-031) intacta, sin tocar.
+
+**Verificación funcional real, con sesión `authenticated` real (mismo
+mecanismo de magic link de ADR-033/Task 16 -- sin exponer credenciales,
+sin tocar la contraseña de la cuenta demo):** `SELECT` contra
+`PADRON_SOCIOS` (`id,ID_Socio,ID_Organizacion`) → `206 Partial Content`,
+`Content-Range: 0-2/67` -- 67 filas totales visibles, todas con
+`ID_Organizacion: "ORG-TEST-DEMO"`. `SELECT` contra `PADRON_PARCELAS` →
+`206`, `Content-Range: 0-2/37` -- 37 filas, mismo patrón. Ambos números
+(67/37) coinciden exactamente con los conteos de `ORG-TEST-DEMO`
+documentados en ADR-031 (67 de 685 en `PADRON_SOCIOS`, 37 de 858 en
+`PADRON_PARCELAS`) -- confirma que el reemplazo de las políticas
+huérfanas por las oficiales no cambió el comportamiento observable para
+un usuario legítimo: mismo alcance de filas, sin fuga cross-org, sin
+error. **No se probó escritura real ni se creó/borró ninguna fila de
+Padrón** -- por pedido explícito del arquitecto (no arriesgar datos de
+Padrón sin necesidad), el `SELECT` alcanzó para confirmar el objetivo de
+esta verificación.
+
+**Único inconveniente, no relacionado con la migración:** el primer
+intento de `SELECT` falló con `42703 column PADRON_SOCIOS.ID does not
+exist` -- error propio (supuse un nombre de columna sin confirmarlo).
+Corregido consultando `information_schema.columns` primero (PK real es
+`id`, minúscula, surrogate -- ADR-026), reintentado con éxito. No fue
+un fallo de RLS ni de la migración.
+
+**No hizo falta `npm run build`** -- confirmado en el ADR que esta
+migración no toca ningún archivo de `app/`/`lib/`/`components/`.

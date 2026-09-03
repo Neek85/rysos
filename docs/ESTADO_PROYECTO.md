@@ -420,6 +420,30 @@
   `plans/fix_resolucion_organizacion_inspecciones_ejecucion.md` y
   `AI_STATE.md` (`2026-09-03i`) para el detalle completo.
 
+- **(2026-09-03) Task 10 — ADR-034 aplicado en vivo: limpieza de drift
+  RLS en las 5 tablas EUDR/PADRON (`EUDR_MONITOREO`,
+  `EUDR_INSTALACIONES`, `EUDR_USO_SUELO`, `PADRON_SOCIOS`,
+  `PADRON_PARCELAS`), cierra el pendiente que ADR-032 había dejado
+  fuera de alcance:** de las 21 políticas activas encontradas en el
+  reconocimiento previo, **13 eran huérfanas** (nunca creadas por
+  ninguna migración, o creadas por una migración que un `DROP` posterior
+  intentó eliminar sin éxito en producción — mismo patrón que ADR-032).
+  **Hallazgo más serio en el camino:** `PADRON_SOCIOS`/`PADRON_PARCELAS`
+  **nunca tuvieron** las políticas oficiales `rls_select_*`/`rls_write_*`
+  vivas, pese a que una migración de agosto sí las creaba — todo el
+  acceso `authenticated` real corría por políticas huérfanas, no
+  documentadas. La migración crea primero las 4 políticas oficiales
+  faltantes y recién después borra las 13 huérfanas, para no dejar sin
+  acceso real a `authenticated` en el medio. **Verificado en vivo:**
+  `pg_policies` después de aplicar muestra exactamente 12 políticas (las
+  13 huérfanas ya no están, las 4 nuevas sí, `rls_anon_select_*` de
+  ADR-031 intacta); con una sesión real (`ORG-TEST-DEMO`), `SELECT`
+  contra ambas tablas Padrón sigue funcionando igual que antes — 67
+  filas de socios, 37 de parcelas, mismos conteos que documenta ADR-031,
+  sin fuga cross-org. No se tocó código de la app (la migración es RLS
+  puro). Ver [ADR-034](adr/ADR-034-limpieza-drift-rls-eudr-padron.md) y
+  `AI_STATE.md` (`2026-09-03j`) para el detalle completo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
