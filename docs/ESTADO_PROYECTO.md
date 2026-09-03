@@ -393,6 +393,33 @@
   vacía. Ver [ADR-033](adr/ADR-033-fase-c-paso2-rls-real-inspecciones-cap.md)
   y `AI_STATE.md` (`2026-09-03h`) para el detalle completo.
 
+- **(2026-09-03) Task 16 — fix de resolución de organización activa en
+  Inspecciones (cierra el pendiente de ADR-033):**
+  `useInspeccionForm.js` derivaba `organizationId` mirando filas ya
+  cargadas de `INSPECCIONES` (`resolveOrganizationId(rows)`) — con la
+  tabla vacía eso siempre daba `null` y bloqueaba la creación/edición
+  real antes de cualquier llamada de red, sin relación con RLS. Ahora
+  `organizationId` se resuelve con `supabase.rpc('auth_org_id')` al
+  cargar el formulario — la misma función que las políticas RLS de
+  ADR-033 usan como autoridad, un solo origen de verdad entre lo que el
+  cliente cree y lo que el servidor exige. Si `auth_org_id()` devuelve
+  `null` (perfil inactivo/inconsistente), el formulario corta temprano
+  con un mensaje específico en vez de cargar y fallar después.
+  **Hallazgo de esta tarea:** confirmado, línea por línea contra el
+  cuerpo real de `fn_guardar_inspeccion_completa`, que esa función NO
+  valida `p_organizacion` contra la sesión — es `SECURITY INVOKER` y
+  solo compara sus 2 parámetros entre sí; la autoridad real es el RLS de
+  ADR-033. El docstring de `saveInspeccion()` (que afirmaba lo
+  contrario) se corrigió para reflejarlo — sin tocar la lógica.
+  `fn_guardar_inspeccion_completa` no se tocó, a propósito. **Verificado
+  en vivo:** con una sesión real (magic link), `auth_org_id` devolvió
+  `ORG-TEST-DEMO`, y con ese valor la creación y edición de una
+  inspección de prueba funcionaron de punta a punta — fila limpiada al
+  terminar. `npm run build` limpio. Ver
+  `specs/fix_resolucion_organizacion_inspecciones.md`,
+  `plans/fix_resolucion_organizacion_inspecciones_ejecucion.md` y
+  `AI_STATE.md` (`2026-09-03i`) para el detalle completo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

@@ -2999,3 +2999,85 @@ cargadas en vez de la sesión real (ver ADR-033, sección "Hallazgo
 colateral") -- el flujo de creación real desde el navegador sigue roto
 por esa razón, independiente de RLS, mientras `INSPECCIONES` esté vacía.
 No resuelto en esta tarea, a propósito.
+
+## 2026-09-03i — Task 16: fix de resolución de organización activa en Inspecciones — organizationId ahora viene de la sesión real, no de filas cargadas
+
+**Contexto:** cierre del "Hallazgo colateral" de ADR-033
+(`2026-09-03h`). Ver `specs/fix_resolucion_organizacion_inspecciones.md`
+y `plans/fix_resolucion_organizacion_inspecciones_ejecucion.md` para el
+diseño completo.
+
+**Hallazgo central de esta tarea, ya adelantado en el reconocimiento
+previo (confirmado literal, línea por línea, contra el cuerpo real de
+`fn_guardar_inspeccion_completa`):** el modelo de seguridad real para
+las escrituras vía esta RPC es el RLS de `INSPECCIONES`/`CAP_*`
+(ADR-033, `WITH CHECK "ID_Organizacion" = auth_org_id()`), **no** una
+verificación interna de la función. La función es `SECURITY INVOKER`
+(sin cláusula explícita -- default de Postgres) y solo compara sus
+propios 2 parámetros (`p_organizacion`/`p_existing_organizacion`) entre
+sí -- ninguno se deriva de `auth.uid()`/`auth_org_id()` dentro de la
+función. El docstring de `saveInspeccion()` afirmaba lo contrario
+("la función RPC repite la misma verificación del lado del servidor
+como autoridad real") -- corregido en el código, no solo documentado
+acá (ver más abajo).
+
+**Fix aplicado:**
+- `components/features/inspecciones/useInspeccionForm.js`: eliminados
+  el import y uso de `fetchInspecciones`/`resolveOrganizationId`.
+  `organizationId` ahora se resuelve con `supabase.rpc('auth_org_id')`
+  al inicio de `load()` -- la misma función que las políticas RLS de
+  ADR-033 usan como autoridad, un solo origen de verdad entre lo que el
+  cliente cree y lo que el servidor exige. 3 casos manejados: `error` →
+  mismo `loadError` genérico que ya existía; `orgId` null/falsy → nuevo
+  `loadError` específico ("No se pudo verificar tu organización activa.
+  Verificá que tu perfil esté activo o contactá al administrador.") y
+  `return` temprano, sin llamar `fetchInspeccionDetalle` (sin
+  organización resuelta no hay ningún guardado válido posible, mejor
+  cortar temprano que cargar un formulario que va a fallar al guardar);
+  `orgId` válido → `setOrganizationId(orgId)` y continúa igual que
+  antes, incluida la rama `isEdit`. Comentario `// INVARIANTE:` arriba
+  del hook reescrito para describir el diseño nuevo (dos señales
+  independientes por *origen* -- sesión vs. registro -- no por dos
+  consultas sobre la misma tabla como antes). `existingOrganizationId`
+  no cambió -- sigue viniendo solo de `fetchInspeccionDetalle()`, en
+  modo edición.
+- `lib/inspeccionesActions.js`: solo el docstring de `saveInspeccion()`
+  reescrito con las 2 correcciones del spec (autoridad real = RLS de
+  ADR-033, no la función; y `existingOrganizationId` en creación
+  simplemente queda `null`, la comparación está gateada por `id` y
+  nunca corre en ese modo) -- **cero cambios de lógica**, mismo cuerpo,
+  mismos parámetros, mismo `supabase.rpc(...)`.
+- `fn_guardar_inspeccion_completa` **no se tocó** -- fuera de alcance a
+  propósito (ver spec, sección "Fuera de alcance"). Si en el futuro se
+  decide agregarle una verificación interna contra `auth_org_id()` como
+  defensa en profundidad, es una tarea aparte con su propio ADR.
+
+**`npm run build`:** limpio -- mismos 3 warnings preexistentes de
+ESLint, 0 errores, mismas 19 rutas. Sin warnings nuevos de imports sin
+usar (confirmando que `fetchInspecciones`/`resolveOrganizationId` no
+tenían ningún otro uso en este archivo, como decía el spec).
+
+**Verificación funcional real, con sesión `authenticated` real (mismo
+mecanismo de magic link vía Admin API + `/auth/v1/verify` que ADR-033,
+sin resetear contraseña ni exponer el `access_token` completo):**
+1. `POST .../rpc/auth_org_id` con la sesión real → `200 "ORG-TEST-DEMO"`
+   (no-null) -- exactamente lo que el código nuevo necesita para no
+   entrar en la rama de error.
+2. **Creación** con `p_organizacion: "ORG-TEST-DEMO"` (el mismo valor
+   que `auth_org_id()` acaba de devolver, replicando el flujo real del
+   hook) → `200 {"id":"46323dc9-...", "created":true}`.
+3. **Edición** de esa misma fila → `200 {"created":false}`; confirmado
+   con lectura aparte que `Inspector`/`Estado` reflejan el segundo
+   payload (`"Test Claude - editado Task 16"`/`"Completada"`) -- la
+   edición sí persistió.
+4. **Limpieza:** fila de prueba + sus 6 `CAP_*` borradas.
+   `INSPECCIONES` vuelve a 0 filas -- mismo estado que antes de esta
+   tarea.
+
+No fue necesario un navegador real (no disponible en este entorno, ver
+`2026-09-03h`) -- la verificación llama exactamente las mismas 2 RPC
+(`auth_org_id`, `fn_guardar_inspeccion_completa`) que el código nuevo
+llama, con una sesión real, en el mismo orden.
+
+**No hubo fallos que documentar** -- ambos intentos (creación y edición)
+funcionaron al primer intento.

@@ -8,17 +8,19 @@ import { getSupabaseBrowserClient } from '@/lib/supabase/browserClient'
 import { inspeccionSchema, DEFAULT_VALUES } from '@/lib/inspeccionesSchema'
 import {
   fetchInspeccionDetalle,
-  fetchInspecciones,
-  resolveOrganizationId,
   saveInspeccion,
   InspeccionError,
 } from '@/lib/inspeccionesActions'
 
-// INVARIANTE: la organización activa se resuelve de una consulta amplia
-// a INSPECCIONES (fetchInspecciones), independiente de la fila
-// específica que se está editando (fetchInspeccionDetalle) — así la
-// verificación multi-tenant en saveInspeccion() compara dos señales
-// realmente independientes, no un valor contra sí mismo.
+// INVARIANTE: organizationId viene de la sesión real (RPC auth_org_id(),
+// la misma función que las políticas RLS de INSPECCIONES/CAP_* usan como
+// autoridad -- ADR-033), no de filas ya cargadas. existingOrganizationId
+// viene del registro específico que se está editando (fetchInspeccionDetalle),
+// solo en modo edición. Son dos señales independientes por ORIGEN
+// (identidad de la sesión vs. dato del registro), no dos consultas
+// distintas sobre la misma tabla como antes -- así la verificación
+// multi-tenant en saveInspeccion() sigue comparando dos cosas realmente
+// independientes, no un valor contra sí mismo.
 export function useInspeccionForm(id) {
   const router = useRouter()
   const isEdit = Boolean(id)
@@ -50,9 +52,16 @@ export function useInspeccionForm(id) {
       }
 
       try {
-        const { rows } = await fetchInspecciones(supabase, { page: 0 })
+        const { data: orgId, error: orgError } = await supabase.rpc('auth_org_id')
         if (cancelled) return
-        setOrganizationId(resolveOrganizationId(rows))
+        if (orgError) throw orgError
+        if (!orgId) {
+          setLoadError(
+            'No se pudo verificar tu organización activa. Verificá que tu perfil esté activo o contactá al administrador.'
+          )
+          return
+        }
+        setOrganizationId(orgId)
 
         if (isEdit) {
           const { values, organizationId: recordOrgId } = await fetchInspeccionDetalle(supabase, id)
