@@ -2767,3 +2767,46 @@ cierre):**
    del login real) sigue bloqueado por `fn_guardar_inspeccion_completa()`
    no ser `SECURITY DEFINER` -- las 2 migraciones de contención
    preparadas (`20260901150000`/`20260901150100`) siguen sin aplicar.
+
+## 2026-09-03e — NOTA PERMANENTE: `supabase db push` no es seguro en este repo hasta resolver el drift de tracking de migraciones
+
+**No es una tarea, es una advertencia de referencia** para cualquier
+sesión futura (agente o humano) que vaya a aplicar una migración con el
+Supabase CLI en este repo. Encontrada al preparar el cierre de ADR-032
+(`2026-09-03d`), documentada acá aparte para que no dependa de leer esa
+entrada completa para encontrarla.
+
+**El hecho:** el proyecto Supabase de este repo SÍ está linkeado
+(`jhtocgxlozfuzullrtol`, "EUDR" — ver `supabase projects list`), a pesar
+de que `CLAUDE.md` dice que no hay conexión disponible desde una sesión
+normal. Pero `supabase migration list` muestra la columna "Remote" vacía
+para las 43 migraciones locales existentes -- la tabla de tracking del
+CLI (`supabase_migrations.schema_migrations` en la base remota) no tiene
+ningún registro, aunque la enorme mayoría de esas 43 migraciones ya
+están aplicadas de verdad en la instancia real (aplicadas a mano, en el
+SQL Editor de Supabase Studio, que es el flujo que documenta
+`CLAUDE.md`).
+
+**El riesgo concreto:** `supabase db push` decide qué aplicar comparando
+contra esa tabla de tracking, no contra el estado real del schema. Con
+el tracking vacío, `db push` trata las 43 migraciones como pendientes y
+las re-ejecuta todas, no solo las nuevas -- alcance muchísimo mayor al
+de cualquier tarea puntual, con riesgo real de errores (objetos que ya
+existen, si alguna no es perfectamente idempotente) o de locks
+prolongados sobre tablas en uso.
+
+**Qué usar mientras tanto:** `supabase db query --linked -f <archivo>`
+-- ejecuta el SQL de un archivo puntual directo contra la base real vía
+la Management API, sin tocar ni consultar la tabla de tracking. Es el
+mecanismo usado para aplicar ADR-032 (`2026-09-03d`) y el que debería
+seguir usándose para migraciones individuales hasta que el drift se
+resuelva.
+
+**Cómo se resolvería de fondo (no hecho todavía, fuera de alcance de
+esta nota):** `supabase migration repair <version> --status applied`
+por cada una de las 42 migraciones ya vigentes en producción, para que
+el tracking refleje la realidad -- recién ahí `db push` volvería a ser
+seguro para aplicar solo lo genuinamente nuevo. No se hizo acá porque
+no fue pedido y porque marcar 42 migraciones como aplicadas sin
+verificar una por una contra el schema real de cada tabla es en sí un
+cambio de alcance grande, no una limpieza de una línea.
