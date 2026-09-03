@@ -2539,3 +2539,81 @@ verificado aparte con el server prendido, ver arriba).
 **No se tocó `INSPECCIONES`/`CAP_*` (Fase C) ni se aprovisionaron las
 cuentas reales de `COOP-AROMAS-VALLE`/las 3 demo de `ORG-TEST-DEMO`
 (Fase D)** -- fuera de alcance explícito de esta fase.
+
+## 2026-09-03b — Fase C Paso 1 (cliente de sesión en INSPECCIONES/CAP_*) verificado en vivo + Paso 1.5: bug preexistente uuid/text encontrado y fix preparado, sin aplicar
+
+**Paso 1 -- los 3 call sites reales de `lib/inspeccionesActions.js`**
+(`app/dashboard/inspecciones/page.jsx`, `useInspeccionForm.js` x2) pasaron
+de `getSupabaseClient()` (anon) a `getSupabaseBrowserClient()` (sesión,
+Fase B) -- commit `6cc19f0`. Verificado en vivo contra un dev server real
+con una cuenta descartable (`ORG-TEST-DEMO`, Admin API, borrada al
+terminar): lectura de `/dashboard/inspecciones` devuelve resultados
+byte-idénticos entre sesión anon y autenticada -- el swap de cliente es
+inerte para lecturas, como se esperaba (sin RLS nuevo todavía, eso es
+Paso 2).
+
+**3 preguntas de reconocimiento para el diseño del RLS de Paso 2
+(respondidas por introspección OpenAPI de PostgREST, `GET /rest/v1/`):**
+a. La PK de `INSPECCIONES` es `"ID_Inspeccion"`, tipo **`text`**, no
+   `uuid` (confirmado con el truco de case-sensitivity: un filtro con el
+   valor en otro casing matcheó igual, lo que solo pasa si Postgres
+   normaliza el valor como en una columna `uuid` real -- pero acá NO
+   normalizó, confirmando `text`).
+b. Las 6 tablas `CAP_*` (`CAP_DATOS_SOCIO`, `CAP_MIC`, `CAP_CONSERVACION`,
+   `CAP_BIENESTAR`, `CAP_RIESGOS`, `CAP_GESTION`) usan todas el mismo
+   nombre de columna FK: `"ID_Inspeccion"`.
+c. No existe ningún DELETE real de inspecciones en la UI -- ni botón, ni
+   Server Action, ni RPC.
+
+**Bug preexistente encontrado durante la verificación de Paso 1 (NO
+introducido por Fase C, NO relacionado al login) --
+`fn_guardar_inspeccion_completa()` (creada en
+`20260818_inspecciones_atomic_save.sql`) falla en TODA creación de
+inspección nueva con:**
+```
+42883 operator does not exist: text = uuid
+```
+Causa: `INSPECCIONES."ID_Inspeccion"` es `text` (ver pregunta (a) arriba),
+pero la función declara `p_id uuid` / `v_id uuid`, así que cualquier
+`WHERE "ID_Inspeccion" = v_id` compara `text = uuid` y Postgres no tiene
+ese operador. Confirmado que es preexistente y no relacionado al cliente
+de sesión: se reprodujo el **mismo error exacto** llamando al RPC con la
+anon key pura. Confirmado que no deja residuo: la función no tiene manejo
+de excepciones, así que el `RAISE`/error revierte toda la transacción
+implícita de la llamada RPC -- verificado con conteos REST antes/después
+en `INSPECCIONES` y las 6 `CAP_*`, cero filas nuevas en ninguna.
+
+**Fix preparado, NO aplicado en Supabase (pendiente de revisión del
+arquitecto):** `supabase/migrations/20260903045407_fix_tipo_id_inspeccion.sql`
+-- `DROP FUNCTION` (firma vieja exacta) + `CREATE FUNCTION` con el mismo
+cuerpo íntegro de `20260818_inspecciones_atomic_save.sql` y exactamente 3
+cambios: `p_id uuid`→`p_id text`, `v_id uuid;`→`v_id text;`,
+`v_id := extensions.uuid_generate_v4();`→
+`v_id := extensions.uuid_generate_v4()::text;`. Ninguna otra línea tocada
+(confirmado con `diff` contra el original, filtrando líneas de
+comentario -- el único diff funcional son esos 3 cambios más el
+DROP/CREATE y el REVOKE/GRANT). Sigue sin `SECURITY DEFINER` (mismo
+criterio que el original: RLS es la autoridad real, la función no debe
+escalar privilegios). Como el DROP+CREATE resetea los grants a los
+defaults de Postgres, se agregó `REVOKE ALL ... FROM PUBLIC` explícito
+antes de volver a otorgar `EXECUTE` a `anon, authenticated` (mismos
+destinatarios de antes -- no se decide acá si `anon` debe seguir
+teniendo acceso, esa decisión es de Fase C Paso 2 una vez se endurezca
+el RLS a nivel de tabla).
+
+**Verificación manual preparada para después de que el arquitecto
+aplique la migración (NO ejecutada todavía):**
+1. Crear una inspección de prueba real con datos mínimos válidos (cuenta
+   descartable si hace falta sesión, mismo patrón Admin API usado en
+   Fase B/Paso 1 -- crear, usar, borrar).
+2. Confirmar que el guardado (creación) ahora tiene éxito.
+3. Editar esa misma inspección de prueba, confirmar que el guardado
+   (edición) también tiene éxito.
+4. Borrar la fila de prueba en `INSPECCIONES` y sus 6 filas
+   correspondientes en `CAP_*`.
+5. Confirmar explícitamente que las 2 filas legacy de `COOP-JS` en
+   `INSPECCIONES` siguen intactas (no tocadas por ninguno de los pasos
+   anteriores).
+
+**No se aplicó nada en Supabase.** No se decidió el acceso de `anon` a
+futuro (Fase C Paso 2). No se tocó RLS.

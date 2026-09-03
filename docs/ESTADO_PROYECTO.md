@@ -269,6 +269,27 @@
     `ON DELETE CASCADE` de `PERFILES_USUARIO_INTERNOS.user_id` borra el
     perfil solo).
 
+- **(2026-09-03) Login real — Fase C Paso 1 (cliente de sesión en
+  INSPECCIONES/CAP_*) verificado en vivo, y bug preexistente encontrado
+  (Paso 1.5, fix listo, sin aplicar):** los 3 puntos reales donde el
+  módulo de Inspecciones llama a Supabase pasaron del cliente `anon` al
+  cliente de sesión real de la Fase B — verificado en vivo que la
+  lectura no cambió en nada (todavía sin RLS nuevo, eso es Paso 2).
+  Durante esa verificación apareció un bug **preexistente, sin relación
+  con el login**: crear una inspección nueva siempre fallaba
+  (`fn_guardar_inspeccion_completa()`, creada en agosto, compara un
+  `uuid` contra la columna real `"ID_Inspeccion"` que es `text` —
+  mismatch de tipos que Postgres rechaza). Confirmado que también falla
+  igual con la llave `anon` pura (no es cosa del login) y que no deja
+  ningún dato a medio guardar (la función revierte todo automáticamente
+  ante el error). Migración de fix ya escrita
+  (`supabase/migrations/20260903045407_fix_tipo_id_inspeccion.sql`,
+  cambia esos 2 campos de `uuid` a `text`, nada más) —
+  **pendiente de tu revisión y aplicación manual en Supabase Studio**,
+  igual que toda migración de este proyecto. Ver `AI_STATE.md`
+  (`2026-09-03b`) para el detalle técnico completo y los pasos de
+  verificación manual preparados para después de aplicarla.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
