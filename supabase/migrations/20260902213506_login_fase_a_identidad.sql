@@ -48,11 +48,73 @@
 -- pudiera existir), nunca un ensanche. Ningún consumidor actual (las 6
 -- políticas RLS, trg_set_id_organizacion() vía get_my_org_id()) pierde
 -- acceso.
+--
+-- FIX DE ORDEN (post primer intento de aplicación real en Supabase
+-- Studio): la versión original de este archivo creaba la tabla + las 2
+-- políticas ANTES que auth_role() -- la política
+-- "rls_select_perfiles_admin_misma_org" referencia public.auth_role()
+-- en su USING, así que Postgres la rechazó con
+-- `42883 function public.auth_role() does not exist` al llegar a esa
+-- línea. Dentro de una misma transacción/archivo, una política que
+-- referencia una función debe crearse DESPUÉS de esa función, aunque
+-- ambas estén en el mismo BEGIN/COMMIT. Confirmado en vivo antes de
+-- corregir: el `BEGIN`/`COMMIT` hizo rollback limpio, sin nada aplicado
+-- a medias (`PERFILES_USUARIO_INTERNOS` sigue en PGRST205, `auth_role()`
+-- sigue en PGRST202, `auth_org_id()` sigue con su comportamiento
+-- anterior). Reordenado: las 2 funciones ahora van primero, la
+-- tabla/RLS/políticas/índice después -- mismo contenido exacto, ningún
+-- nombre/GRANT/condición de política cambiado.
 
 BEGIN;
 
 -- ════════════════════════════════════════════════════════════════════
--- 1. Tabla de perfiles internos -- sin política de escritura para
+-- 1. auth_role() -- nueva. SECURITY DEFINER para poder leer
+--    PERFILES_USUARIO_INTERNOS sin depender de que la política de
+--    SELECT del propio perfil ya haya resuelto (evita recursión con la
+--    política "admin misma org", que llama a esta función).
+-- ════════════════════════════════════════════════════════════════════
+CREATE OR REPLACE FUNCTION public.auth_role()
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT rol FROM public."PERFILES_USUARIO_INTERNOS"
+  WHERE user_id = auth.uid() AND activo = true
+  LIMIT 1;
+$$;
+
+REVOKE ALL ON FUNCTION public.auth_role() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.auth_role() TO authenticated, anon, service_role;
+
+-- ════════════════════════════════════════════════════════════════════
+-- 2. auth_org_id() -- REDEFINIDA (mismo nombre y firma, CREATE OR
+--    REPLACE, no rompe nada que ya la llama: trg_set_id_organizacion()
+--    vía el alias get_my_org_id(), ni las 6 políticas RLS ya
+--    declaradas). Perfil de la tabla nueva como fuente primaria, el
+--    claim JWT legacy como fallback secundario (hoy siempre NULL,
+--    preservado por si en el futuro se agrega un Auth Hook).
+-- ════════════════════════════════════════════════════════════════════
+CREATE OR REPLACE FUNCTION public.auth_org_id()
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT COALESCE(
+    (SELECT p."ID_Organizacion" FROM public."PERFILES_USUARIO_INTERNOS" p
+       WHERE p.user_id = auth.uid() AND p.activo = true LIMIT 1),
+    NULLIF(current_setting('request.jwt.claims', true)::json->>'ID_Organizacion', '')::text
+  );
+$$;
+
+REVOKE ALL ON FUNCTION public.auth_org_id() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.auth_org_id() TO authenticated, anon, service_role;
+
+-- ════════════════════════════════════════════════════════════════════
+-- 3. Tabla de perfiles internos -- sin política de escritura para
 --    `authenticated`: el aprovisionamiento (Fase D) es exclusivamente
 --    vía Service Role Key desde un script server-side. Ningún rol
 --    interno puede auto-asignarse un rol ni cambiar su propia
@@ -84,51 +146,5 @@ USING (
 );
 
 CREATE INDEX IF NOT EXISTS idx_perfiles_usuario_internos_org ON public."PERFILES_USUARIO_INTERNOS"("ID_Organizacion");
-
--- ════════════════════════════════════════════════════════════════════
--- 2. auth_role() -- nueva. SECURITY DEFINER para poder leer
---    PERFILES_USUARIO_INTERNOS sin depender de que la política de
---    SELECT del propio perfil ya haya resuelto (evita recursión con la
---    política "admin misma org", que llama a esta función).
--- ════════════════════════════════════════════════════════════════════
-CREATE OR REPLACE FUNCTION public.auth_role()
-RETURNS text
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT rol FROM public."PERFILES_USUARIO_INTERNOS"
-  WHERE user_id = auth.uid() AND activo = true
-  LIMIT 1;
-$$;
-
-REVOKE ALL ON FUNCTION public.auth_role() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.auth_role() TO authenticated, anon, service_role;
-
--- ════════════════════════════════════════════════════════════════════
--- 3. auth_org_id() -- REDEFINIDA (mismo nombre y firma, CREATE OR
---    REPLACE, no rompe nada que ya la llama: trg_set_id_organizacion()
---    vía el alias get_my_org_id(), ni las 6 políticas RLS ya
---    declaradas). Perfil de la tabla nueva como fuente primaria, el
---    claim JWT legacy como fallback secundario (hoy siempre NULL,
---    preservado por si en el futuro se agrega un Auth Hook).
--- ════════════════════════════════════════════════════════════════════
-CREATE OR REPLACE FUNCTION public.auth_org_id()
-RETURNS text
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT COALESCE(
-    (SELECT p."ID_Organizacion" FROM public."PERFILES_USUARIO_INTERNOS" p
-       WHERE p.user_id = auth.uid() AND p.activo = true LIMIT 1),
-    NULLIF(current_setting('request.jwt.claims', true)::json->>'ID_Organizacion', '')::text
-  );
-$$;
-
-REVOKE ALL ON FUNCTION public.auth_org_id() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.auth_org_id() TO authenticated, anon, service_role;
 
 COMMIT;
