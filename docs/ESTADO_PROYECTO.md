@@ -1,5 +1,5 @@
 # ESTADO DEL PROYECTO RYZOS
-*Última actualización: 2 de septiembre, 2026*
+*Última actualización: 3 de septiembre, 2026*
 
 > Este documento es la "bitácora" del proyecto. Aquí se anota qué se hizo, qué falta y qué decisiones están pendientes. No contiene reglas técnicas fijas (esas viven en el prompt orquestador RYZOS V3.1) — esto es solo el día a día.
 
@@ -308,6 +308,27 @@
   permisos y el aislamiento cross-org, y solo después de eso, retirar
   el gate de Basic Auth. Ver `AI_STATE.md` (`2026-09-03c`) para el
   detalle completo.
+
+- **(2026-09-03) ADR-032 aplicado en vivo — limpieza de 8 políticas RLS
+  huérfanas en español (`INSPECCIONES` + las 6 `CAP_*`):** confirmado
+  antes de tocar nada (query en vivo a `pg_policies`) que las 8 políticas
+  ("Permitir edicion desde el panel web", "Permitir lectura al panel
+  web", "Permitir web SOCIO", "Permitir web MIC" x5) eran redundantes con
+  las oficiales `rls_anon_all_*` ya vigentes — no cerraban ni abrían
+  ningún acceso real. Aplicada la migración
+  (`supabase/migrations/20260903064952_limpieza_drift_rls_policies_espanol.sql`)
+  vía `supabase db query --linked` (SQL directo contra la base real, sin
+  usar `supabase db push` — ese comando habría intentado re-aplicar las
+  43 migraciones del historial completo, no solo esta, porque la tabla
+  de tracking del CLI está vacía aunque casi todas ya estén aplicadas a
+  mano en Studio). Verificado en vivo después: las 8 desaparecieron, las
+  7 oficiales quedaron idénticas carácter por carácter. `npm run build`
+  limpio. Ver [ADR-032](adr/ADR-032-limpieza-drift-rls-espanol.md) y
+  `AI_STATE.md` (`2026-09-03d`) para el detalle completo, incluidos los
+  2 pendientes que quedan fuera de alcance a propósito (drift EUDR/PADRON
+  en las 5 tablas, y el endurecimiento real de `anon` en
+  INSPECCIONES/CAP_*, bloqueado por `fn_guardar_inspeccion_completa` no
+  ser `SECURITY DEFINER`).
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

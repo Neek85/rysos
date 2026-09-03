@@ -2695,3 +2695,75 @@ Fase D, condicionado a revisar este resultado primero. Las 2 cuentas
 reales de `COOP-AROMAS-VALLE` quedan con invitación pendiente de
 aceptación (no confirmadas todavía) hasta que sus dueños la acepten por
 email.
+
+## 2026-09-03d — ADR-032 aplicado en vivo (limpieza de 8 políticas RLS huérfanas en español, INSPECCIONES/CAP_*) — commit a staging
+
+**Contexto:** ver [ADR-032](docs/adr/ADR-032-limpieza-drift-rls-espanol.md)
+para el hallazgo completo y la verificación de neutralidad (escrita en la
+tarea anterior, sin aplicar todavía). Esta entrada es solo el cierre:
+aplicación real + verificación + commit, tras aprobación explícita del
+usuario en el chat.
+
+**Mecanismo de aplicación -- desviación deliberada del patrón habitual
+del repo.** Toda migración anterior de este proyecto se aplicó a mano en
+el SQL Editor de Supabase Studio (así lo documenta `CLAUDE.md` y cada
+entrada previa de este archivo: "pendiente de tu revisión y aplicación
+manual en Supabase Studio"). Esta vez el usuario pidió explícitamente
+aplicarla desde acá. Antes de correr nada se encontró que el proyecto
+Supabase SÍ está linkeado (`supabase/.temp/project-ref` =
+`jhtocgxlozfuzullrtol`, confirmado además con `supabase projects list`)
+-- dato que contradice lo que dice `CLAUDE.md` ("no hay proyecto de
+Supabase CLI linkeado"), pendiente de corregir ahí en otra tarea. Pero
+`supabase migration list` mostró la columna "Remote" vacía para las 43
+migraciones locales -- es decir, la tabla de tracking de migraciones del
+CLI no tiene ningún registro, aunque casi todas esas 43 ya están
+aplicadas de verdad (a mano, en Studio, como dice `CLAUDE.md`). Correr
+`supabase db push` habría intentado re-aplicar las 43 desde cero, no
+solo la nueva -- alcance mucho mayor al pedido y riesgo real de errores
+o locks sobre migraciones ya vigentes. Se usó en su lugar
+`supabase db query --linked -f <archivo>` (ejecuta SQL directo contra la
+base real vía Management API, sin tocar la tabla de tracking) para
+correr *solo* el contenido literal de
+`20260903064952_limpieza_drift_rls_policies_espanol.sql`, ni más ni
+menos.
+
+**Verificación pre-aplicación (pg_policies, INSPECCIONES + las 6
+CAP_\*):** confirmó en vivo, antes de tocar nada, que las 8 políticas en
+español existían exactamente como las describe el ADR (mismos nombres,
+`cmd`, `roles`, `qual: true`), y que las oficiales `rls_anon_all_*`
+coexistían con la condición documentada
+(`"ID_Organizacion" IS NOT NULL OR auth.role() = 'service_role' OR
+CURRENT_USER = 'postgres'` en INSPECCIONES; `true` sin condición en las
+6 CAP_\*).
+
+**Aplicación:** `supabase db query --linked -f
+supabase/migrations/20260903064952_limpieza_drift_rls_policies_espanol.sql`
+-- sin errores (0 filas devueltas, esperado para `DROP
+POLICY`/`BEGIN`/`COMMIT`).
+
+**Verificación post-aplicación (misma consulta `pg_policies`,
+literal):** las 8 políticas en español ya no aparecen. Las 7 oficiales
+`rls_anon_all_*` restantes son idénticas fila por fila a la verificación
+previa -- mismo `cmd`, mismos `roles`, mismo `qual` carácter por
+carácter (incluida la condición completa de INSPECCIONES). Confirma lo
+que dice el ADR: el `DROP` no cambió ningún comportamiento de acceso
+real.
+
+**`npm run build`:** limpio -- mismos warnings preexistentes de ESLint
+(imágenes sin `next/image`, 2 `exhaustive-deps`), 0 errores, mismas 19
+rutas de antes. Este cambio no toca ningún archivo de `app/`/`lib/`/
+`components/`, así que no se esperaba ni se encontró ningún efecto.
+
+**Pendiente, explícitamente fuera de alcance de esta tarea (ya
+documentado en el ADR, repetido acá para que quede en el registro de
+cierre):**
+1. Drift más amplio en las 5 tablas EUDR/PADRON (`EUDR_MONITOREO`,
+   `EUDR_INSTALACIONES`, `EUDR_USO_SUELO`, `PADRON_SOCIOS`,
+   `PADRON_PARCELAS`) -- políticas `ryzos_all_*`/`rls_all_*` huérfanas
+   distintas de las de este ADR, necesitan su propio análisis de
+   neutralidad (dependen de que `auth_org_id()`/`get_my_org_id()`
+   degraden a `NULL` para `anon`, no de un conteo de filas).
+2. Endurecimiento real de `anon` en INSPECCIONES/CAP_\* (Fase C Paso 2
+   del login real) sigue bloqueado por `fn_guardar_inspeccion_completa()`
+   no ser `SECURITY DEFINER` -- las 2 migraciones de contención
+   preparadas (`20260901150000`/`20260901150100`) siguen sin aplicar.
