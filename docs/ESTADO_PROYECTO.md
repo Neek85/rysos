@@ -365,6 +365,34 @@
   curso, incluida la Fase C Paso 2. Ver `AI_STATE.md` (`2026-09-03f` y
   `2026-09-03g`) para el detalle completo.
 
+- **(2026-09-03) Fase C Paso 2 — ADR-033 aplicado en vivo: aislamiento
+  real por organización en `INSPECCIONES` + las 6 `CAP_*`, `anon`
+  cerrado por completo:** aplicada
+  `supabase/migrations/20260903170404_fase_c_paso2_rls_real_inspecciones_cap.sql`
+  -- cada una de las 7 tablas pasó de una única política combinada
+  `anon`+`authenticated` sin aislamiento real (`IS NOT NULL`/`true`) a 2
+  políticas separadas: `anon` deniega todo, `authenticated` exige que la
+  fila pertenezca a la organización real de la sesión
+  (`auth_org_id()`). **Verificado en vivo, no solo por diseño:** `anon`
+  ahora recibe `401`/`42501` al intentar guardar (confirmado además que
+  el `SELECT` de `anon` sigue en 0 aun con una fila real presente,
+  insertada aparte para descartar que fuera solo tabla vacía);
+  `authenticated`, con una sesión real obtenida vía magic link
+  (Admin API, sin tocar la contraseña de la cuenta demo), creó y editó
+  una inspección de prueba en `ORG-TEST-DEMO` sin problema. Fila de
+  prueba limpiada, `INSPECCIONES` vuelve a 0. `npm run build` limpio.
+  Las 2 migraciones de contención de emergencia que este diseño
+  reemplaza (`20260901150000`/`20260901150100`) se movieron a
+  `supabase/migrations/archivadas/` (con un `README.md` explicando por
+  qué, y por qué no deben aplicarse nunca — colisión de nombres de
+  política). **Pendiente, ya trackeado aparte, no bloqueante para este
+  cierre:** `resolveOrganizationId()` en `lib/inspeccionesActions.js`
+  sigue derivando la organización de filas ya cargadas en vez de la
+  sesión real — el flujo de creación real desde el navegador sigue roto
+  por esa razón (independiente de RLS) mientras `INSPECCIONES` esté
+  vacía. Ver [ADR-033](adr/ADR-033-fase-c-paso2-rls-real-inspecciones-cap.md)
+  y `AI_STATE.md` (`2026-09-03h`) para el detalle completo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

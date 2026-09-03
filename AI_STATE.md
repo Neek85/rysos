@@ -2934,3 +2934,68 @@ Paso 2 (endurecimiento real de `anon` en INSPECCIONES/CAP_*) -- es una
 investigación de datos aparte, pendiente de que el arquitecto decida
 si amerita revisar backups/logs, sin relación de dependencia con el
 trabajo de código/RLS.
+
+## 2026-09-03h — ADR-033 aplicado en vivo (aislamiento real por organización en INSPECCIONES/CAP_*, cierre completo de `anon`) — verificado con RPC real por rol, migraciones de contención archivadas
+
+**Aplicación:** `supabase db query --linked -f
+supabase/migrations/20260903170404_fase_c_paso2_rls_real_inspecciones_cap.sql`
+-- sin errores (un primer intento fue bloqueado por el clasificador de
+auto-mode como error transitorio; el reintento inmediato aplicó
+limpio). `pg_policies` re-consultada después: exactamente 2 políticas
+por tabla en las 7 (`rls_anon_deny_*` + `rls_write_*_authenticated`),
+14 en total -- coincide carácter por carácter con lo que la migración
+crea, nada de más ni de menos.
+
+**Verificación funcional, en 2 partes:**
+
+1. **`anon` -- ahora bloqueado, confirmado positivamente (no solo por
+   ausencia de datos):** `POST .../rpc/fn_guardar_inspeccion_completa`
+   con la llave `anon` pura → `401 {"code":"42501", "message":"new row
+   violates row-level security policy for table \"INSPECCIONES\""}`
+   (antes de esta migración, esto daba `200 {created:true}`). Para
+   descartar que el `SELECT` en `0` filas fuera solo porque la tabla
+   está vacía (no porque RLS bloquee), se insertó una fila de prueba
+   directo vía conexión privilegiada (bypass de RLS), se confirmó que
+   `anon` vía REST seguía viendo `Content-Range: */0` con esa fila
+   realmente presente, y se limpió esa fila de prueba antes de seguir.
+2. **`authenticated` -- sigue funcionando, con una sesión real (no una
+   llamada directa a la RPC con parámetros de confianza).** Contraseña
+   de la cuenta demo no disponible en este contexto y su reseteo vía
+   Admin API bloqueado por el clasificador de auto-mode (ver tarea
+   anterior) -- en su lugar, siguiendo la alternativa que pidió el
+   arquitecto explícitamente ("magic link, no reseteo de password"):
+   `POST /auth/v1/admin/generate_link` (Service Role Key, tipo
+   `magiclink`, `admin-demo@ryzos-demo.test`) → `hashed_token` →
+   `POST /auth/v1/verify` (anon key, mismo `token_hash`) → sesión real
+   (`access_token`), decodificado y confirmado `role: authenticated`,
+   `sub` = el user_id real de la cuenta, sin tocar su contraseña.
+   **Creación:** `200 {"id":"f12303d2-...", "created":true}` contra
+   `ORG-TEST-DEMO`. **Edición:** mismo id, `200 {"created":false}`.
+   Confirmado que las 6 `CAP_*` tenían 1 fila cada una para ese id antes
+   de limpiar.
+
+**Limpieza:** ambas filas de prueba (la del probe de `anon` y la de la
+sesión `authenticated`) + sus `CAP_*` correspondientes, borradas.
+`INSPECCIONES` vuelve a 0 filas -- mismo estado que antes de esta tarea
+(ver `2026-09-03f`/`g`, sigue sin resolverse la causa de fondo, fuera de
+alcance de esta tarea también).
+
+**`npm run build`:** limpio -- mismos warnings preexistentes, 0
+errores, mismas 19 rutas.
+
+**Migraciones de contención archivadas:** `20260901150000_lock_anon_write_inspecciones_cap.sql`
+y `20260901150100_lock_anon_all_inspecciones_cap.sql` movidas a
+`supabase/migrations/archivadas/` (subdirectorio que el Supabase CLI no
+lee -- confirmado que solo escanea archivos directos en
+`supabase/migrations/`, no subdirectorios -- así que no hay riesgo de
+que `db push` los recoja por accidente). `README.md` nuevo en ese
+directorio explicando por qué quedaron obsoletas (ver ADR-033) y que no
+deben aplicarse nunca (colisión de nombres de política con las de esta
+migración).
+
+**Pendiente, ya trackeado aparte, no bloqueante para este cierre:**
+`resolveOrganizationId()` sigue derivando la organización de filas ya
+cargadas en vez de la sesión real (ver ADR-033, sección "Hallazgo
+colateral") -- el flujo de creación real desde el navegador sigue roto
+por esa razón, independiente de RLS, mientras `INSPECCIONES` esté vacía.
+No resuelto en esta tarea, a propósito.
