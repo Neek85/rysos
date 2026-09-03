@@ -10,12 +10,31 @@
 // para `?org=`: se lee de `window.location.search` directo, no
 // `useSearchParams` de next/navigation, para no tener que envolver la
 // página en <Suspense> solo por esto) -- redirige ahí tras un login
-// exitoso, o a /dashboard si no vino. Se valida que empiece con "/"
-// antes de usarlo, para no habilitar un open redirect.
+// exitoso, o a /dashboard si no vino.
+//
+// FIX (post-revisión): `next.startsWith('/')` NO descarta URLs
+// protocol-relative (`//evil.com`) -- el navegador las interpreta como
+// redirect externo (mismo esquema que la página actual, distinto host)
+// aunque técnicamente "empiecen con /". Reemplazado por validación de
+// mismo origen real: se resuelve con `new URL(next, window.location.origin)`
+// y se compara `.origin` contra el origen actual -- cualquier cosa que
+// no sea estrictamente el mismo origen (incluido `//evil.com`, un
+// `next` absoluto a otro host, `null`/vacío, o un valor malformado que
+// tira en el `new URL()`) cae a `/dashboard`.
 
 import { useState } from 'react'
 import { getSupabaseBrowserClient } from '@/lib/supabase/browserClient'
 import { FormField, inputClass } from '@/components/ui/FormField'
+
+function resolveSafeNext(next) {
+  if (!next) return '/dashboard'
+  try {
+    const url = new URL(next, window.location.origin)
+    return url.origin === window.location.origin ? `${url.pathname}${url.search}${url.hash}` : '/dashboard'
+  } catch {
+    return '/dashboard'
+  }
+}
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -45,8 +64,7 @@ export default function LoginPage() {
       // la siguiente request llegue al servidor -- y a middleware.js --
       // con la cookie de sesión recién escrita ya presente.
       const params = new URLSearchParams(window.location.search)
-      const next = params.get('next')
-      window.location.href = next && next.startsWith('/') ? next : '/dashboard'
+      window.location.href = resolveSafeNext(params.get('next'))
     } finally {
       setLoading(false)
     }
