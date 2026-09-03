@@ -345,17 +345,25 @@
   persistió), **limpieza sin residuo** (0 filas en `INSPECCIONES` y las
   6 `CAP_*` para esa fila de prueba, verificado después). `npm run
   build` limpio.
-  **Hallazgo aparte, sin resolver — posible pérdida de datos:** el paso
-  de verificación pedía confirmar que 2 filas legacy de `COOP-JS` en
-  `INSPECCIONES` seguían intactas. **`INSPECCIONES` está completamente
-  vacía (0 filas)** — no había nada que verificar. No se investigó la
-  causa (fuera de alcance, y requeriría acceso a backups/logs de
-  Supabase). Es posible que esté relacionado con el hallazgo anterior
-  (alguien probando el fix a mano pudo haber limpiado de más), pero es
-  una hipótesis, no un hecho confirmado. **Pendiente de que decidas** si
-  esto amerita revisar un backup de Supabase o si esas 2 filas ya no
-  hacían falta. Ver `AI_STATE.md` (`2026-09-03f`) para el detalle
-  completo de ambos hallazgos.
+  **Hallazgo aparte — investigación de RLS ya cerrada, sigue pendiente
+  la causa de fondo:** el paso de verificación pedía confirmar que 2
+  filas legacy de `COOP-JS` en `INSPECCIONES` seguían intactas.
+  `INSPECCIONES` está completamente vacía (0 filas) — no había nada que
+  verificar. **Se descartó que fuera un artefacto de RLS/rol:**
+  reconfirmado con Service Role Key vía REST (bypass total de RLS,
+  mismo resultado: 0 filas) y con `pg_policies` sobre `INSPECCIONES`
+  (sin cambios desde ADR-032, solo `rls_anon_all_inspecciones`, ninguna
+  de las 2 migraciones de contención sin aplicar
+  `20260901150000`/`20260901150100` apareció aplicada por fuera de esta
+  sesión). **El vacío es real a nivel de dato, no de acceso.** La causa
+  de fondo (cuándo/por qué desaparecieron esas 2 filas) sigue sin
+  resolver — fuera del alcance de este entorno, que no tiene acceso a
+  backups ni a logs de Supabase. **Pendiente de que el arquitecto
+  revise directamente en Supabase Studio:** Point-in-Time Recovery (si
+  el plan lo tiene habilitado) y Database → Logs — ninguna acción desde
+  acá puede sustituir eso. No bloquea ningún trabajo de código/RLS en
+  curso, incluida la Fase C Paso 2. Ver `AI_STATE.md` (`2026-09-03f` y
+  `2026-09-03g`) para el detalle completo.
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

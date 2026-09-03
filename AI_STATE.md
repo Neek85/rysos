@@ -2883,3 +2883,54 @@ mismas 19 rutas.
 todos modos no se aplicó nada nuevo en este paso -- ya estaba aplicada).
 Este cierre documenta la verificación, no un cambio de estado nuevo en
 la base.
+
+## 2026-09-03g — Cierre de la investigación de `INSPECCIONES` vacía (`2026-09-03f`): descartado artefacto de RLS, el vacío es real a nivel de dato
+
+**Contexto:** `2026-09-03f` dejó abierta la pregunta de si el conteo de
+0 filas en `INSPECCIONES` (en vez de las 2 filas legacy de `COOP-JS`
+documentadas desde `2026-09-01i`) podía ser un artefacto de RLS/rol en
+vez de un vacío real. Esta entrada cierra esa pregunta puntual -- no
+investiga la causa de fondo, que sigue sin resolver.
+
+**Conteo real vía Service Role Key (REST, `Content-Range` con `Prefer:
+count=exact`, bypass de RLS completo por definición de esa llave):**
+`*/0` -- **0 filas**, coincide exactamente con el conteo anterior de
+`2026-09-03f` hecho vía `supabase db query --linked` (canal privilegiado
+sobre Postgres directo, no `anon`). Dos caminos completamente
+independientes -- REST con Service Role vs. SQL directo sobre la base --
+dan el mismo resultado.
+
+**`pg_policies` sobre `INSPECCIONES`, re-consultada:** sin cambios desde
+la verificación de ADR-032 (`2026-09-03d`) -- sigue existiendo
+únicamente `rls_anon_all_inspecciones` (`ALL`, `{anon,authenticated}`,
+`qual`/`with_check` idénticos: `"ID_Organizacion" IS NOT NULL OR
+auth.role() = 'service_role' OR CURRENT_USER = 'postgres'`). **Ninguno
+de los 3 nombres de política de las 2 migraciones de contención
+preparadas y sin aplicar** (`20260901150000_lock_anon_write_inspecciones_cap.sql`
+→ `rls_select_inspecciones_anon`/`rls_all_inspecciones_authenticated`;
+`20260901150100_lock_anon_all_inspecciones_cap.sql` →
+`rls_anon_deny_inspecciones`) **aparece en la instancia real** -- se
+descarta que alguien las haya aplicado por fuera de esta sesión.
+
+**Conclusión: no es un artefacto de RLS ni de rol -- el vacío de
+`INSPECCIONES` es real a nivel de dato.** Las 2 filas legacy de
+`COOP-JS` documentadas en `2026-09-01i` y entradas posteriores de esta
+sesión ya no existen en la instancia real, bajo ningún rol ni política.
+
+**Límite explícito de este entorno, no un abandono de la
+investigación:** desde acá no hay acceso a backups de Supabase ni a
+logs de queries -- ninguna herramienta de este entorno puede determinar
+cuándo o por qué desaparecieron esas filas. Determinarlo (si vale la
+pena) requiere que el arquitecto revise directamente, en Supabase
+Studio: **Point-in-Time Recovery** (si el plan del proyecto lo tiene
+habilitado) y **Database → Logs**. Ninguna acción posible desde este
+agente puede sustituir eso.
+
+**Esto no bloquea nada en curso.** No afecta ADR-032 (ya aplicado y
+verificado), no afecta el fix uuid/text de
+`fn_guardar_inspeccion_completa` (ya aplicado y verificado
+funcionalmente en `2026-09-03f`), y no bloquea el arranque de Fase C
+Paso 2 (endurecimiento real de `anon` en INSPECCIONES/CAP_*) -- es una
+investigación de datos aparte, pendiente de que el arquitecto decida
+si amerita revisar backups/logs, sin relación de dependencia con el
+trabajo de código/RLS.
