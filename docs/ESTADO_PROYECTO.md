@@ -290,6 +290,25 @@
   (`2026-09-03b`) para el detalle técnico completo y los pasos de
   verificación manual preparados para después de aplicarla.
 
+- **(2026-09-03) Login real — Fase D Paso 1 (aprovisionamiento de
+  cuentas) corrido en vivo:** script nuevo
+  (`scripts/provision_login_accounts.mjs`, corrida manual, con Service
+  Role Key) creó/vinculó las **5 cuentas de login** previstas: las 2
+  reales de `COOP-AROMAS-VALLE` (invitadas por email, pendientes de que
+  cada persona acepte la invitación) y las 3 demo de `ORG-TEST-DEMO`
+  (una por rol: `admin`, `tecnico_campo`, `auditor_qc`). Cada una quedó
+  vinculada a su fila en `PERFILES_USUARIO_INTERNOS` con la
+  organización y el rol correctos — confirmado con una consulta de
+  solo lectura aparte, no solo con la salida del script. Las 3
+  contraseñas demo generadas se entregaron fuera de este documento
+  (directamente en el chat) — **no quedaron guardadas en ningún archivo
+  del repositorio.** `middleware.js` no se tocó — el gate de Basic Auth
+  sigue activo. Pendiente (Paso 2/3 de esta fase, no arrancado
+  todavía): probar cada cuenta contra las 5 pantallas de la matriz de
+  permisos y el aislamiento cross-org, y solo después de eso, retirar
+  el gate de Basic Auth. Ver `AI_STATE.md` (`2026-09-03c`) para el
+  detalle completo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

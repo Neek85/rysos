@@ -2617,3 +2617,81 @@ aplique la migración (NO ejecutada todavía):**
 
 **No se aplicó nada en Supabase.** No se decidió el acceso de `anon` a
 futuro (Fase C Paso 2). No se tocó RLS.
+
+## 2026-09-03c — Fase D Paso 1: aprovisionamiento real de las 5 cuentas de login (roster COOP-AROMAS-VALLE + 3 demo ORG-TEST-DEMO) — corrido en vivo, verificado
+
+**Verificación previa (antes de escribir el script):**
+- `docs/schema_live.md` dice que `PERFILES_USUARIO_INTERNOS`
+  (`20260902213506_login_fase_a_identidad.sql`) está "NO aplicada
+  todavía" -- **ese dato está desactualizado**. Confirmado en vivo vía
+  PostgREST (`GET /rest/v1/PERFILES_USUARIO_INTERNOS?select=user_id&limit=1`
+  con Service Role Key) que la tabla existe y responde `200` (vacía,
+  antes de esta tarea) -- consistente con el smoke test manual de la
+  Fase B (`2026-09-03`), que ya insertaba un perfil ahí. `docs/schema_live.md`
+  queda pendiente de corrección en un paso aparte (no se tocó en esta
+  tarea, fuera de su alcance declarado).
+- Columnas reales de `PERFILES_USUARIO_INTERNOS` confirmadas leyendo la
+  migración fuente (no asumidas): `user_id uuid PK/FK auth.users(id) ON
+  DELETE CASCADE`, `"ID_Organizacion" text NOT NULL REFERENCES
+  ORGANIZACIONES("ID")`, `rol text CHECK IN
+  ('admin','tecnico_campo','auditor_qc')`, `nombre_completo text NOT
+  NULL`, `activo boolean DEFAULT true`, `creado_en`/`actualizado_en
+  timestamptz DEFAULT now()` -- coinciden exactamente con el contrato
+  Zod del prompt, sin discrepancias -- no hizo falta detenerse.
+  `ORGANIZACIONES."ID"` confirmado como el nombre real de columna (uso
+  ya establecido en el resto del repo).
+- Confirmado en vivo que ambas organizaciones destino ya existen en
+  `ORGANIZACIONES` (`COOP-AROMAS-VALLE`, `ORG-TEST-DEMO`) -- si no
+  existieran, el `upsert` de `PERFILES_USUARIO_INTERNOS` habría fallado
+  por la FK.
+- `@supabase/supabase-js` y `zod` ya eran dependencias del proyecto --
+  no se agregó ninguna dependencia nueva.
+
+**Script nuevo:** `scripts/provision_login_accounts.mjs` (Node ESM,
+ejecución manual únicamente, nunca importado desde `app/`). Sigue el
+mismo patrón ya usado en `scripts/generar_padron_sintetico.mjs` para
+`.env.local` sin `dotenv` (no instalado). Por cada una de las 5 cuentas
+(contrato Zod validado antes de tocar la base): busca por email
+paginando `auth.admin.listUsers()` (no existe `getUserByEmail` estable
+en el SDK); si no existe, invita (`inviteUserByEmail`, 2 cuentas reales
+de `COOP-AROMAS-VALLE`) o crea con contraseña aleatoria de
+`crypto.randomBytes(18).toString('base64url')`
+(`admin.createUser({..., email_confirm:true})`, 3 cuentas demo de
+`ORG-TEST-DEMO`, TLD `.test`); si ya existe, no repite la
+invitación/creación. En ambos casos, `upsert` (Service Role, bypasea
+RLS a propósito -- esa tabla no tiene política de escritura para
+`authenticated`) de la fila en `PERFILES_USUARIO_INTERNOS`
+(`onConflict: 'user_id'`) -- re-correr el script no duplica ni rompe
+nada, deja el mismo estado final. Las contraseñas generadas se imprimen
+SOLO por consola al final, en un bloque separado con advertencia
+explícita de no pegarlas en ningún archivo del repo -- nunca se
+escriben a disco ni a ningún log persistente.
+
+**Corrido una sola vez contra la instancia real** (no hay staging de
+Supabase separado). Resultado: **5/5 cuentas aprovisionadas** -- las 2
+de `COOP-AROMAS-VALLE` invitadas por email (`auth_accion=invitado`),
+las 3 de `ORG-TEST-DEMO` creadas con contraseña
+(`auth_accion=creado`); las 5 con `perfil_accion=upsert_ok`. Las 3
+contraseñas generadas se entregaron al usuario directamente en el chat,
+fuera de este documento y de cualquier archivo -- **no están
+registradas en ningún lugar del repositorio.**
+
+**Verificación (consulta de solo lectura aparte, Service Role,
+`GET /rest/v1/PERFILES_USUARIO_INTERNOS?select=user_id,"ID_Organizacion",rol,nombre_completo,activo`):**
+confirmadas las 5 filas nuevas, cada una con `"ID_Organizacion"`/`rol`
+correctos según el roster (2x `COOP-AROMAS-VALLE`: `admin`/
+`tecnico_campo`; 3x `ORG-TEST-DEMO`: `admin`/`tecnico_campo`/
+`auditor_qc`), todas `activo: true`.
+
+**`npm run build`:** limpio tras reinicio de higiene (kill de `node.exe`
++ `rm -rf .next`) -- mismos 8 warnings preexistentes, 0 errores, misma
+lista de rutas de antes (este paso no toca ningún archivo de `app/`).
+No hay `npm test` en este repo.
+
+**No se tocó `middleware.js`** (explícitamente fuera de alcance de este
+paso). **No se corrió smoke test por rol contra las 5 pantallas de la
+matriz ni el test de aislamiento cross-org** -- eso es Paso 2/3 de la
+Fase D, condicionado a revisar este resultado primero. Las 2 cuentas
+reales de `COOP-AROMAS-VALLE` quedan con invitación pendiente de
+aceptación (no confirmadas todavía) hasta que sus dueños la acepten por
+email.
