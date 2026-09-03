@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useRouter } from 'next/navigation'
-import { getSupabaseClient } from '@/lib/supabaseClient'
+import { getSupabaseBrowserClient } from '@/lib/supabase/browserClient'
 import { inspeccionSchema, DEFAULT_VALUES } from '@/lib/inspeccionesSchema'
 import {
   fetchInspeccionDetalle,
@@ -42,7 +42,7 @@ export function useInspeccionForm(id) {
     async function load() {
       setIsLoading(true)
       setLoadError(null)
-      const supabase = getSupabaseClient()
+      const supabase = getSupabaseBrowserClient()
       if (!supabase) {
         setLoadError('Cliente Supabase no configurado (revisa las variables de entorno).')
         setIsLoading(false)
@@ -85,7 +85,7 @@ export function useInspeccionForm(id) {
   }, [toast])
 
   async function onSubmit(values) {
-    const supabase = getSupabaseClient()
+    const supabase = getSupabaseBrowserClient()
     if (!supabase || saving) return
     setSaving(true)
     setToast(null)
