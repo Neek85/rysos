@@ -2810,3 +2810,76 @@ seguro para aplicar solo lo genuinamente nuevo. No se hizo acá porque
 no fue pedido y porque marcar 42 migraciones como aplicadas sin
 verificar una por una contra el schema real de cada tabla es en sí un
 cambio de alcance grande, no una limpieza de una línea.
+
+## 2026-09-03f — Fix uuid/text de `fn_guardar_inspeccion_completa` verificado funcionalmente en vivo -- **hallazgo importante: la migración YA estaba aplicada, y las 2 filas legacy de COOP-JS que debían verificarse ya no existen**
+
+**Contexto:** cierre de `2026-09-03b` (bug preexistente uuid/text,
+`supabase/migrations/20260903045407_fix_tipo_id_inspeccion.sql`, ya
+commiteada en `eabd4b8` desde antes de esta sesión). Tarea pedida:
+aplicar esa migración contra la instancia real y correr la verificación
+funcional de 5 pasos ya preparada en `2026-09-03b`.
+
+**Hallazgo 1 -- la migración YA estaba aplicada en producción, por fuera
+de esta sesión.** Al correr `supabase db query --linked -f
+supabase/migrations/20260903045407_fix_tipo_id_inspeccion.sql` el `CREATE
+FUNCTION` falló con `42723: function "fn_guardar_inspeccion_completa"
+already exists with same argument types` -- sin efecto destructivo (el
+`DROP FUNCTION IF EXISTS` apuntaba a la firma vieja `uuid,...`, que ya no
+existía, así que fue no-op; el error ocurrió recién en el `CREATE`
+posterior, dentro del mismo `BEGIN`/`COMMIT`, así que no se tocó nada).
+Confirmado con `pg_get_function_arguments`/`pg_get_functiondef` sobre
+`pg_proc`: la función real en la instancia **ya tiene** `p_id text` /
+`v_id text` (el fix), y sus grants (`information_schema.routine_privileges`)
+ya son exactamente `EXECUTE` para `anon`+`authenticated` únicamente (sin
+`PUBLIC`) -- el estado final deseado por la migración. No hay forma de
+saber desde acá quién la aplicó ni cuándo (no fue ninguna sesión anterior
+de este historial de conversación, que solo tocó RLS de
+`INSPECCIONES`/`CAP_*` y aprovisionamiento de cuentas, nunca esta
+función) -- probablemente aplicada a mano en Supabase Studio, coherente
+con el patrón habitual del proyecto, pero sin confirmación directa.
+
+**Hallazgo 2 -- `INSPECCIONES` está completamente vacía (0 filas), no
+las "2 filas legacy de COOP-JS" que `2026-09-03b`/`ESTADO_PROYECTO.md`
+documentan.** Confirmado con `SELECT count(*)` antes de tocar nada
+(mismo proyecto linkeado, `jhtocgxlozfuzullrtol`, verificado con
+`current_database()`), y de nuevo después de la limpieza del test: **0
+en ambos momentos**. No se puede completar el paso 5 de la verificación
+preparada ("confirmar que las 2 filas de COOP-JS siguen intactas") tal
+como estaba escrito porque la premisa ya no es cierta -- no hay filas
+COOP-JS que verificar. **No se investigó la causa** (fuera de alcance de
+esta tarea, y cualquier intento de reconstruir el historial de una
+tabla sin filas actuales requeriría backups/logs a los que este agente
+no tiene acceso) -- **posible correlación con el Hallazgo 1** (alguien
+pudo haber probado el fix a mano contra la instancia real y limpiado de
+más), pero es una hipótesis, no un hecho confirmado. **Queda como
+pregunta abierta para el arquitecto:** ¿las 2 filas de COOP-JS se
+borraron a propósito (dato legacy que ya no hacía falta) o es una
+pérdida de datos real que hay que investigar/restaurar desde un backup
+de Supabase?
+
+**Verificación funcional (paso 2 completo, contra una fila descartable
+en `ORG-TEST-DEMO`, vía RPC real con `NEXT_PUBLIC_SUPABASE_ANON_KEY` --
+mismo camino que reprodujo el bug original):**
+1. **Creación:** `POST .../rpc/fn_guardar_inspeccion_completa` con
+   `p_id: null` → `200 {"id":"d5f6908a-92d3-4a49-ac7a-8cb95887a5b2",
+   "created":true}`. Antes del fix esto fallaba siempre con `42883`.
+2. **Edición:** mismo RPC con `p_id` = el id devuelto arriba,
+   `p_existing_organizacion: "ORG-TEST-DEMO"` → `200 {"id":"...",
+   "created":false}`. Confirmado con una lectura aparte que
+   `Inspector`/`Estado` reflejan el segundo payload (no el primero) --
+   la edición sí persistió.
+3. Confirmado con lectura aparte que las 6 `CAP_*` tenían exactamente 1
+   fila cada una para ese `ID_Inspeccion` antes de la limpieza.
+4. **Limpieza:** `DELETE` manual de las 6 `CAP_*` + `INSPECCIONES` para
+   ese id, dentro de una sola transacción. Verificado después: 0 filas
+   en las 6 `CAP_*` para ese id, 0 filas en `INSPECCIONES` para ese id,
+   y el conteo total de `INSPECCIONES` volvió a 0 -- igual que antes de
+   la prueba (no antes de "2", como se esperaba -- ver Hallazgo 2).
+
+**`npm run build`:** limpio -- mismos warnings preexistentes, 0 errores,
+mismas 19 rutas.
+
+**No se volvió a commitear la migración** (ya estaba en `eabd4b8`, y de
+todos modos no se aplicó nada nuevo en este paso -- ya estaba aplicada).
+Este cierre documenta la verificación, no un cambio de estado nuevo en
+la base.

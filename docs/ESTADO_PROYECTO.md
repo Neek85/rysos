@@ -330,6 +330,33 @@
   INSPECCIONES/CAP_*, bloqueado por `fn_guardar_inspeccion_completa` no
   ser `SECURITY DEFINER`).
 
+- **(2026-09-03) Fix uuid/text de `fn_guardar_inspeccion_completa`
+  verificado funcionalmente — con 2 hallazgos importantes:** al intentar
+  aplicar `supabase/migrations/20260903045407_fix_tipo_id_inspeccion.sql`
+  contra la instancia real, se descubrió que **ya estaba aplicada**
+  (probablemente a mano en Supabase Studio, en algún momento fuera de
+  esta serie de conversaciones — no hay forma de confirmar quién ni
+  cuándo). Confirmado contra `pg_proc`/grants reales: la función ya
+  tiene `p_id text`/`v_id text` y los mismos permisos que la migración
+  buscaba dejar. Verificación funcional igual completa contra una fila
+  descartable en `ORG-TEST-DEMO` (vía RPC real, misma llave `anon` que
+  reprodujo el bug original): **creación exitosa** (antes fallaba
+  siempre con `42883`), **edición exitosa** (confirmado que el cambio
+  persistió), **limpieza sin residuo** (0 filas en `INSPECCIONES` y las
+  6 `CAP_*` para esa fila de prueba, verificado después). `npm run
+  build` limpio.
+  **Hallazgo aparte, sin resolver — posible pérdida de datos:** el paso
+  de verificación pedía confirmar que 2 filas legacy de `COOP-JS` en
+  `INSPECCIONES` seguían intactas. **`INSPECCIONES` está completamente
+  vacía (0 filas)** — no había nada que verificar. No se investigó la
+  causa (fuera de alcance, y requeriría acceso a backups/logs de
+  Supabase). Es posible que esté relacionado con el hallazgo anterior
+  (alguien probando el fix a mano pudo haber limpiado de más), pero es
+  una hipótesis, no un hecho confirmado. **Pendiente de que decidas** si
+  esto amerita revisar un backup de Supabase o si esas 2 filas ya no
+  hacían falta. Ver `AI_STATE.md` (`2026-09-03f`) para el detalle
+  completo de ambos hallazgos.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
