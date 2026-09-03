@@ -12,6 +12,7 @@
     "@geoman-io/leaflet-geoman-free": "^2.20.0",
     "@hookform/resolvers": "^3.10.0",
     "@react-pdf/renderer": "^4.6.1",
+    "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.0.0",
     "@tmcw/togeojson": "^7.1.2",
     "@turf/area": "^7.4.0",

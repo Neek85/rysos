@@ -230,6 +230,45 @@
   relación con este cambio; ver `AI_STATE.md` para el detalle completo,
   no se tocó nada de eso acá.
 
+- **(2026-09-03) Login real en la web — Fase B (login real,
+  implementado y verificado en vivo):** pantalla `/login`
+  (email+contraseña, Supabase Auth real) + `middleware.js` **extendido**
+  (no reemplazado) para exigir, además del gate de contraseña
+  compartida ya activo, una sesión real validada con `auth.getUser()`
+  (nunca `getSession()` sin validar) — sin sesión, redirige a
+  `/login?next=<ruta original>` en vez de dejar pasar. Basic Auth sigue
+  activo en paralelo sobre las mismas rutas
+  (`/dashboard/**`/`/api/qc/**`/`/api/gis/**`) — se retira recién en
+  Fase D, después de verificar todo end-to-end. `/trace/[lot_hash]`/
+  `/api/trace/**` siguen totalmente públicos, sin cambios. Clientes
+  nuevos con nombre claro para no confundirse con el cliente de Service
+  Role Key existente: `lib/supabase/browserClient.js`/
+  `lib/supabase/sessionServerClient.js` (sesión real, respetan RLS).
+  Logout real con botón visible en el sidebar de `/dashboard/*`
+  (`lib/actions/authActions.js` + `components/layout/DashboardSidebar.jsx`).
+  Verificado con un test HTTP real contra el dev server (Basic Auth
+  correcto sin sesión → 307 a `/login`, confirmado 2/2) y build/lint
+  limpios (`/login` aparece como ruta nueva, `ƒ Middleware` creció de
+  26.7 kB a 89.9 kB al empaquetar `@supabase/ssr`, mismos 8 warnings
+  preexistentes). Sin cambios en `INSPECCIONES`/`CAP_*` (Fase C) ni
+  aprovisionamiento de cuentas reales (Fase D) — fuera de alcance.
+
+  **Smoke test manual pendiente de confirmación (cuenta descartable ya
+  creada y ACTIVA, en `ORG-TEST-DEMO`):**
+  - Usuario: `smoketest-fase-b@ryzos-test.invalid` — Contraseña:
+    `RyzosSmokeTest-FaseB-2026!` — perfil `admin` en `ORG-TEST-DEMO`.
+  - **(a)** Entrar a `/dashboard/socios` en el navegador (con la
+    contraseña de Basic Auth cuando la pida) sin haber iniciado sesión
+    todavía → debe redirigir a `/login`.
+  - **(b)** Loguearse en `/login` con el usuario/contraseña de arriba →
+    debe llevar directo a `/dashboard/socios` sin pedir nada más.
+  - **(c)** Click en "Cerrar sesión" (sidebar) y volver a entrar a
+    `/dashboard/socios` → debe volver a redirigir a `/login`.
+  - **Borrar la cuenta al terminar de probar** (Supabase Studio → Authentication
+    → buscar `smoketest-fase-b@ryzos-test.invalid` → Delete user — el
+    `ON DELETE CASCADE` de `PERFILES_USUARIO_INTERNOS.user_id` borra el
+    perfil solo).
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

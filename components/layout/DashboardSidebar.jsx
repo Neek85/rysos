@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { signOutAction } from '@/lib/actions/authActions'
 
 // INVARIANTE: la mayoría de los items son el andamiaje de navegación
 // modular pedido (Acopio, "Contratos y Ventas" de Comercialización) —
@@ -92,6 +93,17 @@ export default function DashboardSidebar() {
           </div>
         ))}
       </nav>
+      <div className="border-t border-gray-100 p-3">
+        <form action={signOutAction}>
+          <button
+            type="submit"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50"
+          >
+            <span aria-hidden="true">🚪</span>
+            Cerrar sesión
+          </button>
+        </form>
+      </div>
     </aside>
   )
 }

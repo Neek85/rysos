@@ -15,7 +15,21 @@
 // Fail-closed: si DASHBOARD_GATE_PASSWORD no está definida en el
 // entorno, el gate BLOQUEA igual (nunca deja pasar sin contraseña por
 // una variable de entorno faltante).
+//
+// Fase B (specs/login_real_organizacion_rol.md) EXTIENDE este gate, no
+// lo reemplaza: durante todo el rollout, las mismas rutas exigen Basic
+// Auth Y una sesión real de Supabase Auth, las dos -- Basic Auth se
+// retira recién en Fase D, después de la verificación end-to-end
+// completa. Si Basic Auth pasa pero no hay sesión real (o el JWT no es
+// válido), redirige a /login?next=<ruta original> en vez de 401 --
+// /login es pública, fuera de este matcher, siempre alcanzable.
+//
+// auth.getUser() (NUNCA solo getSession() sin validar) -- getUser()
+// valida el JWT contra el servidor de Supabase Auth de verdad;
+// getSession() solo lee la cookie sin verificar que siga siendo válida
+// (recomendación de seguridad oficial de Supabase para middlewares).
 import { NextResponse } from 'next/server'
+import { createSessionMiddlewareClient } from '@/lib/supabase/sessionServerClient'
 
 const GATE_USER = 'ryzos'
 
@@ -26,7 +40,7 @@ function unauthorized() {
   })
 }
 
-export function middleware(request) {
+export async function middleware(request) {
   const gatePassword = process.env.DASHBOARD_GATE_PASSWORD
   if (!gatePassword) {
     return unauthorized()
@@ -52,7 +66,20 @@ export function middleware(request) {
     return unauthorized()
   }
 
-  return NextResponse.next()
+  // Basic Auth pasó -- segunda verificación: sesión real de Supabase Auth.
+  const response = NextResponse.next({ request })
+  const supabase = createSessionMiddlewareClient(request, response)
+  const {
+    data: { user: sessionUser },
+  } = await supabase.auth.getUser()
+
+  if (!sessionUser) {
+    const loginUrl = new URL('/login', request.url)
+    loginUrl.searchParams.set('next', request.nextUrl.pathname + request.nextUrl.search)
+    return NextResponse.redirect(loginUrl, 307)
+  }
+
+  return response
 }
 
 export const config = {

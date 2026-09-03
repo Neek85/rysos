@@ -2426,3 +2426,116 @@ antes de reportar.
 **No se aplicó nada en Supabase. No se hizo commit todavía en el
 momento de escribir esta entrada** -- migración + specs + plan + tests
 listos para revisión, mismo flujo del resto de la sesión.
+
+## 2026-09-03 — Login real en la web, Fase B — implementado y verificado en vivo
+
+**Paso 1 -- verificación previa (antes de escribir nada):**
+- `@supabase/ssr` NO estaba en `package.json` (solo `@supabase/supabase-js`) -- confirmado.
+- `app/login/` no existía -- confirmado.
+- `middleware.js` real coincidía exactamente con el commit `47cdcbf`
+  (`git diff 47cdcbf -- middleware.js` vacío) -- confirmado antes de
+  tocarlo.
+- `lib/supabaseServerClient.js` (Service Role Key) leído, NO tocado --
+  los clientes nuevos de esta fase viven en `lib/supabase/` (namespace
+  distinto) con nombres que no se confunden:
+  `sessionServerClient.js`/`browserClient.js`, nunca
+  `supabaseServerClient` reutilizado.
+
+**`@supabase/ssr` -- compatibilidad verificada antes de fijar versión:**
+última estable `0.12.5`, peer dependency `@supabase/supabase-js@^2.112.4`.
+`package.json` ya declaraba `^2.0.0` (rango amplio) -- `npm install`
+resolvió `@supabase/supabase-js` a `2.114.0` (dentro del mismo rango
+`^2.0.0`, sin bump de major), sin conflicto. Mismas 6 vulnerabilidades
+`npm audit` que ya existían (transitivas de `eslint@8.x`, sin relación).
+
+**Archivos nuevos:**
+- `lib/supabase/browserClient.js` -- `createBrowserClient`, sesión en
+  cookies (no localStorage como `lib/supabaseClient.js`, el cliente
+  `anon` sin sesión que sigue usando el resto de la app). Único
+  consumidor hoy: `app/login/page.jsx`.
+- `lib/supabase/sessionServerClient.js` -- 2 funciones:
+  `createSessionServerClient()` (Server Components/Actions, `cookies()`
+  de `next/headers`, `setAll` con `try/catch` silencioso para el caso
+  de un Server Component puro que no puede escribir cookies -- mismo
+  criterio que la guía oficial de Supabase) y
+  `createSessionMiddlewareClient(request, response)` (middleware,
+  `request`/`response` de `NextRequest`/`NextResponse` directo --
+  `next/headers` no está disponible ahí). Ambas usan `getAll`/`setAll`
+  (no los `get`/`set`/`remove` deprecados en esta versión).
+- `app/login/page.jsx` -- ruta pública (fuera del `matcher` de
+  `middleware.js` a propósito), formulario email+contraseña,
+  `signInWithPassword` con el cliente de navegador. Mensaje de error
+  genérico ("Email o contraseña incorrectos") sin distinguir usuario
+  inexistente de contraseña incorrecta -- evita enumeración de cuentas,
+  pedido explícito. `?next=` leído de `window.location.search` directo
+  (mismo criterio ya usado para `?org=` en
+  `app/dashboard/socios/page.jsx` -- evita envolver la página en
+  `<Suspense>` solo por `useSearchParams`), validado que empiece con
+  `/` antes de usarlo (evita open redirect).
+- `lib/actions/authActions.js` -- `signOutAction` (`'use server'`),
+  `supabase.auth.signOut()` + `redirect('/login')`. **Con botón real,
+  no código muerto:** wireado en
+  `components/layout/DashboardSidebar.jsx` (`<form action={signOutAction}>`,
+  visible en toda `/dashboard/*` vía el layout compartido
+  `app/dashboard/layout.jsx`).
+- `lib/auth/getCurrentProfile.js` -- sin consumidores todavía (Fase
+  C/D). `auth.getUser()` + `SELECT` a `PERFILES_USUARIO_INTERNOS`
+  (política `rls_select_propio_perfil` ya permite leer la propia fila,
+  Fase A). Degrada a `{userId:null,email:null,organizacion:null,rol:null}`
+  para cualquier caso sin sesión o sin perfil -- nunca lanza error,
+  mismo criterio que `auth_org_id()`/`auth_role()`.
+
+**`middleware.js` -- EXTENDIDO, no reescrito** (confirmado con
+`git diff` que el bloque de Basic Auth original es idéntico, solo se
+agregó código después): tras pasar Basic Auth, `middleware` (ahora
+`async`) crea `response = NextResponse.next({ request })`, resuelve
+`createSessionMiddlewareClient(request, response)`, y llama
+`auth.getUser()` -- **nunca `getSession()` sin validar** (`getUser()`
+valida el JWT contra el servidor de Supabase Auth de verdad;
+`getSession()` solo lee la cookie sin confirmar que siga siendo válida,
+recomendación de seguridad oficial de Supabase). Sin usuario válido:
+`NextResponse.redirect` 307 a `/login?next=<ruta original>`. `matcher`
+sin cambios (`['/dashboard/:path*', '/api/qc/:path*', '/api/gis/:path*']`)
+-- `/login` nunca se agregó ahí, sigue siendo alcanzable sin ninguna
+credencial. `/trace/[lot_hash]`/`/api/trace/**` siguen totalmente fuera
+de los 2 gates (Basic Auth + sesión) -- no están en el `matcher`, cero
+cambio de comportamiento, confirmado con el build (mismas rutas
+públicas, sin `ƒ Middleware` aplicado a ellas).
+
+**Test nuevo, verificado contra el dev server real (no solo diseñado):**
+`tests/test_dashboard_gate_session_redirect_live.mjs` -- 2 tests, HTTP
+real contra `http://localhost:3000` con `redirect: 'manual'`:
+1. Basic Auth correcto + SIN cookie de sesión → confirmado 307 a
+   `/login`, nunca 200.
+2. Basic Auth incorrecto → sigue en 401 (no se rompió con el cambio de
+   Fase B).
+Corridos con `npm run dev` real levantado -- **2/2 passed** (el primer
+intento dio "no se pudo alcanzar" porque Next todavía estaba compilando
+el middleware on-demand en el primer hit real -- normal, un segundo
+intento con el server ya tibio pasó limpio; no es un bug del test ni
+del middleware). Se saltan limpio (mensaje explicativo, no simulan
+nada) si no hay dev server corriendo -- confirmado también así, con el
+dev server apagado antes de correr la suite completa.
+
+**Smoke test manual -- cuenta descartable creada, dejada ACTIVA a
+propósito para que se pruebe primero (no borrada todavía):**
+- Usuario `smoketest-fase-b@ryzos-test.invalid` /
+  `RyzosSmokeTest-FaseB-2026!` (Admin API, `auth.users`), perfil
+  `admin` en `ORG-TEST-DEMO` (`PERFILES_USUARIO_INTERNOS`, Fase A ya
+  aplicada). Documentado en `docs/ESTADO_PROYECTO.md` con los pasos
+  exactos (a/b/c del prompt) y el comando de borrado para después de
+  probar.
+
+**Verificado:** `npm run build` -- compila limpio, ruta `/login` nueva
+en el output (11 rutas), `ƒ Middleware` **26.7 kB → 89.9 kB** (esperado,
+ahora empaqueta `@supabase/ssr`), mismos 8 warnings preexistentes, 0
+errores. `npm run lint` exit code 0, sin hallazgos nuevos. Suite
+completa `node --test tests/*.mjs`: **699 tests, 692 pass, 5 fail
+(mismos 5 preexistentes por CRLF, ya documentados en `2026-09-02c`, sin
+relación con esta fase, no tocados), 2 skip** (el test nuevo de
+redirect, dev server apagado en esa corrida en particular -- ya
+verificado aparte con el server prendido, ver arriba).
+
+**No se tocó `INSPECCIONES`/`CAP_*` (Fase C) ni se aprovisionaron las
+cuentas reales de `COOP-AROMAS-VALLE`/las 3 demo de `ORG-TEST-DEMO`
+(Fase D)** -- fuera de alcance explícito de esta fase.
