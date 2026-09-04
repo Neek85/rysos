@@ -10,7 +10,7 @@ Tu prioridad arquitectónica es garantizar:
 2. **Seguridad Multi-Tenant y por Rol:** Políticas de Row Level Security (RLS) en Supabase aisladas por `ID_Organizacion` en todas las tablas y vistas, y además filtradas por rol (`admin`, `tecnico_campo`, `auditor_qc`, `socio`) y, en el caso del rol `socio`, aisladas también por `socio_id` (un socio nunca ve datos de otro socio, ni de otra organización).
 3. **Desarrollo Guiado por Especificaciones (SDD):** Flujo inviolable: `specs/` -> `plans/` -> Contrato de datos (Zod/TS) -> Código -> Tests autónomos (`pytest` / `npm test`) -> Commit estandarizado.
 4. **Arquitectura "Core + Verticals":** Mismo núcleo de base de datos (`ORGANIZACIONES`, `PADRON_SOCIOS`, Supabase Auth), con interruptores de módulos en la columna `Config` (JSON) para activar o desactivar interfaces agrícolas o pecuarias según la organización. **Granja Valencia (cuyes) opera como un tenant más dentro de este mismo esquema, sin privilegios especiales**, para preservar la posibilidad de comercializar el módulo pecuario a terceros criadores.
-5. **AI Engineering Defensivo:** Prevenir *schema drift* exigiendo siempre la sincronización previa del esquema en vivo (`docs/schema_live.md`) antes de proponer código o migraciones, y un protocolo de recuperación cuando la ejecución autónoma se bloquea.
+5. **AI Engineering Defensivo:** Prevenir *schema drift* exigiendo siempre la sincronización previa del esquema en vivo (`docs/schema_live_core.md` siempre + `docs/schema_live_agricola.md`/`docs/schema_live_pecuario.md` según la vertical que toque la tarea) antes de proponer código o migraciones, y un protocolo de recuperación cuando la ejecución autónoma se bloquea.
 
 ---
 
@@ -32,7 +32,7 @@ Tu prioridad arquitectónica es garantizar:
 * El frontend Next.js (`app/`, `components/`, `lib/`) es **JavaScript plano (`.jsx`/`.js`), sin TypeScript**. No inventar tipados TS en este código existente.
 * **No existe sesión de Supabase Auth en la web actual.** El frontend usa únicamente la llave `anon`; el aislamiento multi-tenant en escritura se hace con validaciones explícitas en Server Actions (`lib/actions/`), no con políticas RLS de sesión autenticada.
 * Las políticas RLS con `authenticated` NO aplican al tráfico real del frontend hoy — las lecturas funcionan porque las vistas consolidadas (`vw_monitoreo_web`, etc.) corren con privilegios del dueño (`postgres`), no del rol que consulta.
-* No existe `npm test` ni `npm run sync-schema`. Las pruebas de frontend se verifican con `npm run build` + `npm run dev`; `docs/schema_live.md` se actualiza manualmente tras cada migración.
+* No existe `npm test` ni `npm run sync-schema`. Las pruebas de frontend se verifican con `npm run build` + `npm run dev`; `docs/schema_live_core.md`/`docs/schema_live_agricola.md`/`docs/schema_live_pecuario.md` (split por vertical desde 2026-09-05, reemplazan al `docs/schema_live.md` único de antes) se actualizan manualmente tras cada migración.
 * **`CLAUDE.md` en la raíz del repositorio es la fuente de verdad técnica del día a día** para Claude Code (comandos, arquitectura real, RLS gotchas). Este documento (V3.1) define reglas de negocio, seguridad y el roadmap — cuando haya conflicto sobre "qué existe hoy", `CLAUDE.md` manda; cuando sea sobre "qué reglas debe seguir el trabajo nuevo", este documento manda.
 
 ### Alcance de TypeScript / Zod / Autenticación (decisión de negocio confirmada):
@@ -75,7 +75,7 @@ Objetivo de la tarea: [Resumen conciso y claro de la funcionalidad]
 
 Instrucciones paso a paso para el repositorio local:
 1. Revisa las reglas en `CLAUDE.md` y la especificación en `specs/[tarea].md`.
-2. Verifica el esquema DB en vivo en `docs/schema_live.md`.
+2. Verifica el esquema DB en vivo en `docs/schema_live_core.md` (siempre) y en `docs/schema_live_agricola.md`/`docs/schema_live_pecuario.md` según la vertical de la tarea.
 3. Si requiere migración SQL, créala en `supabase/migrations/YYYYMMDDHHMMSS_[tarea].sql`, garantizando idempotencia y especificando explícitamente qué rol tiene SELECT/INSERT/UPDATE/DELETE.
 4. Ejecuta los cambios requeridos en el código, respetando el contrato de datos definido abajo.
 5. Corre la suite de pruebas autónoma (`pytest tests/` o `npm test`), incluyendo test de aislamiento RLS, y el linter (`npm run lint`).
@@ -150,7 +150,7 @@ RYZOS opera tres apps móviles distintas sobre el mismo backend Supabase, cada u
 
 No es necesario adjuntar archivos estáticos en la interfaz del Gem. El contexto de la base de datos y la arquitectura se mantiene dinámico directamente en el repositorio local mediante:
 
-1. `docs/schema_live.md`: se actualiza automáticamente al ejecutar `npm run sync-schema`.
+1. `docs/schema_live_core.md` / `docs/schema_live_agricola.md` / `docs/schema_live_pecuario.md` (split por vertical, reemplazan al `docs/schema_live.md` único de antes de 2026-09-05): se actualizan manualmente tras cada migración -- no existe un script `npm run sync-schema` real hoy.
 2. `CLAUDE.md`: mantiene las reglas de AI Engineering y contexto del proyecto para la CLI.
 3. `ryzos_state_of_the_nation_v3.md`: mantiene el blueprint histórico y el roadmap arquitectónico.
 4. `AI_STATE.md`: bitácora de bloqueos y causas raíz cuando la ejecución autónoma falla (ver Sección 3.2).

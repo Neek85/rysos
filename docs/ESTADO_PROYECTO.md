@@ -172,6 +172,19 @@
   revisión de la Sección 4.1. `npm run build`/`npm run lint` limpios.
   **Nota de autoría:** redactada por Claude (Cowork) de punta a punta.
 
+- **(2026-09-04) Fix menor: `docs/RYZOS_ORQUESTADOR_V3.1.md` seguía
+  referenciando `docs/schema_live.md` (ya no existe, partido en 3 el
+  2026-09-05) y `npm run sync-schema` (nunca existió como script
+  real):** 4 referencias corregidas (Sección 1 punto 5, Sección 2, el
+  prompt plantilla de la Sección 4, y Sección 7) — todas apuntan ahora a
+  `docs/schema_live_core.md`/`_agricola.md`/`_pecuario.md`, y la
+  Sección 7 ya no dice "se actualiza automáticamente al ejecutar `npm
+  run sync-schema`" (confirmado otra vez contra `package.json` que ese
+  script no existe) sino "se actualizan manualmente tras cada
+  migración". Documentación pura, sin tocar RLS/SQL — no requirió el
+  gate de la Sección 4.1. `npm run build` limpio (no afectado, cambio
+  de un solo `.md`).
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
