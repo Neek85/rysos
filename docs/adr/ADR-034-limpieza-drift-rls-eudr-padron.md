@@ -1,7 +1,6 @@
 # ADR-034 — Limpieza de drift RLS en las 5 tablas EUDR/PADRON + creación de las políticas oficiales faltantes en `PADRON_SOCIOS`/`PADRON_PARCELAS`
 
-- **Estado:** Propuesto — migración escrita, **sin aplicar y sin
-  commitear**, pendiente de aprobación.
+- **Estado:** Implementado — aplicado y commiteado a `staging` (`f8ce9b4`).
 - **Migraciones:**
   `supabase/migrations/20260903180720_limpieza_drift_rls_eudr_padron.sql`
   (nueva, este ADR).

@@ -1,7 +1,6 @@
 # ADR-033 — Aislamiento real por organización en `INSPECCIONES` + las 6 `CAP_*`, cierre completo de `anon` (Fase C Paso 2)
 
-- **Estado:** Propuesto — migración escrita, **sin aplicar y sin
-  commitear**, pendiente de aprobación.
+- **Estado:** Implementado — aplicado y commiteado a `staging` (`27f0504`).
 - **Migraciones:**
   `supabase/migrations/20260903170404_fase_c_paso2_rls_real_inspecciones_cap.sql`
   (nueva, este ADR). **Supersede** (no complementa) a

@@ -1,8 +1,7 @@
 # ADR-035 — Piloto de "Camino 1": `updateQcRecordAttributes`/`updateQcRecordGeometry` migran de Service Role Key a sesión real
 
-- **Estado:** Propuesto — código ya escrito, ADR ya escrito, verificación
-  funcional real ya hecha contra la instancia de producción — **sin
-  commitear**, pendiente de aprobación.
+- **Estado:** Implementado — commiteado y pusheado a `staging`
+  (`88d9f1c`).
 - **Migraciones:** ninguna nueva — depende enteramente de ADR-034
   (`rls_write_eudr_monitoreo`/`rls_write_eudr_uso_suelo`/
   `rls_write_eudr_instalaciones`, ya aplicadas) y de la infraestructura

@@ -1,6 +1,6 @@
 # ADR-032 — Limpieza de 8 políticas RLS huérfanas, nombradas en español, en `INSPECCIONES` y las 6 `CAP_*`
 
-- **Estado:** Propuesto — migración escrita, **sin aplicar y sin commitear**, pendiente de aprobación.
+- **Estado:** Implementado — aplicado y commiteado a `staging` (`fd8b7c3`).
 - **Migraciones:**
   `supabase/migrations/20260903064952_limpieza_drift_rls_policies_espanol.sql`
   (nueva, este ADR).
