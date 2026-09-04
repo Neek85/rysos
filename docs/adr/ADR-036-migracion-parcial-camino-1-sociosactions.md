@@ -1,9 +1,7 @@
 # ADR-036 — Piloto de "Camino 1", Fase A.1: 4 funciones de `sociosActions.js` migran a RLS por sesión real
 
-- **Estado:** Propuesto — código y ADR escritos, verificación funcional
-  real hecha contra producción — pendiente de commitear (ver instrucción
-  de la tarea; a diferencia de ADR-032/033/034/035, esta vez el commit
-  es parte del mismo cierre, no un paso separado de aprobación previa).
+- **Estado:** Implementado — commiteado y pusheado a `staging`
+  (`f1279d3`).
 - **Migraciones:** ninguna nueva — depende enteramente de `ADR-034`
   (RLS real de `PADRON_SOCIOS`/`PADRON_PARCELAS`, ya aplicada) y de la
   infraestructura de sesión de Fase B (`createSessionServerClient`, ya
@@ -143,6 +141,19 @@ de seguridad** — el resultado final (la escritura se rechaza) es
 idéntico; solo cambia cuál de los 2 mensajes ya existentes ve el
 usuario. Confirmado en la verificación funcional (punto `e` abajo) que
 el mensaje resultante sigue siendo claro y accionable.
+
+**Hallazgo positivo, confirmado indirectamente en Fase A.2
+(`ADR-037`):** el mismo `WITH CHECK` de sesión también bloquea un
+`organizationId` que no coincide con la organización real del usuario
+en un `INSERT` de un registro **nuevo**, no solo en la edición de uno
+existente — verificado en vivo con `createSocio` (`fn_crear_socio_con_certificaciones`,
+`INSERT` dentro de la RPC): `403`, `42501 "new row violates row-level
+security policy"`, un error real de Postgres, distinto del patrón "0
+filas afectadas" de las 4 funciones de este ADR (que son todas
+`UPDATE`s, nunca `INSERT`s de un registro nuevo). Confirma que el
+diseño de RLS de ADR-034 cubre ambos casos (edición y alta) de forma
+consistente, sin necesidad de ningún guard adicional del lado de la
+aplicación para el caso de alta.
 
 ## Verificación funcional real
 

@@ -513,6 +513,35 @@
   verificación funcional real contra producción), no por un segundo
   revisor externo.
 
+- **(2026-09-04) ADR-037 — piloto de "Camino 1", Fase A.2: certificaciones
+  de socio migran a RLS por sesión — `sociosActions.js` queda 100% bajo
+  sesión real:** cierra los 2 gaps que quedaban pendientes de ADR-036 —
+  se agregaron 3 políticas RLS nuevas para `authenticated`
+  (`SOCIO_CERTIFICACIONES`: `SELECT`+escritura; `CERTIFICACIONES_CATALOGO`:
+  solo `SELECT`, catálogo compartido) y se otorgó `GRANT EXECUTE` sobre
+  `fn_crear_socio_con_certificaciones` (antes solo `postgres`/
+  `service_role`). Las políticas `anon` existentes no se tocaron.
+  `createSocio`/`updateSocio`/`resolveSocioCertFlags` ahora usan
+  `createSessionServerClient()` — el import de `getSupabaseServerClient`
+  se eliminó del archivo por completo (sin uso restante). **Verificado
+  en vivo:** crear un socio descartable con 2 certificaciones (RLS
+  correcto en `id_organizacion`), editarlo cambiando el set de
+  certificaciones (`DELETE`+`INSERT` bajo sesión), releer sus flags
+  (`resolveSocioCertFlags`), y un intento cruzado con la organización
+  equivocada — que reveló un modo de falla **distinto** al de Fase A.1:
+  no "0 filas afectadas" (eso es de `UPDATE`s), sino un error real de
+  Postgres (`403`, `42501`, violación de RLS) porque `createSocio` hace
+  un `INSERT` nuevo dentro de una RPC. Filas descartables borradas al
+  terminar. `npm run build`/`npm run lint` limpios. Ver
+  [ADR-037](adr/ADR-037-fase-a2-rls-certificaciones-socios.md) para el
+  detalle completo — incluye una corrección menor de `ADR-036` (estado
+  actualizado a "Implementado", más una nota sobre este mismo hallazgo
+  del `INSERT`). Sigue pendiente, sin tocar: Fase A.3
+  (`gisActions.js`, atada al `resolveOrganizationId` de la Consola QC).
+  **Misma nota de autoría:** redactada por Claude (Cowork) de punta a
+  punta, revisión de seguridad cubierta en el mismo flujo, sin segunda
+  revisión de Gemini.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
