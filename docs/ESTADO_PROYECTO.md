@@ -1,5 +1,5 @@
 # ESTADO DEL PROYECTO RYZOS
-*Última actualización: 3 de septiembre, 2026*
+*Última actualización: 5 de septiembre, 2026*
 
 > Este documento es la "bitácora" del proyecto. Aquí se anota qué se hizo, qué falta y qué decisiones están pendientes. No contiene reglas técnicas fijas (esas viven en el prompt orquestador RYZOS V3.1) — esto es solo el día a día.
 
@@ -443,6 +443,33 @@
   sin fuga cross-org. No se tocó código de la app (la migración es RLS
   puro). Ver [ADR-034](adr/ADR-034-limpieza-drift-rls-eudr-padron.md) y
   `AI_STATE.md` (`2026-09-03j`) para el detalle completo.
+
+- **(2026-09-05) ADR-035 cerrado — piloto de "Camino 1" (Fase D Paso 2):
+  `updateQcRecordAttributes`/`updateQcRecordGeometry` migran de Service
+  Role Key a sesión real:** en `lib/actions/qcActions.js`, solo esas 2
+  funciones (edición de atributos/geometría de un registro PENDIENTE en
+  la Consola QC) ahora corren con `createSessionServerClient()` — RLS
+  real de ADR-034 como autoridad, no un bypass. `approveQcRecord`/
+  `rejectQcRecord` quedan con Service Role Key a propósito: aprobar/
+  rechazar necesita distinguir `admin`/`auditor_qc` de `tecnico_campo`,
+  y el RLS actual de las 3 tablas EUDR solo distingue por organización
+  — eso es una decisión de diseño aparte, no un olvido. **Verificado en
+  vivo:** con una fila descartable (creada y borrada en la misma
+  verificación — las 3 tablas EUDR estaban completamente vacías, no
+  había ningún registro real disponible) y una sesión real, el `UPDATE`
+  afectó exactamente 1 fila, no 0 — confirma que el RLS real permite la
+  escritura al usuario correcto en vez de bloquearla. `npm run build`
+  limpio.
+  **Hallazgo abierto, sin causa determinada:** `EUDR_MONITOREO`/
+  `EUDR_USO_SUELO`/`EUDR_INSTALACIONES` están vacías para **todas** las
+  organizaciones, no solo la de prueba — mismo síntoma que
+  `INSPECCIONES` (`AI_STATE.md` `2026-09-03f`/`g`), ahora en 3 tablas
+  más. No investigado en esta tarea — mismo límite de entorno (sin
+  acceso a backups/logs de Supabase desde acá), pendiente de que
+  decidas si amerita revisar Point-in-Time Recovery/Database Logs en
+  Supabase Studio. Ver
+  [ADR-035](adr/ADR-035-piloto-camino-1-rls-sesion-qc-atributos-geometria.md)
+  y `AI_STATE.md` (`2026-09-05`) para el detalle completo.
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

@@ -3135,3 +3135,56 @@ un fallo de RLS ni de la migración.
 
 **No hizo falta `npm run build`** -- confirmado en el ADR que esta
 migración no toca ningún archivo de `app/`/`lib/`/`components/`.
+
+## 2026-09-05 — ADR-035 cerrado: piloto de Camino 1 (Fase D Paso 2) — updateQcRecordAttributes/updateQcRecordGeometry migran a RLS por sesión real
+
+**Cambio:** en `lib/actions/qcActions.js`, solo
+`updateQcRecordAttributes`/`updateQcRecordGeometry` reemplazan
+`const supabase = getSupabaseServerClient()` (Service Role Key) por
+`const supabase = await createSessionServerClient()` (sesión real del
+usuario, `@supabase/ssr`, respeta RLS). `approveQcRecord`/
+`rejectQcRecord`/`resolveRadioContextoM`/`fetchParcelasVecinas`
+quedan exactamente igual -- decisión explícita, no un paso pendiente:
+aprobar/rechazar necesita distinguir `admin`/`auditor_qc` de
+`tecnico_campo`, y el RLS real de ADR-034 en las 3 tablas EUDR hoy solo
+distingue por organización, no por rol -- migrarlas también habría dado
+a cualquier `authenticated` de la organización correcta, incluido
+`tecnico_campo`, la capacidad de aprobar/rechazar sin control de rol
+real. Ver
+`docs/adr/ADR-035-piloto-camino-1-rls-sesion-qc-atributos-geometria.md`
+para el diseño completo, incluida la razón histórica del Service Role
+Key original (bug real de 2026-08: RLS `authenticated`-only bloqueaba
+todo `UPDATE` desde el cliente `anon`, 0 filas siempre) y por qué ya no
+aplica (Fase B dio sesión real server-side, ADR-034 dio RLS real por
+organización).
+
+**Verificación funcional real (recap, detalle completo en el ADR):**
+plan original (usar una fila `PENDIENTE` real de `ORG-TEST-DEMO` y
+revertir el campo al terminar) tuvo que ajustarse en el momento --
+**las 3 tablas EUDR (`EUDR_MONITOREO`, `EUDR_USO_SUELO`,
+`EUDR_INSTALACIONES`) resultaron completamente vacías, 0 filas cada
+una**, no solo 0 `PENDIENTE`. No se inventó dato real -- se creó una
+fila 100% descartable (Service Role, `ORG-TEST-DEMO`, `PENDIENTE`),
+se actualizó `observaciones` con la sesión real vía `PATCH` REST
+replicando exactamente el `.update().match()` de
+`updateRecordAttributes`, confirmando **1 fila afectada (no 0)** --
+la señal correcta de que el RLS real de `authenticated` permite la
+escritura, no la bloquea -- y se borró la fila completa al terminar
+(`EUDR_MONITOREO` vuelve a 0 filas).
+
+**Hallazgo abierto, sin causa determinada -- distinto del caso ya
+documentado de `INSPECCIONES`:** las 3 tablas EUDR están vacías para
+**todas** las organizaciones (no solo `ORG-TEST-DEMO`), confirmado con
+`SELECT count(*)` sin filtro de organización sobre las 3 tablas. Es el
+mismo síntoma general ("tabla central completamente vacía, sin causa
+clara") que `INSPECCIONES` (`2026-09-03f`/`g`), pero ahora extendido a
+3 tablas más, con datos que en teoría deberían tener contenido real
+(monitoreos EUDR de `COOP-AROMAS-VALLE`, no solo de prueba). No se
+investigó la causa en esta tarea -- fuera de alcance del piloto, mismo
+límite de entorno ya documentado (sin acceso a backups/logs de
+Supabase desde acá). Queda pendiente de que el arquitecto decida si
+amerita revisar Point-in-Time Recovery/Database Logs en Supabase
+Studio, igual que se recomendó para `INSPECCIONES`.
+
+**`npm run build`:** limpio -- mismos 3 warnings preexistentes de
+ESLint, 0 errores, mismas 19 rutas.
