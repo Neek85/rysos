@@ -218,6 +218,37 @@
   (recon previo + verificación funcional real contra producción), sin
   segunda revisión de Gemini.
 
+- **(2026-09-04) ADR-039 — Fase D: aprobar/rechazar en la Consola QC
+  migran a sesión real, con control de rol en Postgres — cierra el
+  pendiente que había dejado abierto ADR-035:** `approveQcRecord`/
+  `rejectQcRecord` (`lib/actions/qcActions.js`) ahora corren con
+  `createSessionServerClient()`. Lo que las bloqueaba antes (RLS por
+  organización no distingue rol) se cerró con un trigger nuevo en
+  Postgres (`fn_enforce_qc_approval_roles`, `BEFORE UPDATE` en las 3
+  tablas EUDR): si `estado_revision` cambia de verdad, exige
+  `admin`/`auditor_qc` (`auth_role()`), si no lanza `42501`. Con
+  bypass para `service_role`/`postgres` (necesario para que
+  `scripts/qgis_qc_actions.py`, que aprueba/rechaza vía conexión
+  directa a Postgres desde QGIS Desktop, siga funcionando — no estaba
+  en la redacción original del prompt, se agregó tras revisar ese
+  script). **2 correcciones de premisa antes de escribir código:** el
+  número de ADR pedido (`038`) ya estaba tomado por la tarea anterior
+  de esta misma sesión (Fase A.3) — se usó `039`; el timestamp de
+  migración pedido (`20260906000000`) estaba 2 días adelantado de la
+  fecha real — se usó `20260904190000`. También se confirmó en vivo
+  que no existe ningún `CHECK` constraint de Postgres sobre
+  `estado_revision` (es solo convención de aplicación) — no se agregó
+  ninguno, no se pidió explícitamente. **Verificado en vivo con 3
+  sesiones reales de rol distinto** (`auditor_qc`/`tecnico_campo`/
+  `admin`, más un `admin` de otra organización): aprobar con
+  `auditor_qc` o `admin` → `200`; aprobar con `tecnico_campo` → `403`,
+  `42501`, mensaje del trigger, fila real sin cambios; aprobar desde
+  otra organización → `200`, `0` filas, RLS de organización bloquea
+  antes de que el rol importe. Fila descartable borrada al terminar.
+  `npm run build`/`npm run lint` limpios. Ver
+  [ADR-039](adr/ADR-039-fase-d-qc-aprobar-rechazar-roles-rls.md) para
+  el detalle completo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
