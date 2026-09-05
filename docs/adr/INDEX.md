@@ -48,6 +48,7 @@ corrigieron como parte de esta misma tarea, junto con este índice.
 | [035](ADR-035-piloto-camino-1-rls-sesion-qc-atributos-geometria.md) | Piloto "Camino 1": atributos/geometría de QC migran a sesión real | `EUDR_*` (`lib/actions/qcActions.js`) | 2026-09-05 | **Implementado** (`88d9f1c`) |
 | [036](ADR-036-migracion-parcial-camino-1-sociosactions.md) | Piloto "Camino 1", Fase A.1: 4 funciones de `sociosActions.js` a sesión real | `PADRON_SOCIOS`/`PADRON_PARCELAS` | 2026-09-05 | Implementado (`f1279d3`) |
 | [037](ADR-037-fase-a2-rls-certificaciones-socios.md) | Piloto "Camino 1", Fase A.2: certificaciones de socio a sesión real | `SOCIO_CERTIFICACIONES`/`CERTIFICACIONES_CATALOGO` | 2026-09-04 | Implementado (`77f98a1`) |
+| [038](ADR-038-fase-a3-rls-sesion-gis-ingestor.md) | Piloto "Camino 1", Fase A.3: las 3 ramas EUDR del Ingestor Espacial a sesión real | `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` (`lib/actions/gisActions.js`) | 2026-09-04 | Implementado |
 
 ## Notas
 

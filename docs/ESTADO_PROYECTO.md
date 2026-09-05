@@ -1,5 +1,5 @@
 # ESTADO DEL PROYECTO RYZOS
-*Última actualización: 5 de septiembre, 2026*
+*Última actualización: 4 de septiembre, 2026*
 
 > Este documento es la "bitácora" del proyecto. Aquí se anota qué se hizo, qué falta y qué decisiones están pendientes. No contiene reglas técnicas fijas (esas viven en el prompt orquestador RYZOS V3.1) — esto es solo el día a día.
 
@@ -184,6 +184,39 @@
   migración". Documentación pura, sin tocar RLS/SQL — no requirió el
   gate de la Sección 4.1. `npm run build` limpio (no afectado, cambio
   de un solo `.md`).
+
+- **(2026-09-04) ADR-038 — piloto de "Camino 1", Fase A.3: las 3 ramas
+  EUDR del Ingestor Espacial migran a RLS por sesión — cierra el pilar
+  de escritura que quedaba pendiente:** en `lib/actions/gisActions.js`,
+  las 3 ramas `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` de
+  `uploadGeoSpatialFeature` ahora corren con `createSessionServerClient()`
+  y resuelven la organización server-side vía `supabase.rpc('auth_org_id')`
+  — ya no confían en el parámetro `organizationId` que manda el
+  cliente. La rama `PADRON_PARCELAS` (delega en `createParcela`, ya
+  migrada en ADR-036) sigue usando ese parámetro, sin tocar. **Sin
+  migración SQL nueva** — la política `rls_write_eudr_*` (`FOR ALL`) ya
+  existía desde ADR-034 y ya cubría `INSERT`, reconfirmado en vivo antes
+  de escribir código. **Esto corrige un bug real y actual:** las 3
+  tablas EUDR siguen vacías para las 2 organizaciones (mismo hallazgo
+  abierto de ADR-035, sin causa raíz determinada), y el código viejo
+  resolvía la organización con `resolveOrganizationId(records)` sobre
+  esos mismos registros — con 0 filas, esa función siempre devolvía
+  `null` y bloqueaba la escritura para cualquier organización antes de
+  cualquier llamada de red. Ahora `auth_org_id()` no depende de que
+  existan filas, así que el bloqueo queda cerrado de raíz. **Verificado
+  en vivo:** con sesión real, insert legítimo en las 3 tablas (`201`,
+  `ID_Organizacion` correcto) e insert falsificado con la organización
+  de `COOP-AROMAS-VALLE` en las 3 tablas (`403`, `42501`, violación de
+  RLS) — confirma que un `organizationId` falsificado ya no tiene
+  ningún efecto, ni en el código (ya no se usa) ni si algo lo
+  reintrodujera (RLS lo bloquea igual). Filas descartables borradas al
+  terminar, `0` filas confirmadas en las 3 tablas después. `npm run
+  build`/`npm run lint` limpios. Ver
+  [ADR-038](adr/ADR-038-fase-a3-rls-sesion-gis-ingestor.md) para el
+  detalle completo. **Nota de autoría:** redactada por Claude (Cowork)
+  de punta a punta, revisión de seguridad cubierta en el mismo flujo
+  (recon previo + verificación funcional real contra producción), sin
+  segunda revisión de Gemini.
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
