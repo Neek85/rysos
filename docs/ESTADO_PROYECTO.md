@@ -471,6 +471,48 @@
   [ADR-035](adr/ADR-035-piloto-camino-1-rls-sesion-qc-atributos-geometria.md)
   y `AI_STATE.md` (`2026-09-05`) para el detalle completo.
 
+- **(2026-09-05) ADR-036 — piloto de "Camino 1", Fase A.1:
+  `createParcela`/`updateParcela`/`deactivateParcela`/`deactivateSocio`
+  migran de Service Role Key a sesión real:** mismo patrón que ADR-035,
+  esta vez sobre `lib/actions/sociosActions.js`. Las 4 funciones ahora
+  corren con `createSessionServerClient()` — el RLS real de
+  `PADRON_SOCIOS`/`PADRON_PARCELAS` (ADR-034) es la autoridad.
+  `createSocio`/`updateSocio` (certificaciones) y
+  `resolveSocioCertFlags` quedan con Service Role Key a propósito —
+  bloqueados por 2 gaps reales confirmados en el reconocimiento previo:
+  `fn_crear_socio_con_certificaciones` no tiene `GRANT EXECUTE` para
+  `authenticated`, y `SOCIO_CERTIFICACIONES`/`CERTIFICACIONES_CATALOGO`
+  no tienen ninguna política RLS para `authenticated` — eso es Fase A.2,
+  tarea aparte. También se corrigió, en `specs/padron_web_socios.md`,
+  la premisa retractada de "padrón compartido en vivo con otro
+  repositorio" (ADR-023 ya la había corregido en `ADR-002`/`ADR-007`,
+  pero nunca se había propagado a este spec — que es justamente el que
+  sostenía el diseño original de `sociosActions.js`). **Verificado en
+  vivo, con sesión real:** crear, editar y dar de baja una parcela
+  descartable (`201`→`200`→`200`, `activo: false` confirmado); dar de
+  baja un socio descartable con cascada real a su parcela (`activo:
+  false` en ambas tablas); un intento cruzado con el `ID_Organizacion`
+  de `COOP-AROMAS-VALLE` sobre una fila real de `ORG-TEST-DEMO` dio 0
+  filas afectadas (bloqueado, mensaje claro, sin regresión de
+  seguridad — solo cambia cuál de los 2 mensajes de error ya existentes
+  ve el usuario, ver el ADR para el detalle). Filas descartables
+  borradas al terminar. `npm run build`/`npm run lint`/`npm run dev`
+  limpios. Ver
+  [ADR-036](adr/ADR-036-migracion-parcial-camino-1-sociosactions.md)
+  para el detalle completo, incluidos los 2 pendientes explícitos
+  (Fase A.2: certificaciones; Fase A.3: los 3 targets EUDR del
+  Ingestor de Capas Espaciales, que en realidad corre bajo
+  `/dashboard/qc`, no `/dashboard/mapa`).
+  **Nota de autoría/revisión:** esta tarea la redactó Claude (Cowork)
+  de punta a punta — spec de corrección, ADR, código, verificación
+  funcional en vivo y bitácora — sin una segunda revisión de Gemini en
+  el medio (a diferencia del protocolo multi-IA que describe
+  `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1 para tareas de SQL/RLS/
+  migraciones/seguridad). La revisión de seguridad de este cambio queda
+  cubierta dentro del mismo flujo de esta conversación (recon previo +
+  verificación funcional real contra producción), no por un segundo
+  revisor externo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

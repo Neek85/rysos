@@ -33,6 +33,29 @@ repositorio (`backend-inspecciones`, mismo Postgres, ver
 escritura vía `anon` expondría esas tablas (con DNI/nombre real) a
 cualquiera con la anon key pública.
 
+> **Corrección de premisa (2026-09-05, ver
+> [ADR-023](adr/ADR-023-backend-inspecciones-ya-no-comparte-base.md) y
+> [ADR-036](adr/ADR-036-migracion-parcial-camino-1-sociosactions.md)):**
+> `backend-inspecciones` ya no comparte base de datos en vivo con este
+> proyecto — el párrafo anterior cita esa razón ("compartido en vivo con
+> otro repositorio") como parte de la justificación original contra RLS.
+> Esa parte específica ya no aplica (mismo criterio ya aplicado en
+> `ADR-002`/`ADR-007`, nunca propagado hasta acá). La otra parte de la
+> misma justificación — **evitar escritura vía `anon` key pública, por
+> PII real (DNI/nombre)** — sigue intacta y sola basta para sostener por
+> qué nunca se abrió una política RLS `anon` de escritura. Importante:
+> ese motivo **no es un argumento en contra de RLS por sesión
+> (`authenticated`)** — es específico de `anon` (la llave pública, sin
+> sesión, embebida en el bundle JS). Una vez que existe sesión real
+> (Fase B, `middleware.js` exige sesión Supabase Auth válida en todo
+> `/dashboard/**` desde entonces) y RLS real por organización
+> (`ADR-034`), escribir bajo `authenticated` con RLS como autoridad es
+> exactamente lo seguro que este documento pedía desde el principio —
+> ADR-036 (Fase A.1) ya migró `createParcela`/`updateParcela`/
+> `deactivateParcela`/`deactivateSocio` a ese patrón. No se reescribe el
+> párrafo original para conservar el registro histórico de la decisión
+> tal como se tomó.
+
 **En su lugar: Server Actions de Next.js** (`'use server'`,
 `lib/actions/sociosActions.js`) que corren en el servidor con un cliente
 Supabase nuevo autenticado con `SUPABASE_SERVICE_ROLE_KEY`
