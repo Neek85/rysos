@@ -249,6 +249,44 @@
   [ADR-039](adr/ADR-039-fase-d-qc-aprobar-rechazar-roles-rls.md) para
   el detalle completo.
 
+- **(2026-09-06) ADR-040 — infraestructura de base de datos para
+  sincronización móvil offline-first (sin código de app todavía):**
+  3 tablas nuevas — `SYNC_QUEUE` (cola genérica de mutaciones offline
+  por dispositivo, RLS por organización sin restricción de rol),
+  `PRECIOS_PRODUCTO` (lectura por organización para cualquier
+  autenticado, escritura exclusiva `admin`), `SOCIO_ACTIVACION_CODES`
+  (códigos de activación, exclusivo `admin`) — y 2 columnas nuevas en
+  `PADRON_SOCIOS` (`pin_hash`, `pin_configurado_en`). **Corrección de
+  premisa central antes de escribir código:** el prompt pedía RLS de
+  lectura para "socios/técnicos" en `PRECIOS_PRODUCTO`, pero el auth de
+  socios (DNI+PIN) no existe todavía en este repo — `'socio'` no es un
+  rol válido en `PERFILES_USUARIO_INTERNOS` y
+  `specs/login_real_organizacion_rol.md` confirma que la app del Socio
+  nunca usa el login real de `admin`/`tecnico_campo`/`auditor_qc`. Con
+  el usuario, se decidió que el RLS de estas 3 tablas cubra únicamente
+  los 3 roles que sí tienen sesión real hoy — el acceso de la App del
+  Socio queda explícitamente para una fase posterior, cuando exista ese
+  mecanismo. `specs/mobile_offline_sync.md` (nuevo) tampoco existía —
+  se redactó desde cero siguiendo el flujo SDD antes de la migración.
+  **Hallazgo durante la implementación:** se intentó un `REVOKE` de
+  columna sobre `pin_hash` (defensa en profundidad extra, no pedida) y
+  se descartó — Supabase ya otorga `SELECT` de tabla completa a
+  `authenticated`/`anon`, y un `REVOKE` de columna no anula un `GRANT`
+  de tabla ya existente (confirmado con `has_column_privilege()` que no
+  tuvo efecto real); `pin_hash` queda protegido al mismo nivel que
+  `socio_dni` — por RLS de organización, no por ACL de columna.
+  **Verificado en vivo** con 4 sesiones reales: insert en `SYNC_QUEUE`
+  sin especificar organización (`201`, resuelta sola vía
+  `auth_org_id()`); lectura de `PRECIOS_PRODUCTO` scopeada por
+  organización; `tecnico_campo` bloqueado al escribir precios (`403`,
+  `42501`), `admin` sí puede; intento cruzado entre organizaciones
+  bloqueado igual. Filas descartables borradas al terminar. `npm run
+  build`/`npm run lint` limpios (sin cambios de código de aplicación).
+  Ver
+  [ADR-040](adr/ADR-040-infraestructura-sincronizacion-movil-offline.md)
+  para el detalle completo, incluido todo lo que queda explícitamente
+  fuera de alcance (RPC de PIN, tablas de acopio, código React Native).
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

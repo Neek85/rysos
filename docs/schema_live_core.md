@@ -122,7 +122,8 @@ adicionales no documentadas aquí.
 ### `public."PADRON_SOCIOS"`
 Schema real completo confirmado en vivo el 2026-08-18 (`specs/padron_web_socios.md`,
 consulta REST directa, no solo lo referenciado por migraciones):
-`ID_Socio` (PK, código manual ej. `JS-00001`, no autogenerado), `ID_Organizacion`,
+~~`ID_Socio` (PK, código manual ej. `JS-00001`, no autogenerado)~~
+**(desactualizado — ver corrección abajo)**, `ID_Organizacion`,
 `codigo_finca`, `socio_nombre_completo`, `socio_dni` (8 dígitos), `socio_genero`,
 `socio_fecha_nacimiento`, `celular_socio`, `conyuge_nombre`, `conyuge_dni`,
 `socio_departamento`, `socio_provincia`, `socio_distrito`, `localidad`,
@@ -131,9 +132,24 @@ consulta REST directa, no solo lo referenciado por migraciones):
 (`cert_nop_usda`, `ue_2018_848`, `cor_canada`, `cert_ds_0442006_ag`,
 `cert_lpo_mx`, `cert_rainforest`, `cert_comercio_justo`, `cert_fair_trade_usa`
 — **congeladas desde ADR-027**, ver nota de certificaciones abajo),
-`socio_fecha_ingreso`, `creado_en`, `actualizado_en`, `creado_por`.
+`socio_fecha_ingreso`, `creado_en`, `actualizado_en`, `creado_por`. Desde
+`ADR-040` (2026-09-06): `pin_hash` (`text`, nullable) y
+`pin_configurado_en` (`timestamptz`, nullable) — para el PIN de la
+futura App del Socio (React Native, no existe código todavía); sin
+lógica de aplicación que las use aún. `pin_hash` **no** tiene
+restricción de lectura por columna — se intentó un `REVOKE` y no tuvo
+efecto real (Supabase ya otorga `SELECT` de tabla completa a
+`authenticated`/`anon`); queda protegido solo por el RLS de fila normal
+de esta tabla, igual que `socio_dni`.
 **No existe ninguna columna `sector`** (verificado — algo a tener presente si
 una tarea futura la asume).
+
+**Corrección de PK (2026-09-06, ver `ADR-040`):** `ID_Socio` **ya NO es
+la PK** — confirmado en vivo con `pg_constraint` que el PK real es `id`
+(`uuid`, surrogate generado, desde `ADR-026`), con
+`UNIQUE("ID_Organizacion", "ID_Socio")` aparte (permite que el mismo
+código `ID_Socio` exista en más de una organización). Cualquier FK
+nueva hacia esta tabla debe apuntar a `id`, no a `ID_Socio`.
 - **RLS (desactualizado — ver ADR-034/036/037 para el estado real):** el
   texto original decía "lectura/escritura para `authenticated` scopeado
   a `ID_Organizacion` (Tarea 9.1) + lectura adicional para `anon`". Desde
@@ -146,6 +162,41 @@ una tarea futura la asume).
   `deactivateSocio` (`lib/actions/sociosActions.js`) usan sesión real
   (`createSessionServerClient`), no Service Role Key — ese RLS es la
   autoridad real hoy, no un bypass.
+
+### Tablas de sincronización móvil offline-first (`ADR-040`, 2026-09-06)
+
+Creadas con `20260906100000_mobile_offline_sync_tables.sql`, antes de
+que exista una sola línea de código de app React Native/Expo — ver
+`specs/mobile_offline_sync.md` para el detalle completo, incluido lo
+que queda fuera de alcance.
+
+- **`public."SYNC_QUEUE"`** — cola genérica de mutaciones offline por
+  dispositivo: `id`, `id_organizacion` (`DEFAULT auth_org_id()`),
+  `device_id`, `creado_por` (`auth.users`), `entity_type`, `operation`
+  (`INSERT`/`UPDATE`/`DELETE`), `payload` `jsonb`, `estado`
+  (`PENDIENTE`/`PROCESADO`/`ERROR`), `error_mensaje`, `creado_en`,
+  `procesado_en`. RLS: `FOR ALL` por organización, sin restricción de
+  rol — cualquier miembro autenticado (`admin`/`tecnico_campo`/
+  `auditor_qc`) lee/escribe su propia cola.
+- **`public."PRECIOS_PRODUCTO"`** — precios por organización y
+  producto (`id_producto` → `PRODUCTOS(id)`, `ADR-028`): `id`,
+  `id_organizacion`, `id_producto`, `precio` (`numeric`, `>= 0`),
+  `unidad` (`DEFAULT 'kg'`), `vigente_desde`/`vigente_hasta`,
+  `creado_por`, `creado_en`, `actualizado_en`. RLS: `SELECT` por
+  organización para cualquier autenticado; `INSERT`/`UPDATE`/`DELETE`
+  exclusivo `auth_role() = 'admin'`.
+- **`public."SOCIO_ACTIVACION_CODES"`** — códigos de activación de
+  cuenta para la futura App del Socio: `id`, `id_organizacion`,
+  `id_socio` (→ `PADRON_SOCIOS(id)`, el PK surrogate, no `ID_Socio`),
+  `codigo_activacion` (`UNIQUE`), `estado`
+  (`PENDIENTE`/`USADO`/`EXPIRADO`), `generado_en`, `generado_por`,
+  `usado_en`, `expira_en`. RLS: exclusivo `admin` — ni lectura para
+  `tecnico_campo`/`auditor_qc` (dato sensible).
+- **Todas con el mismo bypass `service_role`/`current_user='postgres'`
+  que el resto del proyecto desde `ADR-034`.** **El acceso de la App
+  del Socio (DNI+PIN) a ninguna de estas 3 tablas está resuelto
+  todavía** — ese mecanismo de sesión no existe en este repo, es fase
+  posterior (ver `ADR-040`).
 
 ### Módulo Padrón Web de Socios y Fincas (`/dashboard/socios`)
 
