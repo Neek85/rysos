@@ -345,6 +345,47 @@
   `specs/configuracion_dominio_trazabilidad.md` y
   `plans/configuracion_dominio_ejecucion.md` para el detalle completo.
 
+- **(2026-09-06) RBAC en `/dashboard/socios` — `tecnico_campo`/
+  `auditor_qc` pasan a "Solo lectura", `admin` mantiene todo:**
+  implementa la matriz de permisos ya confirmada
+  (`specs/login_real_organizacion_rol.md` §5) para esta pantalla, en 2
+  capas: **(a) real** — `lib/actions/sociosActions.js` gana un helper
+  `assertAdminRole(supabase)` (llama `auth_role()`, lanza
+  `SocioActionError` si no es `'admin'`), aplicado en `createSocio`,
+  `updateSocio`, `updateParcela`, `deactivateSocio`, `deactivateParcela`
+  — **5 de 6** funciones de escritura; **(b) UX** — botones de
+  creación/edición/baja/export/import ocultos en
+  `app/dashboard/socios/page.jsx` y
+  `components/features/socios/ParcelaFormModal.jsx` (nuevo prop
+  `userRole`) para esos 2 roles, resuelto vía
+  `lib/auth/getCurrentProfile.js` (ya existía desde Fase B del login
+  real, sin consumidores hasta ahora — solo le faltaba `'use server'`
+  para ser invocable desde un componente cliente).
+  **Corrección de premisa central:** el prompt pedía tocar también
+  `/dashboard/mapa` — no hacía falta. Esa página ya es 100% de solo
+  lectura para los 3 roles (dice "Visor de solo lectura" en su propio
+  subtítulo, sin ningún control de edición) y la matriz ya confirmada
+  dice `Sí` para los 3 roles ahí — restringirla habría contradicho una
+  decisión de seguridad ya tomada.
+  **`createParcela` queda deliberadamente sin el chequeo de rol** —
+  también la llama `gisActions.js::uploadGeoSpatialFeature` (Editor
+  Vectorial de `/dashboard/qc`, fuera de alcance de esta tarea);
+  agregar el chequeo ahí habría roto en silencio la creación de
+  parcelas para `tecnico_campo` desde el Editor Vectorial, algo que
+  suena a parte central de su trabajo y que nadie pidió ni confirmó
+  restringir — gap documentado en `specs/rbac_webgis_padron.md`, no un
+  descuido. Mismo criterio para exportación CSV
+  (`lib/padronCsv.js`, fuera de la lista de archivos): botones
+  ocultos en la UI, sin chequeo de rol nuevo dentro de esas funciones.
+  **Verificado en vivo** (Route Handler temporal, borrado antes del
+  commit): sesión real de `tecnico_campo` intentando
+  `deactivateSocio` sobre un socio descartable → bloqueado
+  (`SocioActionError: "Esta acción requiere el rol admin."`); sesión
+  real de `admin` sobre el mismo socio → éxito. Fila descartable
+  borrada al terminar. `npm run build`/`npm run lint` limpios, mismas
+  19 rutas. Ver `specs/rbac_webgis_padron.md` y
+  `plans/rbac_webgis_padron_ejecucion.md` para el detalle completo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
