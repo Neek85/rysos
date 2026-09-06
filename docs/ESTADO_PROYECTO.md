@@ -315,6 +315,36 @@
   [ADR-041](adr/ADR-041-procesador-sync-queue-webgis.md) para el
   detalle completo.
 
+- **(2026-09-06) Dominio oficial de trazabilidad pública configurado:
+  `https://ryzosagri.com` reemplaza a `app.ryzos.io`, ahora vía
+  `NEXT_PUBLIC_APP_URL`:** `lib/traceabilityHash.js::getTraceUrl()` y
+  `scripts/generate_lot_qr.py::get_trace_url()` (la URL que se imprime
+  en el QR de cada lote de café/cacao exportado, Tarea 14) ya no tienen
+  el dominio hardcodeado — leen `NEXT_PUBLIC_APP_URL`/
+  `os.environ['NEXT_PUBLIC_APP_URL']`, con `https://ryzosagri.com`
+  (el dominio real, confirmado con el usuario antes de tocar código
+  que termina en QRs físicos de embarques reales) como fallback si la
+  variable no está definida. **Sin lógica de detección de ambiente en
+  el código** — cada entorno (dev/preview/producción) le asigna su
+  propio valor a la misma variable, patrón estándar de Next.js/Vercel.
+  `lib/eudrDdsExporter.js` (que el prompt pedía revisar) no requirió
+  ningún cambio — no construye ninguna URL. Se agregó
+  `scripts/generate_lot_qr.py` al alcance real (no estaba en la lista
+  original) para no romper el invariante ya documentado de que el path
+  JS y el path Python deben coincidir exacto — dejarlo desactualizado
+  habría hecho que un lote generara QRs con dominios distintos según
+  el método usado. 4 archivos de test/spec con la URL vieja hardcodeada
+  también se actualizaron (`tests/test_trace_public.mjs`,
+  `tests/test_tarea14_trazabilidad.py`,
+  `specs/tarea14_trazabilidad_qr.md`). `node --test
+  tests/test_trace_public.mjs` (10/10), `python -m pytest
+  tests/test_tarea14_trazabilidad.py` (25/25) y la suite completa de
+  Python (455 passed, 1 fallo preexistente no relacionado en
+  `test_socio_creacion_atomica.py`, 36 skipped) — `npm run build`/`npm
+  run lint` limpios. Ver
+  `specs/configuracion_dominio_trazabilidad.md` y
+  `plans/configuracion_dominio_ejecucion.md` para el detalle completo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

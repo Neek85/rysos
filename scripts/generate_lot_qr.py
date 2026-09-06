@@ -7,6 +7,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 from typing import Any
 
 # Campos PII prohibidos en la respuesta pública (GDPR / privacidad de productores)
@@ -14,7 +15,13 @@ _PII_FIELDS = {"socio_dni", "socio_nombre", "socio_nombre_completo", "conyuge_dn
 
 
 class PublicTraceabilityService:
-    BASE_URL = "https://app.ryzos.io/trace/"
+    # Dominio configurable (ver specs/configuracion_dominio_trazabilidad.md)
+    # -- lee la variable de entorno del sistema operativo, no un .env de
+    # Next.js; quien corra este script debe exportar NEXT_PUBLIC_APP_URL
+    # en su propio shell para sobreescribir el default. Mismo nombre de
+    # variable que el lado JS (lib/traceabilityHash.js) por consistencia,
+    # aunque el mecanismo de carga sea distinto.
+    BASE_URL = f"{os.environ.get('NEXT_PUBLIC_APP_URL', 'https://ryzosagri.com')}/trace/"
 
     def generate_lot_hash(self, dds_payload: dict[str, Any]) -> str:
         """Genera un hash SHA-256 determinista de 16 chars para el lote."""

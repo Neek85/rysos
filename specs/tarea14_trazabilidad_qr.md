@@ -7,11 +7,12 @@ Permitir a compradores, importadores europeos y auditores escanear un Código QR
 - **Sanitización Estricta de PII (Protección de Datos):** La vista pública NUNCA debe exponer números de DNI, cédulas ni nombres completos de los pequeños productores. Únicamente expondrá el código anonimizado de la finca, hectáreas, estatus de cumplimiento EUDR y geometría del polígono.
 - **Campos PII prohibidos en payload público:** `socio_dni`, `socio_nombre`, `socio_nombre_completo`, `conyuge_dni`.
 - **Inmutabilidad del Hash de Lote:** El `lot_hash` debe ser único por lote de exportación y derivarse de forma determinista (SHA-256) combinando la organización, número de parcelas, hectáreas totales y la lista de UUIDs de monitoreos aprobados.
-- **Generación de QR Estándar:** El script genera una imagen PNG (Data URL Base64) del código QR apuntando al dominio `https://app.ryzos.io/trace/{lot_hash}`.
+- **Generación de QR Estándar:** El script genera una imagen PNG (Data URL Base64) del código QR apuntando al dominio `https://ryzosagri.com/trace/{lot_hash}` (dominio oficial desde
+  `specs/configuracion_dominio_trazabilidad.md`, reemplaza a `app.ryzos.io` — configurable vía `NEXT_PUBLIC_APP_URL`, con ese valor como fallback).
 
 ## 3. Criterios de Aceptación
 - [ ] El payload de la API pública excluye campos sensibles: `socio_dni`, `socio_nombre`, `socio_nombre_completo`, `conyuge_dni`.
 - [ ] El `lot_hash` SHA-256 (16 chars hex) es determinista — el mismo lote siempre produce el mismo hash.
-- [ ] La URL de verificación sigue el patrón `https://app.ryzos.io/trace/{lot_hash}`.
+- [ ] La URL de verificación sigue el patrón `https://ryzosagri.com/trace/{lot_hash}` (o `NEXT_PUBLIC_APP_URL` si está definida).
 - [ ] El método `generate_qr_data_url()` devuelve un string con prefijo `data:image/png;base64,` y contenido Base64 válido.
 - [ ] Todos los tests en `tests/test_tarea14_trazabilidad.py` pasan correctamente.

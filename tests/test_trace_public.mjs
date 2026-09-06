@@ -162,6 +162,6 @@ test('buildPublicSanitizedPayload no lanza excepción con payload vacío/inváli
   assert.deepEqual(result.geojson.features, [])
 })
 
-test('getTraceUrl construye la URL de verificación esperada', () => {
-  assert.equal(getTraceUrl('abc123'), 'https://app.ryzos.io/trace/abc123')
+test('getTraceUrl construye la URL de verificación esperada (dominio default, sin NEXT_PUBLIC_APP_URL)', () => {
+  assert.equal(getTraceUrl('abc123'), 'https://ryzosagri.com/trace/abc123')
 })
