@@ -48,7 +48,7 @@ documentado ("debe coincidir EXACTO" — hasta ahora sobre el algoritmo
 de hash, extendido acá al dominio: dos QRs del mismo lote generados
 por el path JS vs. el path Python por lotes ya no coincidirían).
 
-Consecuencia: 4 archivos con la URL literal vieja
+Consecuencia: 3 archivos con la URL literal vieja
 (`tests/test_trace_public.mjs`, `tests/test_tarea14_trazabilidad.py`,
 `specs/tarea14_trazabilidad_qr.md`) además de los 2 módulos reales —
 se actualizan todos para no dejar aserciones de test rotas ni

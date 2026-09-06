@@ -333,7 +333,7 @@
   original) para no romper el invariante ya documentado de que el path
   JS y el path Python deben coincidir exacto — dejarlo desactualizado
   habría hecho que un lote generara QRs con dominios distintos según
-  el método usado. 4 archivos de test/spec con la URL vieja hardcodeada
+  el método usado. 3 archivos de test/spec con la URL vieja hardcodeada
   también se actualizaron (`tests/test_trace_public.mjs`,
   `tests/test_tarea14_trazabilidad.py`,
   `specs/tarea14_trazabilidad_qr.md`). `node --test
