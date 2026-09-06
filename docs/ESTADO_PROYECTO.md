@@ -287,6 +287,34 @@
   para el detalle completo, incluido todo lo que queda explícitamente
   fuera de alcance (RPC de PIN, tablas de acopio, código React Native).
 
+- **(2026-09-06) ADR-041 — procesador server-side de `SYNC_QUEUE` para
+  el dominio WebGIS:** `lib/actions/syncGisActions.js` (nuevo,
+  `processWebGisSyncQueue()`) drena las filas `PENDIENTE` de
+  `SYNC_QUEUE` (`ADR-040`) que apuntan a `EUDR_MONITOREO`/
+  `EUDR_USO_SUELO`/`EUDR_INSTALACIONES` e insertan de verdad, con
+  sesión real (`createSessionServerClient`). **Corrección de contrato
+  antes de escribir código:** el prompt describía columnas de
+  `SYNC_QUEUE` que no existen (`tabla_destino`/`error_log`/
+  `synced_at`) — se usaron las columnas reales de `ADR-040`
+  (`entity_type`/`error_mensaje`/`procesado_en`).
+  `specs/sync_queue_webgis_ingestion.md` tampoco existía, se redactó
+  desde cero. **Decisión de diseño:** en vez de escribir esquemas Zod
+  nuevos (no existe ninguno para estas 3 tablas), el procesador llama
+  directo a `uploadGeoSpatialFeature` (`ADR-038`, ya migrada a sesión
+  real) para reusar su validación ya probada, en vez de duplicarla.
+  **Verificado en vivo con la función real** (no una réplica por REST
+  — esta función orquesta lógica, no es una sola consulta): se creó un
+  Route Handler temporal (borrado antes del commit, nunca llegó a
+  `staging`) que invoca `processWebGisSyncQueue()` de verdad dentro de
+  un request de Next.js con sesión real. Resultado: 1 fila válida
+  procesada (`EUDR_MONITOREO` creado, `estado: PROCESADO`); 2 filas
+  inválidas (campo requerido faltante, geometría no soportada)
+  quedaron en `estado: ERROR` con el mensaje real. Filas descartables
+  borradas al terminar. `npm run build`/`npm run lint` limpios, mismas
+  19 rutas (sin la ruta temporal). Ver
+  [ADR-041](adr/ADR-041-procesador-sync-queue-webgis.md) para el
+  detalle completo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

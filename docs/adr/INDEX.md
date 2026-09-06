@@ -51,6 +51,7 @@ corrigieron como parte de esta misma tarea, junto con este índice.
 | [038](ADR-038-fase-a3-rls-sesion-gis-ingestor.md) | Piloto "Camino 1", Fase A.3: las 3 ramas EUDR del Ingestor Espacial a sesión real | `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` (`lib/actions/gisActions.js`) | 2026-09-04 | Implementado |
 | [039](ADR-039-fase-d-qc-aprobar-rechazar-roles-rls.md) | Fase D: aprobar/rechazar en la Consola QC a sesión real, con control de rol vía trigger en Postgres | `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` (`lib/actions/qcActions.js`) | 2026-09-04 | Implementado |
 | [040](ADR-040-infraestructura-sincronizacion-movil-offline.md) | Infraestructura de BD para sincronización móvil offline-first (sin app React Native todavía) | `SYNC_QUEUE`/`PRECIOS_PRODUCTO`/`SOCIO_ACTIVACION_CODES`/`PADRON_SOCIOS` | 2026-09-06 | Implementado |
+| [041](ADR-041-procesador-sync-queue-webgis.md) | Procesador server-side de `SYNC_QUEUE` para el dominio WebGIS — reusa `uploadGeoSpatialFeature` | `SYNC_QUEUE` → `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` (`lib/actions/syncGisActions.js`) | 2026-09-06 | Implementado |
 
 ## Notas
 
