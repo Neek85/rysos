@@ -332,3 +332,39 @@ se encontró ningún problema en `lib/auth/getCurrentProfile.js` (el
 cliente) ni en el gating de UI de `app/dashboard/socios/page.jsx`
 (confirmado que `userRole` inicia en `null` y se trata como no-admin
 mientras carga, fail-closed).
+
+### RESUELTO (2026-09-06/07) — ver `supabase/migrations/20260906220000_enforce_padron_admin_trigger.sql`
+
+Trigger `fn_enforce_padron_admin_role()` (mismo patrón que
+`fn_enforce_qc_approval_roles`, `ADR-039`) en `PADRON_SOCIOS`/
+`PADRON_PARCELAS`, aplicado y verificado en vivo. **Decisión de diseño
+confirmada con el usuario antes de aplicar la migración** (el prompt
+original pedía bloquear `INSERT` también en `PADRON_PARCELAS`, lo que
+habría roto `createParcela` vía `gisActions.js::uploadGeoSpatialFeature`
+— el Editor Vectorial de `/dashboard/qc`, donde `tecnico_campo`
+legítimamente crea parcelas nuevas desde el campo): `PADRON_SOCIOS`
+bloquea `INSERT`/`UPDATE`/`DELETE` completos para no-admin;
+`PADRON_PARCELAS` bloquea solo `UPDATE`/`DELETE`, `INSERT` queda
+abierto a cualquier `authenticated`.
+
+**Verificado en vivo** (sesiones reales `tecnico-campo-demo`/
+`admin-demo`, filas descartables, `ORG-TEST-DEMO`):
+- `tecnico_campo` `PATCH` directo a `PADRON_SOCIOS` (el bypass exacto
+  de este hallazgo) → **`403`, `42501`, bloqueado**.
+- `admin` `PATCH` sobre el mismo socio → **`200`, sigue funcionando**.
+- `tecnico_campo` `POST` (INSERT) a `PADRON_PARCELAS` → **`201`, sigue
+  funcionando** (Editor Vectorial preservado).
+- `tecnico_campo` `PATCH`/`DELETE` sobre esa misma parcela → **`403`,
+  `42501`, bloqueado** en ambos.
+
+**Test de integración automatizado:** `tests/test_padron_rbac_rls.py`
+(nuevo, patrón `NEEDS_SUPABASE` de `tests/test_fase1_sdd.py`, extendido
+con `SUPABASE_ANON_KEY` para simular sesión real vía magic link) — 5/5
+pasando, corrido con credenciales reales inyectadas (se omite
+automáticamente sin ellas, mismo criterio que el resto de los tests
+`NEEDS_SUPABASE`, no wired a CI). Confirmado `0` filas de prueba
+restantes en ambas tablas después.
+
+**Estado:** cerrado. `assertAdminRole()` ahora tiene respaldo real de
+RLS/trigger — ya no es una capa 100% aplicación bypasseable con una
+llamada directa a PostgREST.

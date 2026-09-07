@@ -82,6 +82,16 @@ siguen disponibles para los 3 roles — son lecturas, no mutaciones.
    exportación CSV más abajo. Resolverlo bien exigiría distinguir el
    origen de la llamada (¿socios o QC?) o decidir explícitamente en
    otra tarea si `/dashboard/qc` también debe restringir esta acción.
+   **Actualización (2026-09-06/07):** el trigger de base de datos de
+   "Cierre del gap de RLS" (más abajo) formaliza esto — `INSERT` en
+   `PADRON_PARCELAS` queda explícitamente permitido para cualquier
+   `authenticated`, por diseño, no como un descuido pendiente de
+   cerrar. `UPDATE`/`DELETE` en `PADRON_PARCELAS` ahora sí quedan
+   bloqueados para no-admin también a nivel de base de datos — ese
+   trigger es el respaldo de RLS que le faltaba a `assertAdminRole()`
+   de `updateParcela`/`deactivateParcela` (ambas ya lo tenían a nivel
+   de aplicación desde el punto 1) para no ser bypasseable con una
+   llamada directa a PostgREST (ver "Cierre del gap de RLS").
 2. **UI (`app/dashboard/socios/page.jsx` +
    `components/features/socios/ParcelaFormModal.jsx`)** — UX, no
    seguridad real. Con el rol resuelto client-side (ver abajo), se
@@ -116,6 +126,48 @@ async pura, exportada, apta para Server Action tal cual) para que
 sesión/perfil — `page.jsx` trata `rol !== 'admin'` (incluido `null`,
 mientras carga) como "no-admin", nunca al revés — fail-closed, mismo
 criterio que el resto del proyecto.
+
+## Cierre del gap de RLS (2026-09-06/07, ver `AI_STATE.md` y `supabase/migrations/20260906220000_enforce_padron_admin_trigger.sql`)
+
+La revisión de seguridad del commit `a975a7c` (`AI_STATE.md`,
+2026-09-06) confirmó en vivo que `assertAdminRole()` no tenía ningún
+respaldo de RLS: `rls_write_padron_socios`/`rls_write_padron_parcelas`
+(`ADR-034`) solo filtran por organización, nunca por rol, así que un
+`tecnico_campo`/`auditor_qc` podía saltarse la Server Action por
+completo con un `PATCH`/`POST`/`DELETE` directo a PostgREST.
+
+**Invariante de seguridad nuevo, a nivel de base de datos — no solo
+aplicación:** un trigger `BEFORE INSERT OR UPDATE OR DELETE`
+(`public.fn_enforce_padron_admin_role()`, mismo patrón que
+`fn_enforce_qc_approval_roles` de `ADR-039`) exige
+`auth_role() = 'admin'` para cualquier sesión `authenticated` que
+intente escribir `PADRON_SOCIOS`/`PADRON_PARCELAS` — con una excepción
+deliberada, confirmada con el usuario antes de aplicar la migración:
+
+- **`PADRON_SOCIOS`:** `INSERT`/`UPDATE`/`DELETE` completos exigen
+  `admin`. Sin excepción — `createSocio`/`updateSocio` no tienen
+  ningún llamador legítimo fuera de `/dashboard/socios`.
+- **`PADRON_PARCELAS`:** `UPDATE`/`DELETE` exigen `admin`. `INSERT`
+  queda permitido para **cualquier** `authenticated`, sin importar el
+  rol — necesario para no romper `createParcela` vía
+  `gisActions.js::uploadGeoSpatialFeature` (Editor Vectorial/Carga
+  Espacial de `/dashboard/qc`), donde `tecnico_campo` sí debe poder
+  seguir creando parcelas nuevas desde el campo. Esto cierra el gap
+  del párrafo de arriba (`createParcela` deliberadamente sin
+  `assertAdminRole` a nivel de aplicación) **sin** convertirlo en una
+  regresión funcional a nivel de base de datos.
+
+`service_role`/conexiones directas de `postgres` quedan exentas de
+forma natural: la condición del trigger solo se evalúa cuando
+`auth.role() = 'authenticated'`, así que ETL/scripts/Admin API no se
+ven afectados sin necesidad de un `OR` de bypass explícito.
+
+Verificado en vivo (sesiones reales de `tecnico-campo-demo`/
+`admin-demo`, filas descartables) y con test de integración
+automatizado (`tests/test_padron_rbac_rls.py`, 5/5): el bypass
+original ya no funciona (`403`, `42501`), el Editor Vectorial sigue
+funcionando para `tecnico_campo`, y `admin` sigue pudiendo escribir
+ambas tablas sin cambios.
 
 ## Fuera de alcance
 

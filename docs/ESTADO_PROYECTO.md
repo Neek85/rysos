@@ -436,6 +436,34 @@
   `npm run build`/`npm run lint` limpios (no afectados, cambios de
   `.md` solamente).
 
+- **(2026-09-07) Cerrado el gap de RLS de `PADRON_SOCIOS`/
+  `PADRON_PARCELAS` encontrado en la revisión de seguridad de
+  `a975a7c` — trigger `fn_enforce_padron_admin_role()`:** migración
+  `supabase/migrations/20260906220000_enforce_padron_admin_trigger.sql`,
+  mismo patrón que `fn_enforce_qc_approval_roles` (`ADR-039`). Un
+  `tecnico_campo`/`auditor_qc` ya no puede saltarse `assertAdminRole()`
+  con un `PATCH`/`POST`/`DELETE` directo a PostgREST — el trigger exige
+  `auth_role() = 'admin'` para cualquier sesión `authenticated` que
+  escriba estas 2 tablas. **Corrección de diseño confirmada con el
+  usuario antes de aplicar:** el prompt pedía bloquear también
+  `INSERT` en `PADRON_PARCELAS`, lo que habría roto en silencio
+  `createParcela` vía el Editor Vectorial de `/dashboard/qc`
+  (`tecnico_campo` legítimamente crea parcelas nuevas desde el campo,
+  fuera del alcance de la matriz de `/dashboard/socios`) — se dejó
+  `INSERT` abierto a cualquier `authenticated` en `PADRON_PARCELAS`,
+  bloqueando solo `UPDATE`/`DELETE`; `PADRON_SOCIOS` bloquea las 3
+  operaciones sin excepción, sin conflicto real ahí. **Verificado en
+  vivo** (sesiones reales, filas descartables): el bypass original
+  → `403`/`42501`; `admin` sigue pudiendo escribir ambas tablas; el
+  Editor Vectorial sigue funcionando para `tecnico_campo`. Test de
+  integración nuevo `tests/test_padron_rbac_rls.py` (5/5, patrón
+  `NEEDS_SUPABASE`). `node --test tests/test_trace_public.mjs`
+  (10/10), `python -m pytest tests/test_tarea14_trazabilidad.py`
+  (25/25), `npm run build`/`npm run lint` limpios — sin regresión. Ver
+  `specs/rbac_webgis_padron.md` (sección "Cierre del gap de RLS") y
+  `AI_STATE.md` (hallazgo del 2026-09-06, ahora marcado RESUELTO) para
+  el detalle completo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
