@@ -386,6 +386,35 @@
   19 rutas. Ver `specs/rbac_webgis_padron.md` y
   `plans/rbac_webgis_padron_ejecucion.md` para el detalle completo.
 
+- **(2026-09-06) Revisión de seguridad de `a975a7c` (RBAC Padrón de
+  Socios) — aprobada con un gap real documentado, no un visto bueno
+  limpio:** revisión Multi-IA pedida sobre el commit del RBAC.
+  `assertAdminRole()` confirmado correcto contra lo que se pidió
+  verificar (no se puede falsificar el rol inyectando campos en el
+  payload — resuelve `auth_role()` server-side, nunca lee `values`).
+  **Pero se encontró y confirmó en vivo un gap más importante, sin
+  pedirlo explícitamente la tarea:** `assertAdminRole()` es una capa
+  100% de aplicación, sin respaldo de RLS —
+  `rls_write_padron_socios`/`rls_write_padron_parcelas` (`ADR-034`)
+  solo filtran por organización, nunca por rol. Un `tecnico_campo`/
+  `auditor_qc` puede saltarse `assertAdminRole()` por completo con un
+  `PATCH` directo a PostgREST (confirmado en vivo: sesión real de
+  `tecnico-campo-demo`, `PATCH` directo a `PADRON_SOCIOS` sin pasar
+  por ninguna Server Action → `200 OK`, mutación aceptada). Mismo tipo
+  de gap que `ADR-039` ya cerró para `approveQcRecord`/`rejectQcRecord`
+  con un trigger de Postgres — esta tarea de RBAC no replicó ese
+  patrón para `PADRON_SOCIOS`/`PADRON_PARCELAS`. **No se corrigió en
+  esta revisión** (exige una migración SQL nueva, decisión de diseño
+  aparte — qué debe seguir pudiendo escribir `service_role`/ETL sin
+  romperse). Detalle completo, incluida la severidad (media — no
+  explotable por `anon` ni cross-org, sí por un `tecnico_campo`/
+  `auditor_qc` interno legítimo con su propio `access_token`) y la
+  recomendación de fix en `AI_STATE.md` (2026-09-06, entrada de esta
+  revisión). `node --test tests/test_trace_public.mjs` (10/10),
+  `python -m pytest tests/test_tarea14_trazabilidad.py` (25/25), `npm
+  run build`/`npm run lint` limpios — sin regresión en ninguno de los
+  dos, ninguno relacionado con este commit.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

@@ -232,3 +232,103 @@ Studio, igual que se recomendó para `INSPECCIONES`.
 
 **`npm run build`:** limpio -- mismos 3 warnings preexistentes de
 ESLint, 0 errores, mismas 19 rutas.
+
+## 2026-09-06 — Revisión de seguridad de `a975a7c` (RBAC Padrón de Socios): `assertAdminRole()` NO tiene respaldo de RLS -- bypass real confirmado en vivo, contra `PADRON_SOCIOS`/`PADRON_PARCELAS`
+
+**Contexto:** revisión de seguridad pedida sobre el commit `a975a7c`
+(RBAC de `/dashboard/socios`, ver `specs/rbac_webgis_padron.md`), bajo
+el protocolo de segunda revisión Multi-IA de `CLAUDE.md` §1. La tarea
+pedía confirmar que `assertAdminRole()` "impida el bypass de roles
+mediante manipulaciones de payload directo en Server Actions".
+
+**Lo que SÍ está confirmado y es correcto:** `assertAdminRole()` no
+lee ningún campo del `payload`/`values` que manda el cliente -- resuelve
+el rol exclusivamente vía `supabase.rpc('auth_role')`, que a su vez lee
+`PERFILES_USUARIO_INTERNOS` server-side por `auth.uid()` (JWT validado).
+No existe ninguna forma de falsificar el rol inyectando un campo
+`rol`/`role` en el payload de `createSocio`/`updateSocio`/
+`updateParcela`/`deactivateSocio`/`deactivateParcela` -- confirmado
+leyendo el código, la función nunca toca `values`/`socioId`/
+`organizationId` para decidir el rol.
+
+**Hallazgo real (no lo que pedía confirmar la tarea, pero es el riesgo
+que de verdad importa): `assertAdminRole()` es una capa 100%
+aplicación, sin ningún respaldo de RLS.** `rls_write_padron_socios`/
+`rls_write_padron_parcelas` (`ADR-034`, reconfirmadas en vivo con
+`pg_policies` en esta misma revisión) son:
+```
+"ID_Organizacion" = auth_org_id() OR auth.role() = 'service_role' OR CURRENT_USER = 'postgres'
+```
+-- **scopeadas solo por organización, sin ninguna condición de rol.**
+Esto significa que `assertAdminRole()` protege el camino de
+`createSocio`/`updateSocio`/etc. (las Server Actions), pero **no
+protege la tabla misma**: cualquier sesión `authenticated` de la
+organización correcta -- incluido `tecnico_campo`/`auditor_qc`, los 2
+roles que esta misma tarea de RBAC quiso volver "Solo lectura" -- puede
+seguir escribiendo `PADRON_SOCIOS`/`PADRON_PARCELAS` con una llamada
+REST directa a PostgREST, sin pasar por ninguna Server Action ni por
+`assertAdminRole()` en absoluto.
+
+**Confirmado en vivo, no en teoría** (sesión real de
+`tecnico-campo-demo@ryzos-demo.test`, fila descartable en
+`ORG-TEST-DEMO`, borrada al terminar):
+```
+PATCH {SUPABASE_URL}/rest/v1/PADRON_SOCIOS?ID_Socio=eq.<descartable>
+Authorization: Bearer <access_token real de tecnico_campo>
+body: {"socio_nombre_completo": "MUTADO POR TECNICO_CAMPO SIN PASAR POR assertAdminRole"}
+
+-> 200 OK, fila mutada con el nuevo valor.
+```
+Ese mismo cambio, si hubiera pasado por `updateSocio()`, habría sido
+rechazado con `SocioActionError: "Esta acción requiere el rol admin."`
+-- la diferencia es exclusivamente si el atacante (o un usuario
+`tecnico_campo` legítimo con curiosidad técnica) pasa por la UI/Server
+Action o no.
+
+**Comparación con el precedente ya resuelto en este mismo proyecto:**
+`ADR-039` cerró exactamente este mismo tipo de gap para
+`approveQcRecord`/`rejectQcRecord` (aprobar/rechazar en la Consola QC)
+con un trigger real de Postgres (`fn_enforce_qc_approval_roles`,
+`BEFORE UPDATE` en las 3 tablas EUDR, exige `admin`/`auditor_qc` vía
+`auth_role()` cuando `estado_revision` cambia). Esta tarea de RBAC de
+Padrón de Socios **no replicó ese patrón** -- se quedó en la capa de
+aplicación únicamente, inconsistente con el criterio ya establecido en
+`ADR-039` para el mismo tipo de riesgo.
+
+**Severidad:** media -- no es explotable por `anon` ni entre
+organizaciones (RLS por organización sigue intacta, confirmado en la
+misma consulta), y requiere que quien lo explote ya sea un usuario
+interno autenticado de la organización correcta. Pero dentro de esa
+organización, cualquier `tecnico_campo`/`auditor_qc` con acceso a su
+propio `access_token` (visible en cualquier herramienta de red del
+navegador) puede saltarse por completo la restricción "Solo lectura"
+que esta misma tarea de RBAC dijo implementar -- el objetivo de negocio
+de la tarea (`specs/rbac_webgis_padron.md`, matriz de
+`specs/login_real_organizacion_rol.md` §5) queda solo parcialmente
+cumplido.
+
+**No se corrigió en esta revisión -- es una tarea de seguridad/SQL
+aparte, no una verificación.** Cerrarlo bien requeriría una migración
+nueva: un trigger `BEFORE UPDATE`/`BEFORE INSERT` sobre
+`PADRON_SOCIOS`/`PADRON_PARCELAS` que exija `auth_role() = 'admin'`
+(mismo patrón que `fn_enforce_qc_approval_roles` de `ADR-039`, con el
+mismo bypass `service_role`/`postgres` que ya usa esa función para no
+romper flujos batch/ETL existentes) -- o, alternativa más simple,
+extender la propia política `rls_write_padron_socios`/
+`rls_write_padron_parcelas` para exigir rol directamente en el
+`WITH CHECK`. Cualquiera de las 2 rutas es una decisión de diseño de
+seguridad real (qué exactamente debe poder seguir escribiendo
+`service_role`/ETL/scripts existentes sin romperse) que le corresponde
+confirmar al arquitecto antes de escribir la migración, no algo para
+decidir unilateralmente dentro de una tarea de revisión.
+
+**Resto de la revisión, sin hallazgos:** `node --test
+tests/test_trace_public.mjs` (10/10), `python -m pytest
+tests/test_tarea14_trazabilidad.py` (25/25) -- sin regresión, ninguno
+de los 2 toca nada relacionado con este commit. `npm run build`/`npm
+run lint` limpios, mismas 19 rutas, mismos warnings preexistentes. No
+se encontró ningún problema en `lib/auth/getCurrentProfile.js` (el
+`'use server'` nuevo no cambia su lógica, solo la hace invocable desde
+cliente) ni en el gating de UI de `app/dashboard/socios/page.jsx`
+(confirmado que `userRole` inicia en `null` y se trata como no-admin
+mientras carga, fail-closed).
