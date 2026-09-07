@@ -415,6 +415,27 @@
   run build`/`npm run lint` limpios — sin regresión en ninguno de los
   dos, ninguno relacionado con este commit.
 
+- **(2026-09-07) `GEMINI.md` nuevo + orquestador sube a V3.3 — Gemini
+  CLI se suma como segundo ejecutor de terminal, distinto del Gem de
+  Gemini (que solo redacta):** `GEMINI.md` (raíz del repo, nuevo) es
+  el contexto que Gemini CLI lee automáticamente en cada sesión —
+  apunta a las mismas fuentes de verdad que ya usa Claude Code CLI
+  (`CLAUDE.md`, `docs/RYZOS_ORQUESTADOR_V3.1.md`, bitácora, esquema
+  vivo) sin duplicar su contenido, y fija su propio límite de
+  ejecución: puede correr tests/build/commit/push a `staging` de punta
+  a punta para tareas rutinarias, pero se detiene después de redactar
+  (nunca aplica, nunca hace push) en cualquier tarea que toque SQL/RLS/
+  migraciones/autenticación/PII/`DELETE`-`UPDATE` masivo — mismo gate
+  de seguridad que ya regía para el Gem de Gemini, ahora explícito
+  también para la CLI. La Sección 4.1 del orquestador
+  (`docs/RYZOS_ORQUESTADOR_V3.1.md`, título sube de V3.2 a V3.3) se
+  reescribió completa para reflejar esta distinción de 2 herramientas
+  distintas bajo el nombre "Gemini" (el Gem, que nunca ejecuta, y
+  Gemini CLI, que sí) — antes solo hablaba de "Gemini" en general, sin
+  distinguir las dos. Tarea de documentación pura, sin tocar SQL/RLS.
+  `npm run build`/`npm run lint` limpios (no afectados, cambios de
+  `.md` solamente).
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
