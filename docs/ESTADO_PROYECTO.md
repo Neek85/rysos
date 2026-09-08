@@ -534,6 +534,44 @@
   todavía** — a la espera del visto bueno explícito del usuario
   (gate de segunda revisión, `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1).
 
+- **(2026-09-08) Fase D Paso 3 cerrado — gate de Basic Auth retirado de
+  `middleware.js` (commit `e16e897`), `specs/login_real_organizacion_rol.md`
+  queda completo (Fases A-D):** única capa de acceso a `/dashboard/**`,
+  `/api/qc/**`, `/api/gis/**` ahora es la sesión real de Supabase Auth
+  (`auth.getUser()`) — el bloque de `GATE_USER`/`gatePassword`/
+  `unauthorized()`/decodificación de `Authorization: Basic` se elimina
+  por completo de `middleware.js`; el `matcher` no cambia.
+  `app/login/page.jsx` actualizado (el comentario que decía "el gate de
+  Basic Auth sigue activo en paralelo" ya no es cierto).
+  `tests/test_dashboard_gate_session_redirect_live.mjs` (verificaba las
+  2 capas combinadas) reemplazado por
+  `tests/test_dashboard_session_redirect_live.mjs`. Ver
+  `specs/retirar_basic_auth_gate.md`.
+
+  **Verificado en vivo contra `staging` (Vercel, no localhost) por
+  Cowork vía navegador:** sin sesión, `/dashboard/mapa` redirige a
+  `/login` — con o sin un header `Authorization: Basic` viejo/inventado,
+  nunca `401`, nunca deja pasar (confirma que Basic Auth ya no se
+  evalúa en absoluto, ni siquiera como capa opcional); con sesión ya
+  presente, carga el Mapa WebGIS con normalidad, sin ningún prompt de
+  Basic Auth del navegador en ningún caso. Sin gate de segunda revisión
+  formal (no es SQL/RLS/migración), pero tratado con el mismo rigor por
+  tocar el gate de acceso a todo `/dashboard/**` — Cowork revisó el
+  contenido literal de `middleware.js` y el diff de `app/login/page.jsx`
+  antes de aprobar el commit. `npm run build` limpio,
+  `node --test tests/test_dashboard_session_redirect_live.mjs` 3/3.
+
+  **Esto cierra `specs/login_real_organizacion_rol.md` por completo** —
+  las 4 fases (A: identidad, B: login real, C: RLS real de
+  INSPECCIONES/CAP_*, D: cuentas reales + smoke test + retiro de Basic
+  Auth) están terminadas. No queda ningún paso pendiente de ese
+  proyecto.
+
+  **Nota aparte (no bloqueante, ya resuelta):** la verificación por SQL
+  en Supabase Studio del trigger de `INSPECCIONES` (Fase D Paso 2,
+  commit `267f802`) sigue pendiente de confirmación del usuario — no es
+  parte de este cierre, solo una nota de seguimiento.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
