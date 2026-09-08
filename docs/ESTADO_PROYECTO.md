@@ -505,6 +505,35 @@
   (Cowork) de punta a punta, incluida la edición manual del Site URL
   de Supabase Auth.
 
+- **(2026-09-08) Fase D Paso 2 cerrado — smoke test formal por rol
+  (`specs/smoke_test_fase_d_paso2.md`), matriz 15/15:** verificación en
+  vivo de las 5 pantallas × 3 roles contra el código real de
+  `lib/actions/*.js`/`lib/inspeccionesActions.js` (Server Actions
+  reales, sesiones reales por magic link — no equivalentes REST
+  reconstruidos a mano). Encontró 1 gap real:
+  `/dashboard/inspecciones` × `auditor_qc` podía escribir sin ningún
+  bloqueo (`saveInspeccion` sin chequeo de rol, RLS de ADR-033 solo por
+  organización). Cerrado con
+  `supabase/migrations/20260908150000_enforce_inspecciones_role_trigger.sql`
+  (trigger `fn_enforce_inspecciones_role`, mismo patrón que
+  `fn_enforce_padron_admin_role`) + `assertInspeccionWriteRole` en
+  `lib/inspeccionesActions.js`. **Verificado en vivo con las 3 cuentas
+  reales** (Eduardo=admin, Dante=tecnico_campo, `auditor-qc-demo`=
+  auditor_qc): admin/tecnico_campo permitidos, auditor_qc bloqueado
+  (`403`, `42501`). Test de integración nuevo
+  `tests/test_inspecciones_rbac_rls.py` (4/4), sin regresión en
+  `tests/test_padron_rbac_rls.py` (5/5, refactor de `assertAdminRole`
+  para reusar `lib/auth/resolveAuthRole.js`). `npm run build`/`npm run
+  lint` limpios. Detalle completo, incluida la corrección de un bug
+  propio de fail-open (`NOT IN` con NULL) encontrado y corregido antes
+  de aplicar la migración, en `AI_STATE.md` (entrada 2026-09-08,
+  RESUELTO). **Fase D Paso 3 (retirar el gate de Basic Auth de
+  `middleware.js`) es el único pendiente real de
+  `specs/login_real_organizacion_rol.md` §6.** Migración + código
+  creados y verificados en vivo, pero **sin commitear/pushear
+  todavía** — a la espera del visto bueno explícito del usuario
+  (gate de segunda revisión, `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1).
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

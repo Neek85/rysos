@@ -13,6 +13,198 @@ entradas puntuales de "esto bloqueó, acá está la causa real".
 > raíz determinada todavía) de las tablas centrales completamente
 > vacías, y el estado más reciente.
 
+## 2026-09-08 — RESUELTO: Smoke test formal por rol de Fase D Paso 2 — gap real confirmado en `/dashboard/inspecciones` × `auditor_qc`
+
+**Tarea:** `specs/smoke_test_fase_d_paso2.md` — verificar las 15
+combinaciones (5 pantallas × 3 roles) contra el código real de
+`lib/actions/*.js`/`lib/inspeccionesActions.js` con sesiones reales
+(magic link), no contra un equivalente REST. **14/15 coinciden con la
+matriz de `specs/login_real_organizacion_rol.md` §5 — 1 no coincide,
+documentado acá, sin corregir (instrucción explícita: solo
+diagnosticar, devolver el control antes de tocar código).**
+
+**El gap:** `/dashboard/inspecciones`, celda `auditor_qc: Solo lectura`.
+En vivo, con la cuenta demo real (`auditor-qc-demo@ryzos-demo.test`,
+`ORG-TEST-DEMO`) invocando `lib/inspeccionesActions.js::saveInspeccion`
+directamente (mismo código que `useInspeccionForm.js` desde el
+navegador): **`PERMITIDO`** — creó una inspección real (`INSPECCIONES.ID_Inspeccion:
+"7d676882-9bf5-4067-a13f-a387ece7d09b"`, fila descartable, ya borrada).
+Debería haber sido bloqueado según la matriz.
+
+**Causa raíz confirmada leyendo el código (no solo inferida):**
+`saveInspeccion` no llama ningún equivalente de `assertAdminRole` — cero
+chequeo de rol a nivel de aplicación. La política RLS real de
+`INSPECCIONES`/`CAP_*`
+(`supabase/migrations/20260903170404_fase_c_paso2_rls_real_inspecciones_cap.sql`,
+ADR-033) solo exige `"ID_Organizacion" = auth_org_id()` — **ninguna
+condición sobre rol**. A diferencia de `/dashboard/socios`
+(`assertAdminRole` + trigger `fn_enforce_padron_admin_role`) y
+`/dashboard/qc` (trigger `fn_enforce_qc_approval_roles`, `ADR-039`), este
+módulo nunca recibió la migración de control de rol — quedó fuera del
+alcance de `specs/rbac_webgis_padron.md` (que explícitamente lista
+`/dashboard/inspecciones` como fuera de alcance) y de `ADR-039` (que solo
+cubrió `/dashboard/qc`). No es una regresión de una tarea reciente — es
+un hueco que nunca se cerró.
+
+**Las otras 14 celdas, confirmadas en vivo, coinciden con la matriz:**
+- `/dashboard/socios`: `admin` PERMITIDO, `tecnico_campo`/`auditor_qc`
+  BLOQUEADOS (`SocioActionError: Esta acción requiere el rol admin`) —
+  `assertAdminRole` + trigger de `PADRON_SOCIOS` funcionando como se
+  espera.
+- `/dashboard/inspecciones`: `admin`/`tecnico_campo` PERMITIDOS (correcto).
+- `/dashboard/qc`: `admin`/`auditor_qc` PERMITIDOS, `tecnico_campo`
+  BLOQUEADO (`42501`, mensaje del trigger de `ADR-039`) — re-confirma lo
+  que `ADR-039` ya había verificado, esta vez pasando por la Server
+  Action real (`approveQcRecord`), no solo el REST equivalente.
+- `/dashboard/mapa`: los 3 roles leen `vw_monitoreo_web` con éxito (sin
+  caso bloqueado en la matriz — los 3 son `Sí`).
+- `/dashboard/lotes`: los 3 roles (y una lectura de control sin ninguna
+  sesión) leen con éxito idéntico — **hallazgo aparte, no un fallo de
+  matriz:** esta pantalla es 100% de solo lectura para todos hoy (sin
+  ninguna mutación real, confirmado por el propio comentario del código,
+  "No persiste nada"), y usa la llave `anon` sin sesión
+  (`getSupabaseClient()`), así que la distinción `Sí`/`Solo lectura` de
+  la matriz no tiene, hoy, ningún mecanismo que la haga cumplir ni
+  romper — no hay nada que diferenciar entre los 3 roles en esta
+  pantalla todavía.
+
+**Metodología (detalle completo en `specs/smoke_test_fase_d_paso2.md`
+§5):** sesiones reales por magic link (Admin API `generate_link` +
+`/auth/v1/verify`), filas descartables (creadas con Service Role Key,
+borradas al final — confirmado `0` filas restantes en las 3 tablas
+tocadas). Server Actions (`updateSocio`, `approveQcRecord`) invocadas
+dentro de un Route Handler temporal (`app/api/smoke-test-fase-d-temp/route.js`,
+creado y borrado en esta misma tarea, **nunca commiteado** — necesario
+porque `createSessionServerClient()` depende de `cookies()` de
+`next/headers`, solo disponible dentro de un request real de Next.js).
+
+**2 hallazgos incidentales, no relacionados con la matriz, encontrados
+mientras se armaba el harness:**
+1. El prompt original decía `auditor_qc-demo@ryzos-demo.test` (guion
+   bajo entre `auditor` y `qc`) — la cuenta real provisionada es
+   `auditor-qc-demo@ryzos-demo.test` (guion medio, confirmado contra
+   `PERFILES_USUARIO_INTERNOS`/`auth.users` en vivo). El primer intento
+   con el email del prompt **creó sin querer un usuario nuevo real** en
+   `auth.users` (`generate_link` auto-provisiona si el email no existe) —
+   sin fila en `PERFILES_USUARIO_INTERNOS`, inofensivo pero es basura.
+   **Pendiente: el usuario decide si se borra** (`DELETE
+   /auth/v1/admin/users/c9565bfa-18c6-43f7-89be-65189b928dec`) — el
+   intento de borrarlo fue bloqueado por el clasificador de auto-mode
+   (acción destructiva sobre una cuenta real), correctamente.
+2. Bug real, menor, en `public.fn_validar_codigo_parcela_unico`
+   (`supabase/migrations/20260823_210000_fn_validar_codigo_parcela_unico_contexto_legible.sql`
+   línea 38): usa `v_geom IS NULL` como proxy de "el registro no existe"
+   (`RAISE EXCEPTION 'Registro % (EUDR_MONITOREO) no encontrado.'`), pero
+   `geom_inspeccion` puede ser `NULL` en un registro real que sí existe
+   (confirmado insertando uno) — la función confunde "sin geometría
+   capturada" con "fila inexistente". No bloqueó esta verificación
+   (se le dio geometría a las filas descartables para evitarlo), pero
+   afectaría en producción a cualquier registro real de
+   `EUDR_MONITOREO`/QField sin `geom_inspeccion` cargado todavía al
+   pasar por la Consola QC. Sin corregir — fuera de alcance de esta
+   tarea, mencionado para que quede registrado.
+
+**Estado:** RESUELTO (2026-09-08, mismo día). Fix de 2 capas, mismo
+patrón que `fn_enforce_padron_admin_role`:
+
+1. **Aplicación:** `lib/inspeccionesActions.js::assertInspeccionWriteRole`
+   (nuevo, exige `auth_role() IN ('admin', 'tecnico_campo')`,
+   `InspeccionError` si no) — llamado al inicio de `saveInspeccion`.
+   Extraje `resolveAuthRole(supabase)` a `lib/auth/resolveAuthRole.js`
+   (compartido con `assertAdminRole` de `sociosActions.js`, que ahora lo
+   reusa) para no duplicar la llamada RPC — cada dominio sigue con su
+   propio tipo de error.
+2. **Base de datos (autoridad real):**
+   `supabase/migrations/20260908150000_enforce_inspecciones_role_trigger.sql`
+   — trigger `fn_enforce_inspecciones_role()` (`BEFORE INSERT OR UPDATE`)
+   en `INSPECCIONES` + las 6 `CAP_*`. **Corrección propia antes de
+   aplicar:** el primer borrador usaba `auth_role() NOT IN ('admin',
+   'tecnico_campo')` — bug de fail-open real, no hipotético: con
+   `auth_role() IS NULL` (sesión `authenticated` sin fila en
+   `PERFILES_USUARIO_INTERNOS`), `NULL NOT IN (...)` evalúa a `NULL`, y
+   un `IF` con `NULL` en plpgsql se trata como falso — el trigger NO
+   habría bloqueado una sesión sin rol válido. Corregido a
+   `IS DISTINCT FROM` (NULL-safe, mismo patrón que
+   `fn_enforce_padron_admin_role`) antes de aplicar nada. Verificado
+   contra `pg_policies` (vía `supabase db query --linked`, no
+   `db push`): las 7 tablas solo tienen 2 políticas PERMISSIVE cada una
+   (ADR-033), ninguna otra que neutralice el trigger.
+
+**Verificado en vivo con las 3 cuentas reales pedidas** (Eduardo=admin,
+Dante=tecnico_campo, `auditor-qc-demo`=auditor_qc — la cuenta real,
+guion medio), fila descartable en `COOP-AROMAS-VALLE`/`ORG-TEST-DEMO`,
+limpieza confirmada:
+- `admin` → `200`, inspección creada.
+- `tecnico_campo` → `200`, inspección creada.
+- `auditor_qc` → **`403`, `{"code":"42501","message":"Acceso denegado:
+  Solo usuarios con rol admin o tecnico_campo pueden escribir
+  inspecciones"}`** — el bypass real que este hallazgo documentó ya no
+  funciona.
+
+**Test de integración automatizado:** `tests/test_inspecciones_rbac_rls.py`
+(nuevo, mismo patrón `NEEDS_SUPABASE` que `test_padron_rbac_rls.py`) —
+4/4 pasando con credenciales reales inyectadas (admin/tecnico_campo
+permitidos, auditor_qc bloqueado, aislamiento cross-org intacto).
+`tests/test_padron_rbac_rls.py` — 5/5, sin regresión por el refactor de
+`assertAdminRole`. `npm run build`/`npm run lint` limpios, sin cambios
+de tamaño de ruta. Suite completa: `python -m pytest tests/ -v` 455
+passed/45 skipped, 1 fallo preexistente sin relación
+(`test_socio_creacion_atomica.py`, migración distinta); `node --test
+tests/*.mjs` 9 fallos preexistentes sin relación (`ParcelaFormModal.jsx`,
+`gisActions.js`, ETL — documentado en `CLAUDE.md` que estos `.mjs` no
+están wired a CI, drift ya conocido).
+
+**Cuenta huérfana del hallazgo original** (`auditor_qc-demo@ryzos-demo.test`,
+guion bajo, creada sin querer por un `generate_link` con el email
+incorrecto del prompt original) — borrada:
+`user_id c9565bfa-18c6-43f7-89be-65189b928dec`, `DELETE
+/auth/v1/admin/users/...` → `200`.
+
+**Bug incidental en `fn_validar_codigo_parcela_unico` (mencionado en la
+entrada original de este hallazgo) — sigue sin corregir, fuera de
+alcance de este fix** (es de la Consola QC / `EUDR_MONITOREO`, no de
+`INSPECCIONES`).
+
+Fase D Paso 2 (smoke test formal por rol) queda **cerrado** — matriz
+15/15, ver `specs/smoke_test_fase_d_paso2.md` §7. Fase D Paso 3 (retirar
+el gate de Basic Auth de `middleware.js`) es el único pendiente real de
+`specs/login_real_organizacion_rol.md` §6.
+
+**Revisión de seguridad del usuario (2026-09-08, mismo día, antes de dar
+el visto bueno final) — 2 ajustes, ambos aplicados y reverificados en
+vivo:**
+1. `SET search_path = public` agregado a `fn_enforce_inspecciones_role()`
+   — verificado que ni `fn_enforce_padron_admin_role` ni
+   `fn_enforce_qc_approval_roles` (las 2 referencias pedidas) lo tienen
+   realmente (premisa del pedido no exacta, corregida antes de copiar
+   nada) — se agrega igual porque es la convención real del proyecto
+   (`auth_role()` y otras funciones `SECURITY DEFINER` sí la tienen).
+2. Los 7 `CREATE TRIGGER` pasan de `BEFORE INSERT OR UPDATE` a
+   `BEFORE INSERT OR UPDATE OR DELETE` — cierra el mismo tipo de bypass
+   (un `DELETE` directo por PostgREST, antes solo bloqueado por RLS de
+   organización, nunca por rol). **Encontré y corregí un bug propio
+   introducido por este mismo cambio antes de aplicarlo:** `NEW` es
+   `NULL` en un trigger de `DELETE` -- el `RETURN NEW` incondicional que
+   ya tenía la función habría cancelado en silencio TODO `DELETE`,
+   incluso de `admin`/`tecnico_campo`, porque un `BEFORE DELETE` que
+   retorna `NULL` aborta la operación. Agregado el mismo branch
+   `IF TG_OP = 'DELETE' THEN RETURN OLD` que ya usa
+   `fn_enforce_padron_admin_role`.
+
+Migración reaplicada completa contra la base enlazada (`supabase db
+query --linked`, `CREATE OR REPLACE`/`DROP TRIGGER IF EXISTS` --
+idempotente). Test suite ampliada a 6 casos
+(`tests/test_inspecciones_rbac_rls.py`): los 4 originales + `auditor_qc`
+bloqueado en `DELETE` directo contra `CAP_MIC` + `admin` permitido en el
+mismo `DELETE` (regresión del branch `TG_OP = 'DELETE'` nuevo) — **6/6
+pasando** contra la versión corregida.
+
+**Migración creada, aplicada contra la base enlazada y verificada en
+vivo, pero NO commiteada/pusheada todavía** — a la espera del visto
+bueno explícito del usuario antes de `git commit`/`git push` (gate de
+segunda revisión, `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1: tarea de
+SQL/RLS/seguridad).
+
 ## 2026-09-03e — NOTA PERMANENTE: `supabase db push` no es seguro en este repo hasta resolver el drift de tracking de migraciones
 
 **No es una tarea, es una advertencia de referencia** para cualquier
