@@ -560,3 +560,83 @@ restantes en ambas tablas después.
 **Estado:** cerrado. `assertAdminRole()` ahora tiene respaldo real de
 RLS/trigger — ya no es una capa 100% aplicación bypasseable con una
 llamada directa a PostgREST.
+
+### HALLAZGO (2026-09-08) — fuga de PII en `/dashboard/socios`: cualquier cuenta veía el padrón real de COOP-AROMAS-VALLE
+
+**Confirmado en vivo por el usuario** (captura de la cuenta demo en
+`ryzosagri.com/dashboard/socios`): 618 socios, nombre completo + DNI,
+todos con código `COOP-AROMAS-VALLE-XXX` — la cooperativa real, no
+`ORG-TEST-DEMO`.
+
+**Causa raíz:** `lib/sociosSearch.js::fetchSocios` usaba
+`resolveOrganizationId()` (`lib/actions/organizacionesActions.js`) como
+fallback por defecto — esa función resolvía "la organización real más
+antigua" (`ORGANIZACIONES` ordenada por `creado_en`, excluyendo
+`es_organizacion_prueba = true`), **sin mirar la sesión en absoluto**.
+Tenía sentido cuando se escribió
+(`specs/mejoras_importador_padron_masivo.md` ronda 8, antes de que
+existiera login real) porque no había ninguna sesión de la cual partir.
+Pero el login real por organización/rol
+(`specs/login_real_organizacion_rol.md`, Fases A-D, cerrado y en
+producción desde antes de este hallazgo) nunca actualizó esta única
+resolución para usar esa sesión — quedó huérfana, ignorando por completo
+quién estaba autenticado.
+
+**Por qué las ESCRITURAS nunca estuvieron expuestas:** `createSocio`/
+`updateSocio`/`deactivateSocio` siempre tomaron `ID_Organizacion` del
+registro real que se está editando (`editingSocio.ID_Organizacion` en
+`app/dashboard/socios/page.jsx`), nunca de esta resolución; y
+`fn_enforce_padron_admin_role` (`ADR-039`, ver arriba) exige rol `admin`
+vía RLS del lado de Postgres para cualquier escritura. Era un gap de
+**lectura únicamente**.
+
+**Por qué no lo agarró el test suite existente:**
+`tests/test_sociossearch_multitenant.mjs` siempre inyectó su propio
+`resolveOrganizationIdFallback` fake en cada test — el default real
+(`resolveOrganizationId`) nunca se ejercitó fuera de la app real.
+
+**Fix:** `resolveOrganizationId()` retirada por completo (confirmado sin
+ningún otro caller en el repo — era el único fallback default de
+`fetchSocios`). Nueva `resolveSessionOrganizationId()` (mismo archivo)
+resuelve por sesión real — mismo patrón y misma tabla que
+`lib/auth/getCurrentProfile.js` (`PERFILES_USUARIO_INTERNOS`, filtrado
+por `user_id` + `activo`, `auth.getUser()` para validar el JWT de
+verdad). Fail-closed a `null` (sin sesión o sin perfil activo →
+`fetchSocios` devuelve `rows: []`, ya cubierto por un test existente).
+`resolveTestOrganizationOverride()` no se tocó.
+
+**Test nuevo:** `tests/test_resolve_session_organization_id.mjs` — no
+puede ejercitar una sesión real fuera del runtime de Next
+(`createSessionServerClient` depende de `next/headers`, confirmado que
+no existe fuera de una request real de Next: `node -e
+"import('next/headers')"` → `Cannot find module`). Prueba en cambio lo
+que sí hace falta para esta regresión específica: (1)
+`resolveOrganizationId` ya no es un export; (2)
+`resolveSessionOrganizationId` existe; (3) llamar a
+`resolveSessionOrganizationId()`, o a `fetchSocios()` **sin ningún
+fallback inyectado**, rechaza específicamente por `next/headers` — antes
+del fix, esa misma llamada habría resuelto silenciosamente a
+`COOP-AROMAS-VALLE` vía Service Role Key sin tocar `next/headers` en
+ningún momento, así que el nuevo rechazo prueba que el default cambió de
+verdad. El aislamiento cruzado en sí (`fetchSocios` nunca mezcla filas de
+dos organizaciones) ya estaba cubierto por
+`tests/test_sociossearch_multitenant.mjs` con el fallback inyectado —
+sigue pasando sin cambios (11/11).
+
+**Verificación de regresión:** `node --test tests/*.mjs` — 681/685 pasan
+tanto antes como después de este fix (los 4 fallos son preexistentes,
+confirmados corriendo la suite completa con `git stash` sobre el mismo
+`origin/staging`: `lib/actions/gisActions.js` (validación EUDR_*),
+`QcConsoleMap.jsx`/`ADR-022`, `EUDR_USO_SUELO`, `ParcelaFormModal` — sin
+relación con `organizacionesActions.js`/`sociosSearch.js`). Antes del
+fix, la misma suite con el nuevo archivo de test presente daba 8 fallos
+(los 4 preexistentes + los 4 de este archivo, que fallan a propósito
+contra el código viejo). `npm run build`/`npm run lint` limpios, mismas
+rutas, mismos warnings preexistentes.
+
+**No se aplicó ningún merge a `main` en esta sesión.** Commit a
+`staging` únicamente — queda pendiente de revisión y de la decisión de
+merge del usuario, mismo criterio que el resto de cambios de este tipo
+(Sección 4.1 del protocolo Multi-IA, revisión ya cubierta por tratarse
+de Claude/Cowork de punta a punta, pero el merge a producción sigue
+siendo un paso manual aparte).
