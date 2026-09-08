@@ -2,9 +2,11 @@
 
 // Pantalla de login real (Fase B, specs/login_real_organizacion_rol.md)
 // -- ruta pública a propósito, FUERA del matcher de middleware.js: un
-// login nunca puede requerir sesión previa para ser alcanzable. El gate
-// de Basic Auth (middleware.js) sigue activo en paralelo para
-// /dashboard/**/api/qc/**/api/gis/** -- esta pantalla no lo reemplaza.
+// login nunca puede requerir sesión previa para ser alcanzable.
+// middleware.js exige sesión real de Supabase Auth para /dashboard/**,
+// /api/qc/** y /api/gis/** (el gate de Basic Auth que existió en
+// paralelo durante el rollout se retiró en Fase D Paso 3, ver
+// specs/retirar_basic_auth_gate.md) -- esta pantalla no lo reemplaza.
 //
 // `?next=` (mismo criterio ya usado en app/dashboard/socios/page.jsx
 // para `?org=`: se lee de `window.location.search` directo, no
