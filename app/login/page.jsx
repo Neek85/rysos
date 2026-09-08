@@ -21,6 +21,16 @@
 // no sea estrictamente el mismo origen (incluido `//evil.com`, un
 // `next` absoluto a otro host, `null`/vacío, o un valor malformado que
 // tira en el `new URL()`) cae a `/dashboard`.
+//
+// "¿Olvidaste tu contraseña?" (specs/recuperacion_password.md) --
+// resetPasswordForEmail() con `redirectTo` explícito apuntando a
+// /actualizar-password, a propósito EN VEZ DE depender del Site URL de
+// Supabase Auth (que el botón del Dashboard de Supabase sí necesita,
+// porque ese no acepta redirectTo custom) -- así este camino sigue
+// funcionando aunque el Site URL cambie más adelante (p. ej. al migrar a
+// ryzosagri.com). Mensaje de confirmación genérico a propósito, mismo
+// criterio anti-enumeración que el error de login: nunca revela si el
+// email existe o no.
 
 import { useState } from 'react'
 import { getSupabaseBrowserClient } from '@/lib/supabase/browserClient'
@@ -41,6 +51,32 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [resetSent, setResetSent] = useState(false)
+  const [resetLoading, setResetLoading] = useState(false)
+
+  async function handleForgotPassword() {
+    setError(null)
+    setResetSent(false)
+    if (!email) {
+      setError('Escribí tu email arriba y volvé a tocar "¿Olvidaste tu contraseña?".')
+      return
+    }
+    setResetLoading(true)
+    try {
+      const supabase = getSupabaseBrowserClient()
+      if (!supabase) {
+        setError('No se pudo inicializar el cliente de autenticación.')
+        return
+      }
+      await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/actualizar-password`,
+      })
+      // Mensaje genérico siempre, exista o no el email -- ver nota arriba.
+      setResetSent(true)
+    } finally {
+      setResetLoading(false)
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -108,6 +144,23 @@ export default function LoginPage() {
             {loading ? 'Ingresando…' : 'Ingresar'}
           </button>
         </form>
+
+        <div className="mt-4 text-center">
+          {resetSent ? (
+            <p className="text-xs text-gray-500">
+              Si el email existe, te enviamos un enlace para restablecer la contraseña.
+            </p>
+          ) : (
+            <button
+              type="button"
+              onClick={handleForgotPassword}
+              disabled={resetLoading}
+              className="text-xs text-green-700 underline underline-offset-2 hover:text-green-900 disabled:opacity-50"
+            >
+              {resetLoading ? 'Enviando…' : '¿Olvidaste tu contraseña?'}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
