@@ -572,6 +572,31 @@
   commit `267f802`) sigue pendiente de confirmación del usuario — no es
   parte de este cierre, solo una nota de seguimiento.
 
+- **(2026-09-08) Merge de `staging` a `main` — login real en producción
+  (commit `c9b25f0`):** merge (mensaje default de Git), 94 archivos, 2
+  conflictos — ambos de documentación
+  (`docs/ESTADO_PROYECTO.md`, `docs/RYZOS_ORQUESTADOR_V3.1.md`, main
+  había quedado con snapshots viejos desde el bootstrap manual del
+  2026-08-21), resueltos a favor del contenido de `staging` — **ningún
+  archivo de código en conflicto**. `npm run build` limpio antes del
+  push, verificado por CLI antes de completar el merge commit.
+
+  Esto lleva a producción real (`ryzosagri.com`) todo el proyecto de
+  login real (Fases A-D): login por sesión real de Supabase Auth, RBAC
+  con triggers de rol en las 7 tablas de Padrón/QC/Inspecciones, y el
+  retiro completo del gate de Basic Auth de `middleware.js`.
+
+  **Verificado en vivo contra producción real:** Eduardo (`admin`) y
+  Dante (`tecnico_campo`) entraron con normalidad por
+  `ryzosagri.com/login`; Cowork confirmó por navegador que sin sesión
+  (con o sin un header `Authorization: Basic` viejo) siempre redirige a
+  `/login`, nunca `401`, nunca deja pasar — mismo resultado que ya se
+  había verificado en `staging`.
+
+  **Esto cierra `specs/login_real_organizacion_rol.md` de punta a
+  punta, ahora también en producción** — no queda ningún pendiente de
+  ese proyecto en ninguna rama.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
