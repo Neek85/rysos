@@ -4,6 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This project is also worked on with Gemini under the same "Senior RYZOS Architect" role (not just Claude) — see `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1 for the multi-AI collaboration protocol, including the mandatory second-review gate for SQL/RLS/migrations/security tasks before they reach Claude Code CLI.
 
+## Token Economy & Output Rules
+- Routine tasks (no SQL/RLS/migrations/security touched): do not reprint whole files in the terminal chat if already modified on disk. Report in 3-4 lines: file(s) modified, build/test/lint result.
+- SQL/RLS/migrations/security tasks: the review gate (Section 4.1) still requires literal evidence before approval -- but use `git diff`/`git show`, never the full file, unless there is no previous version to diff against (e.g. a brand-new function).
+- Keep docs/ESTADO_PROYECTO.md and AI_STATE.md scoped to current state + last 2-3 milestones/blockers each; older history moves to docs/archive/ (see below), which is not read by default.
+
 ## Commands
 
 ### Python (backend/ETL/GIS scripts + tests)
@@ -157,11 +162,28 @@ candidate-list resolvers rather than fixed names.
 
 ### Documentation of DB state
 
-`docs/schema_live.md` is a manually maintained snapshot of the live schema
-(no `npm run sync-schema` or equivalent exists) — regenerate it by reading
-`supabase/migrations/*.sql` in order after any migration change.
-Architecture-level decisions about the GIS core are recorded as ADRs under
-`docs/adr/`.
+`docs/schema_live.md` was split (2026-09-04) into 3 manually maintained
+snapshots by vertical — load only the one(s) relevant to the folder
+you're touching, not all three, to keep context usage down:
+- `docs/schema_live_core.md` — `ORGANIZACIONES`, `PADRON_SOCIOS`,
+  Supabase Auth/`PERFILES_USUARIO_INTERNOS`. Load when touching
+  `app/dashboard/socios/**` (socio side), `lib/actions/sociosActions.js`
+  (socio functions), `lib/actions/organizacionesActions.js`, auth/login
+  code, or anything about `ID_Organizacion` resolution.
+- `docs/schema_live_agricola.md` — `PADRON_PARCELAS`, `EUDR_*`,
+  `INSPECCIONES`/`CAP_*`, the spatial views. Load when touching
+  `app/dashboard/mapa/**`, `app/dashboard/qc/**`,
+  `app/dashboard/inspecciones/**`, `app/dashboard/socios/**` (parcela
+  side), `lib/actions/gisActions.js`, `lib/eudrQcActions.js`,
+  `lib/inspeccionesActions.js`, or any `EUDR_*`/`INSPECCIONES` migration.
+- `docs/schema_live_pecuario.md` — the `PECUARIO_*` vertical. No tables
+  exist yet; load only to confirm that before assuming otherwise.
+
+No `npm run sync-schema` or equivalent exists for any of the three —
+regenerate the relevant file by reading `supabase/migrations/*.sql` in
+order after any migration change. Architecture-level decisions about
+the GIS core are recorded as ADRs under `docs/adr/` (see
+`docs/adr/INDEX.md` for the full list with table/module and status).
 
 ## Workflow convention (SDD)
 

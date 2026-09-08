@@ -140,7 +140,14 @@ function ParcelaForm({ socioId, organizationId, parcela, existingParcelas, produ
   )
 }
 
-export default function ParcelaFormModal({ socio, organizationId, onClose, onParcelaCreated }) {
+export default function ParcelaFormModal({ socio, organizationId, userRole, onClose, onParcelaCreated }) {
+  // RBAC (specs/rbac_webgis_padron.md) -- solo UX, el chequeo real
+  // vive en lib/actions/sociosActions.js (assertAdminRole en
+  // updateParcela/deactivateParcela). `userRole` es opcional a
+  // propósito: este modal no tiene otro consumidor hoy, pero un
+  // caller futuro que no lo pase se degrada a "no-admin" (fail-closed),
+  // nunca al revés.
+  const isAdmin = userRole === 'admin'
   const [parcelas, setParcelas] = useState([])
   const [productos, setProductos] = useState([])
   const [loading, setLoading] = useState(true)
@@ -248,7 +255,7 @@ export default function ParcelaFormModal({ socio, organizationId, onClose, onPar
             )}
 
             {parcelas.map((p) =>
-              editingParcela?.ID_Parcela_Fija === p.ID_Parcela_Fija ? (
+              isAdmin && editingParcela?.ID_Parcela_Fija === p.ID_Parcela_Fija ? (
                 <ParcelaForm
                   key={p.ID_Parcela_Fija}
                   socioId={socio.ID_Socio}
@@ -271,44 +278,47 @@ export default function ParcelaFormModal({ socio, organizationId, onClose, onPar
                       {p.totalh ?? 0} ha · {p.geom ? 'Con geometría' : 'Sin geometría'}
                     </p>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setEditingParcela(p)}
-                      className="rounded-lg border border-green-200 bg-green-50 px-3 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
-                    >
-                      Editar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setParcelaToDeactivate(p)}
-                      className="rounded-lg border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
-                    >
-                      Dar de baja
-                    </button>
-                  </div>
+                  {isAdmin && (
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditingParcela(p)}
+                        className="rounded-lg border border-green-200 bg-green-50 px-3 py-1 text-xs font-medium text-green-700 hover:bg-green-100"
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setParcelaToDeactivate(p)}
+                        className="rounded-lg border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
+                      >
+                        Dar de baja
+                      </button>
+                    </div>
+                  )}
                 </div>
               )
             )}
 
-            {showNewForm ? (
-              <ParcelaForm
-                socioId={socio.ID_Socio}
-                organizationId={organizationId}
-                existingParcelas={parcelas}
-                productos={productos}
-                onSaved={handleSaved}
-                onCancel={() => setShowNewForm(false)}
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => setShowNewForm(true)}
-                className="w-full rounded-lg border border-dashed border-gray-300 py-2 text-sm font-medium text-gray-500 hover:border-green-300 hover:text-green-700"
-              >
-                + Agregar parcela
-              </button>
-            )}
+            {isAdmin &&
+              (showNewForm ? (
+                <ParcelaForm
+                  socioId={socio.ID_Socio}
+                  organizationId={organizationId}
+                  existingParcelas={parcelas}
+                  productos={productos}
+                  onSaved={handleSaved}
+                  onCancel={() => setShowNewForm(false)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowNewForm(true)}
+                  className="w-full rounded-lg border border-dashed border-gray-300 py-2 text-sm font-medium text-gray-500 hover:border-green-300 hover:text-green-700"
+                >
+                  + Agregar parcela
+                </button>
+              ))}
           </div>
         )}
       </div>

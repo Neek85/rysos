@@ -8,6 +8,7 @@ import { fetchSocios } from '@/lib/sociosSearch'
 import { CERT_FLAG_FIELDS } from '@/lib/validations/socios'
 import { deactivateSocio } from '@/lib/actions/sociosActions'
 import { resolveTestOrganizationOverride } from '@/lib/actions/organizacionesActions'
+import { getCurrentProfile } from '@/lib/auth/getCurrentProfile'
 import { SocioActionError } from '@/lib/actions/socioActionError'
 import { exportSociosCsv, exportParcelasCsv } from '@/lib/padronCsv'
 import SocioFormModal from '@/components/features/socios/SocioFormModal'
@@ -35,6 +36,20 @@ export default function SociosPage() {
   const [socioToDeactivate, setSocioToDeactivate] = useState(null)
   const [deactivating, setDeactivating] = useState(false)
   const [showImport, setShowImport] = useState(false)
+
+  // RBAC (specs/rbac_webgis_padron.md) -- matriz de permisos ya
+  // confirmada (specs/login_real_organizacion_rol.md §5):
+  // tecnico_campo/auditor_qc son "Solo lectura" en esta pantalla. Solo
+  // UX -- el chequeo real vive en lib/actions/sociosActions.js
+  // (assertAdminRole). `null` (todavía sin resolver) cuenta como
+  // no-admin -- fail-closed, nunca se muestra un control de escritura
+  // antes de confirmar el rol real.
+  const [userRole, setUserRole] = useState(null)
+  const isAdmin = userRole === 'admin'
+
+  useEffect(() => {
+    getCurrentProfile().then(({ rol }) => setUserRole(rol))
+  }, [])
 
   // Ronda 8 (2026-09-01, mejoras_importador_padron_masivo.md):
   // `organizationId` ahora viene directo del retorno de `fetchSocios`
@@ -176,38 +191,40 @@ export default function SociosPage() {
             {total > 0 ? `${total} socio(s) encontrado(s)` : 'Sin registros'}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={handleExportSocios}
-            className="rounded-lg border border-gray-200 px-4 py-2 text-center text-sm font-semibold text-gray-600 hover:bg-gray-50"
-            title="Exporta todo el padrón de socios activos, no solo esta página"
-          >
-            ⬇ Exportar Padrón de Socios (CSV)
-          </button>
-          <button
-            type="button"
-            onClick={handleExportParcelas}
-            className="rounded-lg border border-gray-200 px-4 py-2 text-center text-sm font-semibold text-gray-600 hover:bg-gray-50"
-            title="Exporta todas las parcelas activas, no solo esta página"
-          >
-            ⬇ Exportar Padrón de Parcelas (CSV)
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowImport(true)}
-            className="rounded-lg border border-gray-200 px-4 py-2 text-center text-sm font-semibold text-gray-600 hover:bg-gray-50"
-          >
-            ⬆ Cargar Padrón Masivo (CSV)
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowNewSocio(true)}
-            className="rounded-lg bg-green-800 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-green-900"
-          >
-            + Nuevo Socio
-          </button>
-        </div>
+        {isAdmin && (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleExportSocios}
+              className="rounded-lg border border-gray-200 px-4 py-2 text-center text-sm font-semibold text-gray-600 hover:bg-gray-50"
+              title="Exporta todo el padrón de socios activos, no solo esta página"
+            >
+              ⬇ Exportar Padrón de Socios (CSV)
+            </button>
+            <button
+              type="button"
+              onClick={handleExportParcelas}
+              className="rounded-lg border border-gray-200 px-4 py-2 text-center text-sm font-semibold text-gray-600 hover:bg-gray-50"
+              title="Exporta todas las parcelas activas, no solo esta página"
+            >
+              ⬇ Exportar Padrón de Parcelas (CSV)
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowImport(true)}
+              className="rounded-lg border border-gray-200 px-4 py-2 text-center text-sm font-semibold text-gray-600 hover:bg-gray-50"
+            >
+              ⬆ Cargar Padrón Masivo (CSV)
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowNewSocio(true)}
+              className="rounded-lg bg-green-800 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-green-900"
+            >
+              + Nuevo Socio
+            </button>
+          </div>
+        )}
       </div>
 
       {toast && (
@@ -333,20 +350,24 @@ export default function SociosPage() {
                         >
                           Parcelas
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingSocio(row)}
-                          className="rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-100"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSocioToDeactivate(row)}
-                          className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
-                        >
-                          Dar de baja
-                        </button>
+                        {isAdmin && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setEditingSocio(row)}
+                              className="rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-100"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSocioToDeactivate(row)}
+                              className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                            >
+                              Dar de baja
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -402,6 +423,7 @@ export default function SociosPage() {
         <ParcelaFormModal
           socio={parcelasSocio}
           organizationId={parcelasSocio.ID_Organizacion}
+          userRole={userRole}
           onClose={() => setParcelasSocio(null)}
         />
       )}

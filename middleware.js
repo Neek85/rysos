@@ -1,58 +1,43 @@
-// Gate temporal de contraseña compartida para /dashboard/** y las rutas
-// internas de app/api/qc/**, app/api/gis/** que las respaldan (Service
-// Role Key server-side contra PADRON_SOCIOS/PADRON_PARCELAS/EUDR_*,
-// nunca pensadas para ser alcanzables desde fuera de esas pantallas —
-// ver el reconocimiento de app/api/** en AI_STATE.md 2026-09-02).
-// /trace/[lot_hash] y /api/trace/** quedan explícitamente FUERA del
-// matcher — es el portal público de trazabilidad, debe seguir
-// accesible sin contraseña.
+// Fase D Paso 3 (specs/login_real_organizacion_rol.md §6) -- el gate de
+// Basic Auth de contraseña compartida (parche temporal desde el primer
+// deploy a producción, ver historial de este archivo) se retira acá,
+// después de la verificación end-to-end completa: incidente de login
+// real cerrado (Eduardo/Dante entrando con su propia cuenta, commits
+// `15be571`/`f87345c`) y smoke test formal por rol 15/15 (Fase D Paso 2,
+// commit `267f802`). Ver specs/retirar_basic_auth_gate.md.
 //
-// Esto es un parche temporal (HTTP Basic Auth, un solo usuario/clave
-// compartida) mientras se diseña el login real por organización/rol
-// como proyecto aparte — no reemplaza ese trabajo, solo evita que
-// /dashboard/** quede abierto al público general mientras tanto.
+// Gate para /dashboard/** y las rutas internas de app/api/qc/**,
+// app/api/gis/** que las respaldan (Service Role Key server-side contra
+// PADRON_SOCIOS/PADRON_PARCELAS/EUDR_*, nunca pensadas para ser
+// alcanzables desde fuera de esas pantallas -- ver el reconocimiento de
+// app/api/** en AI_STATE.md 2026-09-02). /trace/[lot_hash] y
+// /api/trace/** quedan explícitamente FUERA del matcher -- es el portal
+// público de trazabilidad, debe seguir accesible sin sesión.
 //
-// Fail-closed: si DASHBOARD_GATE_PASSWORD no está definida en el
-// entorno, el gate BLOQUEA igual (nunca deja pasar sin contraseña por
-// una variable de entorno faltante).
+// Única capa de acceso que queda: sesión real de Supabase Auth
+// (auth.getUser(), NUNCA solo getSession() sin validar -- getUser()
+// valida el JWT contra el servidor de Supabase Auth de verdad;
+// getSession() solo lee la cookie sin verificar que siga siendo válida,
+// recomendación de seguridad oficial de Supabase para middlewares).
+// Fail-closed: sin sesión válida, siempre redirige a /login -- nunca
+// deja pasar por defecto.
 import { NextResponse } from 'next/server'
+import { createSessionMiddlewareClient } from '@/lib/supabase/sessionServerClient'
 
-const GATE_USER = 'ryzos'
+export async function middleware(request) {
+  const response = NextResponse.next({ request })
+  const supabase = createSessionMiddlewareClient(request, response)
+  const {
+    data: { user: sessionUser },
+  } = await supabase.auth.getUser()
 
-function unauthorized() {
-  return new NextResponse('Autenticación requerida.', {
-    status: 401,
-    headers: { 'WWW-Authenticate': 'Basic realm="RYZOS interno"' },
-  })
-}
-
-export function middleware(request) {
-  const gatePassword = process.env.DASHBOARD_GATE_PASSWORD
-  if (!gatePassword) {
-    return unauthorized()
+  if (!sessionUser) {
+    const loginUrl = new URL('/login', request.url)
+    loginUrl.searchParams.set('next', request.nextUrl.pathname + request.nextUrl.search)
+    return NextResponse.redirect(loginUrl, 307)
   }
 
-  const authHeader = request.headers.get('authorization')
-  if (!authHeader || !authHeader.startsWith('Basic ')) {
-    return unauthorized()
-  }
-
-  let decoded
-  try {
-    decoded = atob(authHeader.slice('Basic '.length))
-  } catch {
-    return unauthorized()
-  }
-
-  const separatorIndex = decoded.indexOf(':')
-  const user = separatorIndex === -1 ? decoded : decoded.slice(0, separatorIndex)
-  const password = separatorIndex === -1 ? '' : decoded.slice(separatorIndex + 1)
-
-  if (user !== GATE_USER || password !== gatePassword) {
-    return unauthorized()
-  }
-
-  return NextResponse.next()
+  return response
 }
 
 export const config = {

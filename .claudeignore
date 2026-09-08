@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+dist/
+coverage/
+*.geojson
+*.shp
+*.kml
+*.zip
+package-lock.json
+docs/archive/
+supabase/migrations/archivadas/

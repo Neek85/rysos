@@ -124,7 +124,7 @@ class TestLotHash(unittest.TestCase):
     def test_verification_url_contains_hash(self):
         url = self.svc.get_trace_url(self.lot_hash)
         self.assertIn(self.lot_hash, url)
-        self.assertTrue(url.startswith("https://app.ryzos.io/trace/"))
+        self.assertTrue(url.startswith("https://ryzosagri.com/trace/"))
 
 
 class TestPublicPayloadStructure(unittest.TestCase):
@@ -164,7 +164,7 @@ class TestQRCodeGeneration(unittest.TestCase):
 
     def test_trace_url_format(self):
         url = self.svc.get_trace_url(self.lot_hash)
-        self.assertEqual(url, f"https://app.ryzos.io/trace/{self.lot_hash}")
+        self.assertEqual(url, f"https://ryzosagri.com/trace/{self.lot_hash}")
 
     def test_qr_data_url_prefix(self):
         data_url = self.svc.generate_qr_data_url(self.lot_hash)

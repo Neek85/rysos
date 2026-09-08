@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { getSupabaseClient } from '@/lib/supabaseClient'
+import { getSupabaseBrowserClient } from '@/lib/supabase/browserClient'
 import { fetchInspecciones } from '@/lib/inspeccionesActions'
 
 const ESTADO_STYLES = {
@@ -42,7 +42,7 @@ export default function InspeccionesPage() {
     async function load() {
       setLoading(true)
       setError(null)
-      const supabase = getSupabaseClient()
+      const supabase = getSupabaseBrowserClient()
       if (!supabase) {
         setError('Cliente Supabase no configurado (revisa las variables de entorno).')
         setLoading(false)
