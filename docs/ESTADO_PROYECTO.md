@@ -464,6 +464,47 @@
   `AI_STATE.md` (hallazgo del 2026-09-06, ahora marcado RESUELTO) para
   el detalle completo.
 
+- **(2026-09-08) Cerrado el incidente real de login — Eduardo (`admin`,
+  COOP-AROMAS-VALLE) y Dante (`tecnico_campo`, COOP-AROMAS-VALLE), el
+  roster real y no las 3 cuentas demo de Fase D Paso 1, ya entran a
+  `/dashboard` con su propia cuenta, verificado en vivo con las dos:**
+  el smoke test formal (Fase D Paso 2) encontró que ninguno de los dos
+  podía completar login — no un problema de SMTP/dominio (ya resuelto
+  antes: Resend entregaba los correos, confirmado "Delivered"), sino
+  dos huecos de código reales que nunca se habían topado hasta que el
+  roster real llegó tan lejos (las cuentas demo se activaron por Admin
+  API, sin pasar por este camino).
+
+  1. **`/actualizar-password` no existía.** El botón "Send password
+     recovery" del Dashboard de Supabase no acepta `redirectTo` propio
+     — siempre usa el Site URL vigente, que apuntaba al dashboard
+     público (`app/page.jsx`, sin ningún formulario de contraseña).
+     Fix: página nueva (cliente de sesión por cookies, para que
+     `middleware.js` pueda validarla) + link self-service "¿Olvidaste
+     tu contraseña?" en `/login` + Site URL de Supabase Auth
+     actualizado a mano (fuera del repo, vía Claude in Chrome) a
+     `.../actualizar-password`. Ver `specs/recuperacion_password.md`,
+     commit `15be571`.
+  2. **`/dashboard` a secas daba 404 real.** Login y
+     `/actualizar-password` navegaban ahí por defecto tras un login
+     exitoso, pero nunca existió `app/dashboard/page.jsx` — Next.js no
+     tenía nada que resolver para ese path exacto. Encontrado recién
+     al verificar el fix anterior en vivo (Basic Auth y sesión de
+     Supabase ya pasaban las dos). Fix: `app/dashboard/page.jsx`
+     redirige a `/dashboard/mapa`. Ver
+     `specs/redirect_dashboard_default.md`, commit `f87345c`.
+
+  **Verificado en vivo, de punta a punta, con las dos cuentas reales**
+  (no una réplica): Eduardo y Dante completaron el formulario de
+  contraseña nueva y llegaron al Mapa WebGIS (`/dashboard/mapa`)
+  cargado, sin 404 ni bloqueo de Basic Auth — confirmado por el
+  usuario con capturas de las dos cuentas. `npm run build` limpio en
+  los dos commits. Sin gate de segunda revisión aplicable — ninguno de
+  los dos hallazgos tocó SQL/RLS/migraciones (Sección 4.1.2 del
+  protocolo Multi-IA); redactado, corregido y verificado por Claude
+  (Cowork) de punta a punta, incluida la edición manual del Site URL
+  de Supabase Auth.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
