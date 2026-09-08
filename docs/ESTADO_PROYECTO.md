@@ -572,6 +572,65 @@
   commit `267f802`) sigue pendiente de confirmación del usuario — no es
   parte de este cierre, solo una nota de seguimiento.
 
+- **(2026-09-08) Merge de `staging` a `main` — login real en producción
+  (commit `c9b25f0`):** merge (mensaje default de Git), 94 archivos, 2
+  conflictos — ambos de documentación
+  (`docs/ESTADO_PROYECTO.md`, `docs/RYZOS_ORQUESTADOR_V3.1.md`, main
+  había quedado con snapshots viejos desde el bootstrap manual del
+  2026-08-21), resueltos a favor del contenido de `staging` — **ningún
+  archivo de código en conflicto**. `npm run build` limpio antes del
+  push, verificado por CLI antes de completar el merge commit.
+
+  Esto lleva a producción real (`ryzosagri.com`) todo el proyecto de
+  login real (Fases A-D): login por sesión real de Supabase Auth, RBAC
+  con triggers de rol en las 7 tablas de Padrón/QC/Inspecciones, y el
+  retiro completo del gate de Basic Auth de `middleware.js`.
+
+  **Verificado en vivo contra producción real:** Eduardo (`admin`) y
+  Dante (`tecnico_campo`) entraron con normalidad por
+  `ryzosagri.com/login`; Cowork confirmó por navegador que sin sesión
+  (con o sin un header `Authorization: Basic` viejo) siempre redirige a
+  `/login`, nunca `401`, nunca deja pasar — mismo resultado que ya se
+  había verificado en `staging`.
+
+  **Esto cierra `specs/login_real_organizacion_rol.md` de punta a
+  punta, ahora también en producción** — no queda ningún pendiente de
+  ese proyecto en ninguna rama.
+
+- **(2026-09-08) Fuga de PII encontrada y corregida en `/dashboard/socios`
+  — cualquier cuenta autenticada veía el padrón real de
+  `COOP-AROMAS-VALLE` (618 socios, nombre + DNI):** confirmado en vivo
+  por el usuario (captura de la cuenta demo). Causa raíz:
+  `lib/sociosSearch.js::fetchSocios` usaba `resolveOrganizationId()`
+  (`lib/actions/organizacionesActions.js`) como fallback por defecto —
+  resolvía "la organización real más antigua" sin mirar la sesión en
+  absoluto, una heurística de antes de que existiera login real
+  (`specs/mejoras_importador_padron_masivo.md` ronda 8) que nadie
+  actualizó cuando el login real (`specs/login_real_organizacion_rol.md`,
+  Fases A-D) se completó y llegó a producción. Las escrituras nunca
+  estuvieron expuestas (`ID_Organizacion` siempre viene del registro real
+  que se edita, más `fn_enforce_padron_admin_role`, `ADR-039`, del lado
+  de RLS) — era un gap de lectura únicamente.
+
+  **Fix:** `resolveOrganizationId()` retirada (sin ningún otro caller en
+  el repo); nueva `resolveSessionOrganizationId()` resuelve por sesión
+  real, mismo patrón que `lib/auth/getCurrentProfile.js`
+  (`PERFILES_USUARIO_INTERNOS`, fail-closed a `null`).
+  `resolveTestOrganizationOverride()` sin cambios. Test nuevo
+  `tests/test_resolve_session_organization_id.mjs` — ver `AI_STATE.md`
+  (hallazgo del 2026-09-08) para el detalle completo, incluido por qué el
+  test no puede ejercitar una sesión real fuera del runtime de Next y qué
+  prueba en su lugar. `node --test tests/*.mjs`: 681/685 antes y después
+  del fix (4 fallos preexistentes sin relación, confirmados con `git
+  stash` sobre el mismo `origin/staging`). `npm run build`/`npm run lint`
+  limpios, sin regresión.
+
+  **Commit a `staging` únicamente en esta revisión — sin merge a `main`.**
+  Redactado, corregido y verificado por Claude (Cowork) de punta a punta
+  (gate de segunda revisión de la Sección 4.1 ya cubierto por eso); el
+  merge a producción queda como paso manual del usuario, pendiente de su
+  propia revisión del diff.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

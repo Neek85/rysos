@@ -157,6 +157,35 @@ deliberada, confirmada con el usuario antes de aplicar la migración:
   `assertAdminRole` a nivel de aplicación) **sin** convertirlo en una
   regresión funcional a nivel de base de datos.
 
+## Cierre del gap de lectura (2026-09-08, ver `AI_STATE.md` y `docs/ESTADO_PROYECTO.md`)
+
+El cierre de arriba fue del lado de ESCRITURA únicamente. Un hallazgo
+posterior (2026-09-08, confirmado en vivo por el usuario con la cuenta
+demo en `ryzosagri.com/dashboard/socios`) encontró un gap simétrico del
+lado de LECTURA, sin relación con RLS/triggers: `fetchSocios`
+(`lib/sociosSearch.js`) resolvía la organización a mostrar vía
+`resolveOrganizationId()` (`lib/actions/organizacionesActions.js`), una
+heurística de "primera organización real" (`ORGANIZACIONES` ordenada por
+`creado_en`) que nunca miraba la sesión — sobrevivió intacta desde antes
+de que existiera login real, y nadie la actualizó cuando
+`specs/login_real_organizacion_rol.md` (Fases A-D) llegó a producción.
+Efecto: cualquier cuenta autenticada, sin importar su propia
+organización o rol, veía siempre el padrón completo de
+`COOP-AROMAS-VALLE` (618 socios reales, nombre + DNI).
+
+Este gap era ortogonal al de escritura de arriba — `assertAdminRole()` y
+el trigger `fn_enforce_padron_admin_role()` nunca estuvieron
+comprometidos, porque las escrituras siempre tomaron `ID_Organizacion`
+del registro real que se edita, nunca de esta resolución.
+
+**Fix:** `resolveOrganizationId()` retirada; nueva
+`resolveSessionOrganizationId()` resuelve por sesión real
+(`PERFILES_USUARIO_INTERNOS`, mismo patrón que
+`lib/auth/getCurrentProfile.js`), fail-closed a `null`. Ver `AI_STATE.md`
+(hallazgo del 2026-09-08) para el detalle completo, la verificación de
+regresión y por qué el test nuevo no puede ejercitar una sesión real
+fuera del runtime de Next.
+
 `service_role`/conexiones directas de `postgres` quedan exentas de
 forma natural: la condición del trigger solo se evalúa cuando
 `auth.role() = 'authenticated'`, así que ETL/scripts/Admin API no se
