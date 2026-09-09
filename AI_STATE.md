@@ -13,6 +13,54 @@ entradas puntuales de "esto bloqueó, acá está la causa real".
 > raíz determinada todavía) de las tablas centrales completamente
 > vacías, y el estado más reciente.
 
+## 2026-09-09 — RESUELTO: fotos de evidencia no cargaban en Mapa WebGIS ni Consola QC — causa real confirmada en vivo, no una hipótesis
+
+**Tarea:** parte 2/3 del prompt de "revertir aprobado + fotos + botón
+Drive" (`specs/revertir_aprobado_a_qc.md` cubre la parte 1). Investigación
+en 3 pasos, todos verificados contra la instancia real (Service Role Key +
+sesiones reales por magic link), no solo leyendo código:
+
+1. **`record.evidencia_foto` SÍ tenía un valor real** (descarta ingesta/
+   ETL como causa): `EUDR_MONITOREO`/`EUDR_INSTALACIONES` ya tienen filas
+   reales en `ORG-TEST-DEMO` (las 3 tablas EUDR dejaron de estar vacías —
+   ver `2026-09-03g` más abajo, sincronizadas en algún momento entre esa
+   investigación y esta tarea) con `evidencia_foto` poblado, ej.
+   `ORG-TEST-DEMO/geom-movil-monitoreo-eudr_20260909092224015.jpg`.
+2. **El objeto SÍ existe en el bucket** en esa ruta exacta (confirmado con
+   Storage List API, Service Role Key) — descarta un path mal armado por
+   el ETL.
+3. **Causa real: RLS de `storage.objects`, no el visor en sí.**
+   `rls_storage_select_evidencias`
+   (`supabase/migrations/20260816_fase3_seguridad_rls.sql`) exige
+   `TO authenticated` + `(storage.foldername(name))[1] = auth_org_id()`.
+   `QcDetailEditor.jsx`/`MapDashboard.jsx::loadPhoto` llamaban a
+   `createSignedUrl` con `getSupabaseClient()` (`lib/supabaseClient.js`,
+   `createClient()` con solo la anon key, **sin sesión** — no lee cookies,
+   a diferencia de `getSupabaseBrowserClient()`). Reproducido en vivo,
+   contra el objeto real de arriba:
+   - Anon key (sin sesión, exactamente lo que hacía el código): `400
+     {"statusCode":"404","error":"not_found","message":"Object not
+     found","code":"NoSuchKey"}` — RLS oculta la fila, Storage no puede
+     distinguir "no existe" de "no autorizado".
+   - Service Role Key: `200`, URL firmada real.
+   - Sesión real (`admin-demo@ryzos-demo.test`, magic link, misma
+     organización): `200`, URL firmada real — confirma que una sesión
+     real (no Service Role Key) alcanza, porque el objeto está bajo su
+     propia organización.
+   El error de `createSignedUrl` se descartaba en silencio en ambos
+   componentes (`if (!error && data?.signedUrl) ...`), así que el síntoma
+   era "la foto nunca carga" sin ningún mensaje de error visible.
+
+**Fix:** ambos componentes pasan a usar `getSupabaseBrowserClient()`
+(`lib/supabase/browserClient.js`, ya existía, `createBrowserClient` de
+`@supabase/ssr` — antes de esta tarea solo se usaba en
+`app/login/page.jsx`) para la llamada a `createSignedUrl` específicamente
+— `MapDashboard.jsx::fetchRecords` sigue con `getSupabaseClient()`/
+`vw_monitoreo_web` sin cambios (esa vista funciona igual con o sin
+sesión, a propósito, porque el Portal Público de Trazabilidad también la
+consulta sin sesión). Ver `docs/ESTADO_PROYECTO.md` para el detalle
+completo y la verificación en el navegador.
+
 ## 2026-09-08 — RESUELTO: Smoke test formal por rol de Fase D Paso 2 — gap real confirmado en `/dashboard/inspecciones` × `auditor_qc`
 
 **Tarea:** `specs/smoke_test_fase_d_paso2.md` — verificar las 15

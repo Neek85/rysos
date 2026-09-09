@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { getSupabaseClient } from '@/lib/supabaseClient'
+import { getSupabaseBrowserClient } from '@/lib/supabase/browserClient'
 import {
   buildTracesPayload,
   downloadTraceabilityPackage,
@@ -722,9 +723,22 @@ export default function MapDashboard() {
 
   // Firma la URL de la foto de evidencia solo cuando el usuario abre el popup
   // (el bucket evidencias_eudr es privado, no hay URL pública directa).
+  //
+  // CAUSA RAÍZ REAL de "las fotos no cargan" (2026-09-09, confirmado en
+  // vivo -- ver AI_STATE.md y el comentario equivalente en
+  // app/dashboard/qc/components/QcDetailEditor.jsx::EVIDENCIA_BUCKET):
+  // createSignedUrl exige RLS `authenticated` sobre storage.objects
+  // (rls_storage_select_evidencias) -- getSupabaseClient() (arriba, usado
+  // para fetchRecords) es la anon key SIN sesión, y devuelve 400 "Object
+  // not found" (RLS oculta la fila) para un objeto que sí existe. Acá SÍ
+  // hace falta la sesión real (getSupabaseBrowserClient) -- a diferencia
+  // de fetchRecords, que sigue con getSupabaseClient/vw_monitoreo_web sin
+  // cambios (esa vista funciona igual con o sin sesión, ver el Portal
+  // Público de Trazabilidad en /trace/[lot_hash], que la consulta sin
+  // sesión a propósito).
   async function loadPhoto(layer, record) {
     if (!record?.evidencia_foto) return
-    const supabase = getSupabaseClient()
+    const supabase = getSupabaseBrowserClient()
     if (!supabase) return
 
     try {
