@@ -32,6 +32,60 @@
 > [`docs/archive/ESTADO_HISTORICO.md`](archive/ESTADO_HISTORICO.md)
 > (no leído por defecto).
 
+- **(2026-09-09) Revertir Aprobado a revisión + fix real de fotos de evidencia
+  (Mapa/QC) + botón "Sincronizar Google Drive" ocultado:** tarea de 4 partes.
+  - **Parte 1 — Revertir Aprobado:** pestañas "Pendientes"/"Aprobados" en
+    `/dashboard/qc` (`fetchApprovedRecords`, reusa `fetchRecordsByState` —
+    mismo refactor sin cambio de comportamiento para `fetchPendingRecords`);
+    un registro `APROBADO` muestra un único botón "↩ Revertir a Revisión"
+    en vez de Aprobar/Rechazar (`reopenRecord`/`reopenQcRecord`, mismo
+    patrón que `approveRecord`/`rejectRecord`). **Nunca toca
+    `PADRON_PARCELAS`** (confirmado con el usuario). El trigger
+    `fn_enforce_qc_approval_roles` (ADR-039) ya cubre este `UPDATE` —
+    **confirmado en vivo con sesiones reales** (`auditor-qc-demo` permitido,
+    `tecnico-campo-demo` bloqueado `42501`), no solo leído. `audit_logs`
+    gana `accion='REVERTIDO'` (requirió ampliar un `CHECK` real de columna,
+    `20260909150000_audit_logs_revertido.sql` — no una política RLS).
+    Corrección de firma: el prompt pedía `reopenQcRecord(tablaOrigen,
+    registroId, ...) => {ok,error}` — no coincide con el patrón real
+    (`approveQcRecord`/`rejectQcRecord` reciben el registro completo y
+    lanzan `EUDRQcError`); se siguió el patrón real.
+  - **Parte 2/3 — Fotos no cargaban:** causa real confirmada en vivo (no
+    hipótesis): `QcDetailEditor.jsx`/`MapDashboard.jsx::loadPhoto` firmaban
+    la URL con `getSupabaseClient()` (anon key, sin sesión), pero
+    `rls_storage_select_evidencias` exige `authenticated`. Reproducido con
+    el objeto real `ORG-TEST-DEMO/geom-movil-monitoreo-eudr_20260909092224015.jpg`:
+    anon → `400 Object not found`; sesión real → `200`. Fix: ambos
+    componentes pasan a `getSupabaseBrowserClient()` (ya existía, antes
+    solo se usaba en `/login`) para esa llamada específica —
+    `fetchRecords`/`vw_monitoreo_web` siguen con el cliente anon a
+    propósito. **Verificado en el navegador real** (login real como
+    `auditor-qc-demo`, no solo REST): la foto de un registro real de
+    `EUDR_INSTALACIONES` cargó en el panel de la Consola QC.
+  - **Parte 4 — Botón "Sincronizar Google Drive" oculto:** se quitó su
+    único render real (`app/dashboard/qc/page.jsx` — nunca se renderizaba
+    desde `/dashboard/mapa`, corrigiendo esa premisa de
+    `specs/drive_sync_trigger.md`). Componente y Route Handler quedan sin
+    borrar, documentados como en pausa.
+  - **Nota operativa:** para la verificación en el navegador se fijó una
+    contraseña temporal a la cuenta demo `auditor-qc-demo@ryzos-demo.test`
+    (Admin API) — si alguien más la usaba con otra contraseña, ya no es
+    válida; es una cuenta de prueba compartida (`ORG-TEST-DEMO`), no una
+    cuenta real de un usuario.
+  - Ver `specs/revertir_aprobado_a_qc.md`, `AI_STATE.md` (entrada
+    2026-09-09) y `specs/drive_sync_trigger.md` para el detalle completo.
+    Tests nuevos: `tests/test_qc_reopen_rbac_rls.py` (`@NEEDS_SUPABASE`,
+    sesiones reales), `tests/test_qc_evidencia_foto_session.mjs`, más
+    extensiones a `tests/test_eudr_qc_actions.mjs`/`test_qc_batch_audit.mjs`.
+    `node --test tests/*.mjs`: 722 tests, 713 passing (9 fallos
+    preexistentes no relacionados). `python -m pytest tests/`: 483 passed,
+    22 skipped, 5 fallos preexistentes no relacionados (confirmados con
+    `git stash` antes/después). `npm run build` limpio.
+  **Nota de autoría/revisión:** redactada y ejecutada por Claude (Cowork)
+  de punta a punta; gate de segunda revisión cubierto por autoría 100%
+  Claude (Cowork), igual que las 2 entradas anteriores. No tocó ninguna
+  política RLS nueva (solo un `CHECK` de columna en `audit_logs`).
+
 - **(2026-09-09) Revisión de seguridad real de `fn_aprobar_monitoreo_nueva_parcela`
   (cierra el gate de la entrada anterior con evidencia, no solo lectura de
   código) + fix `FOUND` en `fn_validar_codigo_parcela_unico`:**

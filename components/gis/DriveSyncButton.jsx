@@ -3,12 +3,16 @@
 import { useEffect, useState } from 'react'
 import { formatSyncMessage, summarizeErrorDetail } from '@/lib/driveSyncTrigger'
 
-// Botón "Sincronizar Google Drive" (/dashboard/qc, /dashboard/mapa) — ver
-// specs/drive_sync_trigger.md. Vive en components/gis/ (no bajo
-// app/dashboard/qc/components/, como pedía el prompt original) porque se
-// reutiliza en 2 páginas de secciones distintas — mismo criterio que
-// MapDashboard.jsx/QcConsoleMap.jsx, componentes GIS compartidos entre
-// rutas, en vez de vivir "adentro" de una sola.
+// Botón "Sincronizar Google Drive" — ver specs/drive_sync_trigger.md.
+//
+// EN PAUSA (2026-09-09, specs/drive_sync_trigger.md): se quitó su único
+// render real (app/dashboard/qc/page.jsx; nunca llegó a renderizarse
+// desde /dashboard/mapa, a diferencia de lo que decía este comentario) —
+// hasta que exista integración real con la API de Google Drive para una
+// organización paga (ver el spec, "Decisivo: drive_root es una ruta de
+// filesystem local"). El componente y el Route Handler
+// (app/api/gis/sync-drive/route.js) quedan sin uso pero sin borrar, para
+// no perder el trabajo si esa integración real se construye después.
 //
 // INVARIANTE DE ALCANCE: SOLO hace algo útil en desarrollo local con
 // RYZOS_DRIVE_ROOT configurada (ver .env.example) — en cualquier entorno
