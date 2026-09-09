@@ -28,6 +28,8 @@ function read(relPath) {
 const MIGRATION_PATH = 'supabase/migrations/20260823_200000_fn_validar_codigo_parcela_unico.sql'
 const MIGRATION_CONTEXTO_PATH =
   'supabase/migrations/20260823_210000_fn_validar_codigo_parcela_unico_contexto_legible.sql'
+const MIGRATION_FOUND_FIX_PATH =
+  'supabase/migrations/20260909130000_fix_fn_validar_codigo_parcela_unico_found.sql'
 const ROUTE_PATH = 'app/api/qc/validar-codigo-parcela/route.js'
 const DETAIL_EDITOR_PATH = 'app/dashboard/qc/components/QcDetailEditor.jsx'
 const ETL_PATH = 'scripts/etl_drive_to_supabase.py'
@@ -190,6 +192,36 @@ test('la migración de contexto legible mantiene id_monitoreo en la respuesta (�
   assert.match(source, /'id_monitoreo', m\.id_monitoreo/)
   assert.match(source, /v_umbral_conflicto_m constant numeric := 100;/)
   assert.match(source, /m\.id_monitoreo != p_monitoreo_id/)
+})
+
+// ---------------------------------------------------------------
+// Fix FOUND (20260909130000): distingue "no existe" de "existe pero
+// geom_inspeccion es NULL" (bug real documentado en AI_STATE.md,
+// 2026-09-08 -- un EUDR_MONITOREO real sin geometría capturada todavía
+// hacía fallar approveRecord/rejectRecord con "no encontrado").
+// ---------------------------------------------------------------
+
+test('el fix FOUND ya no usa v_geom IS NULL para detectar "no encontrado" (esa era la causa del bug: geom_inspeccion NULL en una fila real y existente)', () => {
+  const source = read(MIGRATION_FOUND_FIX_PATH)
+  assert.ok(!/IF v_geom IS NULL THEN/.test(source))
+  assert.match(source, /IF NOT FOUND THEN/)
+  assert.match(source, /RAISE EXCEPTION 'Registro % \(EUDR_MONITOREO\) no encontrado\.', p_monitoreo_id;/)
+})
+
+test('el fix FOUND conserva la firma, el umbral, la exclusión del propio registro y el contexto legible (fecha_monitoreo/tecnico_responsable) sin cambios', () => {
+  const source = read(MIGRATION_FOUND_FIX_PATH)
+  assert.match(source, /CREATE OR REPLACE FUNCTION public\.fn_validar_codigo_parcela_unico\(p_monitoreo_id uuid\)/)
+  assert.match(source, /v_umbral_conflicto_m constant numeric := 100;/)
+  assert.match(source, /m\.id_monitoreo != p_monitoreo_id/)
+  assert.match(source, /'fecha_monitoreo', m\.fecha_monitoreo/)
+  assert.match(source, /'tecnico_responsable', m\.tecnico_responsable/)
+  assert.match(source, /'id_monitoreo', m\.id_monitoreo/)
+})
+
+test('el fix FOUND sigue devolviendo tiene_conflicto=false y sin ID_Parcela_Fija cuando el registro no tiene código (esa rama no cambió)', () => {
+  const source = read(MIGRATION_FOUND_FIX_PATH)
+  assert.match(source, /IF v_id_parcela_fija IS NULL THEN/)
+  assert.match(source, /'tiene_conflicto', false/)
 })
 
 // ---------------------------------------------------------------

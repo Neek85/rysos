@@ -32,6 +32,68 @@
 > [`docs/archive/ESTADO_HISTORICO.md`](archive/ESTADO_HISTORICO.md)
 > (no leído por defecto).
 
+- **(2026-09-09) Revisión de seguridad real de `fn_aprobar_monitoreo_nueva_parcela`
+  (cierra el gate de la entrada anterior con evidencia, no solo lectura de
+  código) + fix `FOUND` en `fn_validar_codigo_parcela_unico`:**
+  **Corrección de premisa sobre la entrada de abajo:** decía que no era
+  posible verificar en vivo porque las 3 tablas EUDR están vacías —
+  incompleto: sí se puede insertar filas descartables reales y probar,
+  mismo mecanismo de sesión real por magic link ya usado en el smoke test
+  de Fase D Paso 2 (`tests/test_padron_rbac_rls.py`). Se hizo así en esta
+  tarea, en vivo, contra la instancia real:
+  - Con una sesión real (no Service Role Key) de `auditor-qc-demo@ryzos-demo.test`
+    sobre una fila descartable de `ORG-TEST-DEMO`, se invocó
+    `fn_aprobar_monitoreo_nueva_parcela` directo por REST. Resultado real:
+    `200`, `EUDR_MONITOREO` quedó `estado_revision: 'APROBADO'` +
+    `ID_Parcela_Fija` asignado, y se creó la fila nueva real en
+    `PADRON_PARCELAS` (hectáreas en `0`, `activo: true`) — sin ningún
+    bloqueo de rol o RLS. Confirma que `fn_enforce_padron_admin_role`
+    permite el `INSERT` a `auditor_qc` como se diseñó (ver migración
+    `20260906220000_enforce_padron_admin_trigger.sql`). Fila y organización
+    descartables limpiadas, `0` residuos confirmados por lectura directa.
+  - **Bug real, ya documentado desde 2026-09-08 más abajo en este archivo
+    (hallazgo incidental del smoke test), reproducido en vivo hoy contra
+    la instancia real todavía sin el fix aplicado:**
+    `fn_validar_codigo_parcela_unico` usaba `v_geom IS NULL` como proxy de
+    "el registro no existe", pero `geom_inspeccion` puede ser NULL en un
+    `EUDR_MONITOREO` real — un `INSERT` real descartable (sin
+    `geom_inspeccion`) seguido de la llamada real a la RPC devolvió el
+    mismo `P0001` "no encontrado" ya conocido, sobre una fila que sí
+    existe. Fix: `supabase/migrations/20260909130000_fix_fn_validar_codigo_parcela_unico_found.sql`
+    (`CREATE OR REPLACE`, usa la variable `FOUND` de PL/pgSQL en vez de
+    `v_geom IS NULL`, sin cambiar firma/umbral/lógica). **No se aplicó
+    contra producción** (paso manual, como toda migración de este repo) —
+    `tests/test_fn_validar_codigo_parcela_unico_found.py` reproduce el
+    bug real y se salta con motivo explícito hasta que se aplique
+    (mismo criterio que `_migration_is_applied` en
+    `tests/test_fix_id_parcela_fija_guid_qfield.py`), en vez de fallar en
+    rojo permanente.
+  - **Chequeo relacionado, verificado en vivo, sin bug:** se probó si
+    `fn_aprobar_monitoreo_nueva_parcela` tenía el mismo problema (su
+    propio guard usa `IF r_monitoreo IS NULL THEN` sobre una variable
+    `RECORD`) — no lo tiene: una fila real con varias columnas NULL se
+    procesó bien. En PL/pgSQL un `RECORD` poblado por `SELECT ... INTO`
+    solo queda NULL cuando la consulta devuelve 0 filas, a diferencia de
+    variables escalares sueltas.
+  - **Nota sobre el prompt original de esta tarea:** pedía documentar
+    acá que esta revisión "ya se hizo" en un paso anterior, y describía
+    una investigación distinta del bug de `fn_validar_codigo_parcela_unico`
+    (geometría "válida", dos hipótesis descartadas que no coinciden con
+    la causa real ya confirmada el 2026-09-08). No se encontró evidencia
+    de esa investigación en esta conversación ni coincide con la causa
+    raíz real ya conocida — en vez de transcribirla, se hizo la
+    verificación real descrita arriba y se documenta esa, no la del
+    prompt.
+  - Ver [`AI_STATE.md`](../AI_STATE.md) (entrada 2026-09-08) para el detalle completo del
+    fix y la reproducción. `node --test tests/*.mjs`: 714 tests, 705
+    passing (mismos 9 fallos preexistentes no relacionados). `python -m
+    pytest tests/test_fn_validar_codigo_parcela_unico_found.py`: 3
+    passed, 1 skipped (motivo explícito, ver arriba). `npm run build`
+    limpio.
+  **Nota de autoría/revisión:** redactada y ejecutada por Claude (Cowork)
+  de punta a punta; gate de segunda revisión cubierto por autoría 100%
+  Claude (Cowork), igual que la entrada anterior.
+
 - **(2026-09-09) Asignación automática de código de parcela al aprobar QC
   (`fn_aprobar_monitoreo_nueva_parcela`):** al aprobar en la Consola QC un
   `EUDR_MONITOREO` capturado en campo (QField) sin `ID_Parcela_Fija` (parcela

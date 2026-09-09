@@ -101,8 +101,36 @@ mientras se armaba el harness:**
    (se le dio geometría a las filas descartables para evitarlo), pero
    afectaría en producción a cualquier registro real de
    `EUDR_MONITOREO`/QField sin `geom_inspeccion` cargado todavía al
-   pasar por la Consola QC. Sin corregir — fuera de alcance de esta
-   tarea, mencionado para que quede registrado.
+   pasar por la Consola QC.
+   **RESUELTO (2026-09-09):** migración
+   `supabase/migrations/20260909130000_fix_fn_validar_codigo_parcela_unico_found.sql`
+   -- reemplaza `IF v_geom IS NULL THEN` por `IF NOT FOUND THEN`
+   inmediatamente después del `SELECT ... INTO`, sin cambiar firma, umbral
+   ni el resto de la lógica. **Reproducido en vivo antes de escribir el
+   fix** (no solo inferido del hallazgo anterior): un `INSERT` real en
+   `EUDR_MONITOREO` (fila descartable, `geom_inspeccion` NULL) seguido de
+   una llamada real a `fn_validar_codigo_parcela_unico` contra la
+   instancia real (todavía con la función vieja desplegada) devolvió el
+   mismo `P0001`/"no encontrado" exacto, confirmando que el bug sigue
+   activo en producción hoy. `tests/test_fn_validar_codigo_parcela_unico_found.py`
+   agrega esa misma reproducción como test (`@NEEDS_SUPABASE`) — hasta que
+   la migración se aplique manualmente en Supabase Studio, ese test
+   **se salta con motivo explícito** (no falla en rojo permanente),
+   mismo criterio que `_migration_is_applied` en
+   `tests/test_fix_id_parcela_fija_guid_qfield.py`. Fila descartable
+   limpiada, 0 residuos confirmados.
+   **Chequeo relacionado, no un bug:** se verificó también en vivo si
+   `fn_aprobar_monitoreo_nueva_parcela` (migración del mismo día,
+   `20260909120000_...sql`) tiene el mismo problema en su propio guard
+   (`IF r_monitoreo IS NULL THEN`, sobre una variable `RECORD`, no
+   variables escalares sueltas) -- **no lo tiene**: con una fila real
+   insertada con varias columnas NULL (incluida `area_calculada_ha`), la
+   RPC procesó la fila correctamente en vez de reportarla como "no
+   encontrada". En PL/pgSQL, un `RECORD` poblado por `SELECT ... INTO`
+   solo queda NULL cuando la consulta no devuelve ninguna fila (0 filas)
+   -- a diferencia de variables escalares sueltas, donde cada una puede
+   ser NULL de forma independiente aunque la fila sí exista. Sin cambios
+   necesarios ahí.
 
 **Estado:** RESUELTO (2026-09-08, mismo día). Fix de 2 capas, mismo
 patrón que `fn_enforce_padron_admin_role`:

@@ -64,13 +64,24 @@ atómica.
    trigger — no contradice el pedido de "server action, no trigger SQL"
    del prompt (ese pedido apuntaba a dónde vive la *lógica de negocio*
    — cálculo del código, condición "solo si es nueva" — que sigue en JS).
-5. **Testing en vivo (paso 5 del prompt) no es posible hoy:**
-   `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` están
-   completamente vacías en la instancia real (hallazgo abierto sin causa
-   determinada, `AI_STATE.md` 2026-09-03/2026-09-05). Se cubre con tests
-   unitarios (`node --test`, mismo patrón mock que
-   `tests/test_eudr_qc_actions.mjs`/`tests/test_vinculo_editor_vectorial_y_parcela.mjs`)
-   en vez de una prueba end-to-end contra Supabase real.
+5. **Corrección tardía (2026-09-09, ver `docs/ESTADO_PROYECTO.md`):** esta
+   sección decía que el testing en vivo "no es posible hoy" citando que
+   las 3 tablas EUDR están vacías. Eso describe correctamente por qué no
+   hay datos reales preexistentes para probar (cierto, sin causa
+   determinada, `AI_STATE.md` 2026-09-03/2026-09-05), pero es una premisa
+   incompleta: **sí es posible insertar filas descartables reales y
+   probar en vivo** con una sesión `authenticated` genuina (magic link,
+   mismo mecanismo ya usado en ADR-039/el smoke test de Fase D Paso 2,
+   `tests/test_padron_rbac_rls.py`), no solo con mocks. Se hizo
+   exactamente eso en la tarea de seguimiento (fix de
+   `fn_validar_codigo_parcela_unico`) — ver la entrada correspondiente de
+   `docs/ESTADO_PROYECTO.md` para la verificación real completa (sesión
+   `auditor-qc-demo@ryzos-demo.test` contra `ORG-TEST-DEMO`, filas
+   descartables, limpieza confirmada). Los tests unitarios (`node
+   --test`) siguen siendo la cobertura permanente/repetible; la
+   verificación en vivo fue puntual, no quedó como test versionado
+   (mismo criterio ya usado en ADR-039/2026-09-08: script descartable,
+   nunca commiteado).
 
 ## Diseño
 
