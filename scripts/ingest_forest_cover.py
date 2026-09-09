@@ -25,6 +25,12 @@ sin discriminar cuándo se perdió), usar --anio-fijo para aplicar el mismo
 año a todas las filas. Ninguno de los dos es obligatorio: sin ninguno, se
 inserta con anio_perdida NULL (fn_validar_topologia_eudr ignora esas filas
 en el cruce post-2020 a propósito, ver la migración).
+
+Idempotente por `--dataset-version` (specs/motor_prevalidacion_satelital_anp_bosque.md):
+si se pasa, antes de insertar se borran (Service Role Key) solo las filas
+que ya tengan ESA MISMA versión exacta — nunca las de otra versión, y
+nunca un DELETE sin `--dataset-version` (sin ese flag no hay forma segura
+de acotar el borrado; re-correr sin él duplica filas a propósito).
 """
 
 import argparse
@@ -156,7 +162,7 @@ def ingest(
 
     if dry_run:
         print(f"[DRY-RUN] {len(rows)} fila(s) listas para insertar en {TABLE_NAME} — no se escribió nada.")
-        return {"total": len(rows), "skipped": skipped, "inserted": 0, "failed": 0}
+        return {"total": len(rows), "skipped": skipped, "deleted_previous_same_version": 0, "inserted": 0, "failed": 0}
 
     supabase = supabase_client
     if supabase is None:
@@ -168,6 +174,16 @@ def ingest(
             print("[ERROR] Faltan SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY")
             sys.exit(1)
         supabase = create_client(url, key)
+
+    deleted_previous_same_version = 0
+    if dataset_version:
+        # Idempotente por dataset_version: solo borra filas de ESA MISMA
+        # versión exacta (ver docstring del módulo) para que re-correr el
+        # mismo comando no duplique filas.
+        del_res = supabase.table(TABLE_NAME).delete().eq("dataset_version", dataset_version).execute()
+        deleted_previous_same_version = len(del_res.data or [])
+        if deleted_previous_same_version:
+            print(f"[IDEMPOTENCIA] Borradas {deleted_previous_same_version} fila(s) previas de dataset_version={dataset_version!r} antes de re-insertar.")
 
     inserted = 0
     failed = 0
@@ -181,7 +197,13 @@ def ingest(
             print(f"[ERROR] Lote {i}/{len(batches)} falló ({len(batch)} fila(s)): {exc}")
         print(f"[PROGRESO] Lote {i}/{len(batches)} — {inserted} insertada(s), {failed} fallida(s) hasta ahora.")
 
-    return {"total": len(rows), "skipped": skipped, "inserted": inserted, "failed": failed}
+    return {
+        "total": len(rows),
+        "skipped": skipped,
+        "deleted_previous_same_version": deleted_previous_same_version,
+        "inserted": inserted,
+        "failed": failed,
+    }
 
 
 def main():

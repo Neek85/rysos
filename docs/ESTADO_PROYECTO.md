@@ -32,6 +32,46 @@
 > [`docs/archive/ESTADO_HISTORICO.md`](archive/ESTADO_HISTORICO.md)
 > (no leído por defecto).
 
+- **(2026-09-09) Motor de Pre-Validación Satelital EUDR: ANP + deforestación
+  reales conectados a `fn_validar_topologia_eudr`:** cierra lo pausado en
+  agosto (`specs/qc_topological_eudr_validation.md`,
+  `specs/eudr_forest_cover_2020_schema.md`). Nueva tabla
+  `EUDR_AREAS_PROTEGIDAS` (SERNANP, dataset compartido no multi-tenant,
+  mismo criterio que `EUDR_COBERTURA_BOSCOSA_2020`) + 2 funciones
+  utilitarias (`fn_evaluar_anp_eudr`/`fn_evaluar_deforestacion_eudr`) +
+  `fn_validar_topologia_eudr` extendida con las claves `anp`/`deforestacion`
+  reales. Sentinel-2/NDVI queda fuera de alcance a propósito.
+  **2 correcciones de premisa importantes, verificadas en vivo antes de
+  escribir la migración** (ver `specs/motor_prevalidacion_satelital_anp_bosque.md`):
+  (1) `EUDR_COBERTURA_BOSCOSA_2020` **no existe** en la instancia real
+  (la migración de agosto que la crea nunca se aplicó) — la migración
+  nueva la vuelve a crear con `IF NOT EXISTS`, idempotente; (2) la
+  definición VIGENTE hoy de `fn_validar_topologia_eudr` (confirmado
+  invocando la RPC real) es la de agosto 22
+  (`contenido_en_parcela_propia`), no la de agosto 20 que citaba el
+  prompt — esa versión de agosto 22 ya tenía la lógica de deforestación
+  regresionada a `{disponible:false}` fijo desde entonces, sin que nadie
+  lo notara; la migración nueva parte de la base correcta para no volver
+  a regresionar la contención. Además: `scripts/ingest_forest_loss_layer.py`
+  que pedía el prompt **ya existía** como `scripts/ingest_forest_cover.py`
+  — no se duplicó, se le agregó la idempotencia por `dataset_version` que
+  le faltaba (y a `scripts/ingest_anp_layer.py`, genuinamente nuevo).
+  Tests: `tests/test_motor_prevalidacion_satelital_anp_bosque.py`
+  (`@NEEDS_SUPABASE`, se salta — la migración todavía no está aplicada),
+  más `tests/test_ingest_anp_layer.py` y extensiones a
+  `tests/test_ingest_forest_cover.py`/`lib/qcTopologyValidation.js`.
+  `node --test`: 727 tests, 718 passing (mismos 9 fallos preexistentes).
+  `python -m pytest`: 515 passed, 27 skipped (mismos 5 fallos
+  preexistentes). `npm run build` limpio. La migración no se aplica sola
+  contra producción — queda como paso manual del usuario, junto con la
+  de agosto (`20260820_eudr_cobertura_boscosa_2020.sql`), que sigue
+  pendiente.
+  **Nota de autoría/revisión:** redactada y ejecutada por Claude (Cowork)
+  de punta a punta; gate de segunda revisión cubierto por autoría 100%
+  Claude (Cowork). No toca ninguna política RLS de escritura nueva (solo
+  `SELECT` de solo lectura para `authenticated`, mismo criterio ya
+  aplicado a `EUDR_COBERTURA_BOSCOSA_2020`).
+
 - **(2026-09-09) Revertir Aprobado a revisión + fix real de fotos de evidencia
   (Mapa/QC) + botón "Sincronizar Google Drive" ocultado:** tarea de 4 partes.
   - **Parte 1 — Revertir Aprobado:** pestañas "Pendientes"/"Aprobados" en

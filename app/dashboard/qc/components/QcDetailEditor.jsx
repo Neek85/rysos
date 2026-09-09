@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { getSupabaseBrowserClient } from '@/lib/supabase/browserClient'
 import { LAYER_LABELS, EDITABLE_FIELDS } from '@/lib/eudrQcActions'
-import { describeDeforestationBadge } from '@/lib/qcTopologyValidation'
+import { describeDeforestationBadge, describeAnpBadge } from '@/lib/qcTopologyValidation'
 import { calcularPctCobertura, buildCoberturaAvisoMensaje } from '@/lib/qcCoberturaUsoSuelo'
 import { buildConflictoParcelaMensaje } from '@/lib/qcCodigoParcelaUnico'
 
@@ -425,6 +425,27 @@ export default function QcDetailEditor({
                   ok:null (badge neutro), nunca inventa un veredicto. */}
               {(() => {
                 const badge = describeDeforestationBadge(validationResult.deforestacion)
+                return (
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                      badge.ok === null
+                        ? 'border border-gray-300 bg-white text-gray-500'
+                        : badge.ok
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-red-50 text-red-700'
+                    }`}
+                  >
+                    {badge.label}
+                  </span>
+                )
+              })()}
+              {/* Estado real de EUDR_AREAS_PROTEGIDAS (ver
+                  specs/motor_prevalidacion_satelital_anp_bosque.md) —
+                  mismo criterio exacto que el badge de deforestación de
+                  arriba: ok:null (badge neutro) mientras esa tabla siga
+                  vacía, nunca inventa un veredicto. */}
+              {(() => {
+                const badge = describeAnpBadge(validationResult.anp)
                 return (
                   <span
                     className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${

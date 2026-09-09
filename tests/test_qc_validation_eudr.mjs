@@ -15,6 +15,7 @@ import {
   validateTopologyRequest,
   TOPOLOGY_VALIDATABLE_TABLES,
   describeDeforestationBadge,
+  describeAnpBadge,
 } from '../lib/qcTopologyValidation.js'
 
 test('TOPOLOGY_VALIDATABLE_TABLES incluye EUDR_MONITOREO y EUDR_USO_SUELO, nunca EUDR_INSTALACIONES', () => {
@@ -97,4 +98,44 @@ test('describeDeforestationBadge: intersección post-2020 detectada -> ok:false,
 test('describeDeforestationBadge no lanza con deforestacion null/undefined (mismo criterio que "sin datos")', () => {
   assert.equal(describeDeforestationBadge(null).ok, null)
   assert.equal(describeDeforestationBadge(undefined).ok, null)
+})
+
+// ---------------------------------------------------------------
+// describeAnpBadge — mismo criterio exacto que describeDeforestationBadge
+// (ver specs/motor_prevalidacion_satelital_anp_bosque.md), aplicado al
+// campo `anp` de fn_validar_topologia_eudr.
+// ---------------------------------------------------------------
+
+test('describeAnpBadge: sin tabla de ANP cargada -> badge neutro (ok:null)', () => {
+  const badge = describeAnpBadge({ disponible: false, alerta_anp: false, distancia_minima_km: null, intersecciones: [] })
+  assert.equal(badge.ok, null)
+  assert.match(badge.label, /sin datos/i)
+})
+
+test('describeAnpBadge: disponible pero sin intersección -> ok:true', () => {
+  const badge = describeAnpBadge({ disponible: true, alerta_anp: false, distancia_minima_km: 12.345, intersecciones: [] })
+  assert.equal(badge.ok, true)
+  assert.match(badge.label, /Sin superposición/)
+})
+
+test('describeAnpBadge: alerta_anp true -> ok:false, incluye el nombre del ANP si viene', () => {
+  const badge = describeAnpBadge({
+    disponible: true,
+    alerta_anp: true,
+    distancia_minima_km: 0,
+    intersecciones: [{ anp_id: 1, nombre: 'Parque Nacional Cutervo', categoria: 'Parque Nacional', area_solapada_ha: 3.2, porcentaje_parcela: 40 }],
+  })
+  assert.equal(badge.ok, false)
+  assert.match(badge.label, /Parque Nacional Cutervo/)
+})
+
+test('describeAnpBadge: alerta_anp true sin nombre disponible -> ok:false, label genérico sin lanzar', () => {
+  const badge = describeAnpBadge({ disponible: true, alerta_anp: true, distancia_minima_km: 0, intersecciones: [] })
+  assert.equal(badge.ok, false)
+  assert.match(badge.label, /Área Natural Protegida/)
+})
+
+test('describeAnpBadge no lanza con anp null/undefined (mismo criterio que "sin datos")', () => {
+  assert.equal(describeAnpBadge(null).ok, null)
+  assert.equal(describeAnpBadge(undefined).ok, null)
 })
