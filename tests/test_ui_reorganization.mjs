@@ -98,7 +98,10 @@ test('QcConsoleMap.jsx conserva el mecanismo de edición de vértices del regist
 test('app/dashboard/qc/page.jsx pasa organizationId y onFeatureCreated a QcConsoleMap (refresca la lista al crear una geometría nueva)', () => {
   const source = read('app/dashboard/qc/page.jsx')
   assert.match(source, /organizationId=\{resolveOrganizationId\(records\)\}/)
-  assert.match(source, /onFeatureCreated=\{loadPending\}/)
+  // loadRecords (no loadPending) desde specs/revertir_aprobado_a_qc.md —
+  // refresca lo que sea que esté mostrando la pestaña activa
+  // (Pendientes/Aprobados), no siempre Pendientes.
+  assert.match(source, /onFeatureCreated=\{loadRecords\}/)
 })
 
 // ---------------------------------------------------------------

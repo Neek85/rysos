@@ -13,12 +13,15 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import {
   fetchPendingRecords,
+  fetchApprovedRecords,
   fetchComparisonGeometries,
   approveRecord,
   rejectRecord,
+  reopenRecord,
   resolveNuevaParcelaAsignacion,
   EUDRQcError,
   PENDING_STATE,
+  APPROVED_STATE,
 } from '../lib/eudrQcActions.js'
 
 const SOURCE_PATH = path.resolve(
@@ -449,6 +452,65 @@ test('approveRecord con ID_Parcela_Fija NULO rechaza por mismatch de organizaci�
   const record = baseRecord({ ID_Organizacion: 'OTRA-COOP', ID_Parcela_Fija: null })
   await assert.rejects(() => approveRecord(supabase, record, 'COOP-JS'), EUDRQcError)
   assert.equal(rpcCalled, false)
+})
+
+// ---------------------------------------------------------------
+// fetchApprovedRecords / reopenRecord — pestaña "Aprobados" y revertir a
+// revisión (specs/revertir_aprobado_a_qc.md).
+// ---------------------------------------------------------------
+
+test('fetchApprovedRecords filtra por estado_revision = APROBADO (no PENDIENTE), reusando fetchRecordsByState', async () => {
+  const supabase = makeFakeSupabase({
+    vw_monitoreo_poligonos: [
+      { tabla_origen: 'EUDR_MONITOREO', registro_id: '1', id_origen: 'uuid-1', id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: APPROVED_STATE },
+      { tabla_origen: 'EUDR_MONITOREO', registro_id: '2', id_origen: 'uuid-2', id_monitoreo: 'uuid-2', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE },
+    ],
+    vw_monitoreo_puntos: [],
+  })
+  const data = await fetchApprovedRecords(supabase)
+  assert.equal(data.length, 1)
+  assert.equal(data[0].registro_id, '1')
+})
+
+test('reopenRecord revierte estado_revision de APROBADO a PENDIENTE sobre la tabla base real (verificado leyendo la tabla en memoria)', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: APPROVED_STATE }],
+  })
+  await reopenRecord(supabase, baseRecord({ estado_revision: APPROVED_STATE }), 'COOP-JS')
+  const { data: rows } = await supabase.from('EUDR_MONITOREO').select().eq('id_monitoreo', 'uuid-1')
+  assert.equal(rows[0].estado_revision, PENDING_STATE)
+})
+
+test('reopenRecord no toca observaciones ni ningún otro campo -- el motivo (si se dio) no se persiste en la fila', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: APPROVED_STATE, observaciones: 'texto original' }],
+  })
+  await reopenRecord(supabase, baseRecord({ estado_revision: APPROVED_STATE }), 'COOP-JS')
+  const { data: rows } = await supabase.from('EUDR_MONITOREO').select().eq('id_monitoreo', 'uuid-1')
+  assert.equal(rows[0].observaciones, 'texto original')
+})
+
+test('reopenRecord lanza EUDRQcError si el registro ya no está APROBADO (0 filas afectadas, no un UPDATE silencioso)', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }],
+  })
+  await assert.rejects(() => reopenRecord(supabase, baseRecord({ estado_revision: APPROVED_STATE }), 'COOP-JS'), EUDRQcError)
+})
+
+test('reopenRecord rechaza si el registro no pertenece a la organización activa (multi-tenant)', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'OTRA-COOP', estado_revision: APPROVED_STATE }],
+  })
+  const record = baseRecord({ ID_Organizacion: 'OTRA-COOP', estado_revision: APPROVED_STATE })
+  await assert.rejects(() => reopenRecord(supabase, record, 'COOP-JS'), EUDRQcError)
+})
+
+test('reopenRecord actualiza EUDR_USO_SUELO/EUDR_INSTALACIONES por id_origen, igual que approveRecord/rejectRecord', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_USO_SUELO: [{ id: 13, ID_Organizacion: 'COOP-JS', estado_revision: APPROVED_STATE }],
+  })
+  const record = baseRecord({ tabla_origen: 'EUDR_USO_SUELO', id_origen: 13, estado_revision: APPROVED_STATE })
+  await reopenRecord(supabase, record, 'COOP-JS')
 })
 
 test('rejectRecord requiere un motivo no vacío', async () => {

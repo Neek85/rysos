@@ -7,6 +7,7 @@ import nextDynamic from 'next/dynamic'
 import { getSupabaseClient } from '@/lib/supabaseClient'
 import {
   fetchPendingRecords,
+  fetchApprovedRecords,
   fetchComparisonGeometries,
   resolveOrganizationId,
   LAYER_LABELS,
@@ -15,13 +16,13 @@ import {
 import {
   approveQcRecord,
   rejectQcRecord,
+  reopenQcRecord,
   updateQcRecordAttributes,
   updateQcRecordGeometry,
 } from '@/lib/actions/qcActions'
 import { EUDRValidationError } from '@/lib/eudrDdsExporter'
 import QcDetailEditor from './components/QcDetailEditor'
 import QcTable from './components/QcTable'
-import DriveSyncButton from '@/components/gis/DriveSyncButton'
 import CargaEspacialModal from './components/CargaEspacialModal'
 
 const QcConsoleMap = nextDynamic(() => import('@/components/gis/QcConsoleMap'), {
@@ -50,10 +51,19 @@ function displayParcela(record) {
   return record?.parcela_nombre || 'Parcela sin código'
 }
 
+// Pestañas de estado (specs/revertir_aprobado_a_qc.md) — ortogonal al
+// filtro de tabla (LAYER_FILTERS, TODOS/Monitoreos/Uso de Suelo/
+// Instalaciones): esto filtra por estado_revision, no por tabla_origen.
+const VIEW_MODES = [
+  { value: 'PENDIENTES', label: 'Pendientes' },
+  { value: 'APROBADOS', label: 'Aprobados' },
+]
+
 export default function QcConsolePage() {
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [viewMode, setViewMode] = useState('PENDIENTES')
   const [layerFilter, setLayerFilter] = useState('TODOS')
   const [selectedKey, setSelectedKey] = useState(null)
   const [motivo, setMotivo] = useState('')
@@ -90,6 +100,23 @@ export default function QcConsolePage() {
   const [isDrawSessionActive, setIsDrawSessionActive] = useState(false)
 
   async function loadPending() {
+    await loadByViewMode('PENDIENTES')
+  }
+
+  async function loadApproved() {
+    await loadByViewMode('APROBADOS')
+  }
+
+  // Recarga lo que sea que esté mostrando la pestaña activa — usado por
+  // callbacks que no saben (ni deben asumir) en qué pestaña está el
+  // usuario (ej. tras cargar una capa espacial nueva, siempre PENDIENTE:
+  // si el usuario está mirando "Aprobados", no debería aparecer ahí, y no
+  // debería forzarse el cambio de pestaña).
+  async function loadRecords() {
+    await loadByViewMode(viewMode)
+  }
+
+  async function loadByViewMode(mode) {
     const supabase = getSupabaseClient()
     if (!supabase) {
       setError('Cliente Supabase no configurado (revisa las variables de entorno).')
@@ -99,18 +126,20 @@ export default function QcConsolePage() {
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchPendingRecords(supabase)
+      const data = mode === 'APROBADOS' ? await fetchApprovedRecords(supabase) : await fetchPendingRecords(supabase)
       setRecords(data)
     } catch (err) {
-      setError(err?.message || 'Error inesperado al consultar registros pendientes.')
+      setError(err?.message || 'Error inesperado al consultar registros.')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadPending()
-  }, [])
+    loadByViewMode(viewMode)
+    setSelectedKey(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode])
 
   useEffect(() => {
     if (!toast) return
@@ -168,6 +197,34 @@ export default function QcConsolePage() {
           err instanceof EUDRQcError || err instanceof EUDRValidationError
             ? err.message
             : err?.message || 'No se pudo aplicar la decisión.',
+      })
+    } finally {
+      setActionBusyKey(null)
+    }
+  }
+
+  // Revierte un registro APROBADO a PENDIENTE (specs/revertir_aprobado_a_qc.md)
+  // — mismo esqueleto que handleDecision, pero reopenQcRecord no recibe
+  // `motivo` (no se persiste en ninguna columna, solo viaja al log de
+  // auditoría más abajo, igual que para Aprobar/Rechazar).
+  async function handleRevert() {
+    if (!selectedRecord || actionBusyKey) return
+
+    setActionBusyKey(selectedRecord.key)
+    try {
+      const organizationId = resolveOrganizationId(records)
+      await reopenQcRecord(selectedRecord, organizationId)
+
+      logQcDecisionAudit(selectedRecord, 'REVERTIDO', organizationId, motivo)
+
+      setRecords((prev) => prev.filter((r) => r.key !== selectedRecord.key))
+      setSelectedKey(null)
+      setMotivo('')
+      setToast({ type: 'success', message: `Registro devuelto a revisión: ${displayParcela(selectedRecord)}.` })
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: err instanceof EUDRQcError ? err.message : err?.message || 'No se pudo revertir el registro.',
       })
     } finally {
       setActionBusyKey(null)
@@ -255,7 +312,10 @@ export default function QcConsolePage() {
           detalles: {
             origen: 'consola_qc_web',
             validacion: validationResults[record.key] || null,
-            motivo: accion === 'RECHAZADO' ? motivoTexto : null,
+            // REVERTIDO: motivo es opcional (a diferencia de RECHAZADO,
+            // que ya lo exige no vacío antes de llegar acá) — se omite
+            // (null) en vez de guardar un string vacío si no se dio.
+            motivo: (accion === 'RECHAZADO' || accion === 'REVERTIDO') && motivoTexto ? motivoTexto : null,
           },
         }),
       })
@@ -269,7 +329,7 @@ export default function QcConsolePage() {
     setShowUpload(false)
     const pendienteNote = targetTable === 'PADRON_PARCELAS' ? '' : ' Ya aparecen en la lista de pendientes.'
     setToast({ type: 'success', message: `Carga completa: ${created} registro(s) creado(s).${pendienteNote}` })
-    loadPending()
+    loadRecords()
   }
 
   function handleToggleGeometryEdit() {
@@ -322,11 +382,11 @@ export default function QcConsolePage() {
         <div>
           <h1 className="text-xl font-bold text-gray-800">Consola de Auditoría QC</h1>
           <p className="text-sm text-gray-500">
-            Registros pendientes de revisión — vw_monitoreo_poligonos / vw_monitoreo_puntos
+            {viewMode === 'APROBADOS' ? 'Registros aprobados' : 'Registros pendientes de revisión'} —
+            vw_monitoreo_poligonos / vw_monitoreo_puntos
           </p>
         </div>
         <div className="flex gap-2">
-          <DriveSyncButton onSynced={loadPending} />
           <button
             type="button"
             onClick={() => setShowUpload(true)}
@@ -344,6 +404,23 @@ export default function QcConsolePage() {
           onUploaded={handleSpatialUploaded}
         />
       )}
+
+      {/* Pestañas de estado (specs/revertir_aprobado_a_qc.md) — ortogonal
+          al filtro de tabla de abajo. */}
+      <div className="flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 text-xs font-semibold">
+        {VIEW_MODES.map((m) => (
+          <button
+            key={m.value}
+            type="button"
+            onClick={() => setViewMode(m.value)}
+            className={`flex-1 rounded-md px-3 py-1.5 ${
+              viewMode === m.value ? 'bg-white text-green-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
 
       <div className="flex flex-wrap gap-2">
         {LAYER_FILTERS.map((f) => (
@@ -399,6 +476,7 @@ export default function QcConsolePage() {
             loading={loading}
             error={error}
             onValidateTopology={handleValidateTopology}
+            viewMode={viewMode}
           />
         </section>
 
@@ -410,7 +488,7 @@ export default function QcConsolePage() {
             editingKey={editingGeometryKey}
             onGeometryChange={handleGeometryChange}
             organizationId={resolveOrganizationId(records)}
-            onFeatureCreated={loadPending}
+            onFeatureCreated={loadRecords}
             comparisonFeatures={comparisonFeatures}
             onDrawSessionActiveChange={setIsDrawSessionActive}
           />
@@ -431,6 +509,7 @@ export default function QcConsolePage() {
               setMotivo={setMotivo}
               onApprove={() => handleDecision('approve')}
               onReject={() => handleDecision('reject')}
+              onRevert={handleRevert}
               busy={actionBusyKey === selectedRecord.key}
               validationResult={validationResults[selectedRecord.key]}
               validating={validatingKey === selectedRecord.key}

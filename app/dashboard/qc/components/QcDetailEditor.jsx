@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { getSupabaseClient } from '@/lib/supabaseClient'
+import { getSupabaseBrowserClient } from '@/lib/supabase/browserClient'
 import { LAYER_LABELS, EDITABLE_FIELDS } from '@/lib/eudrQcActions'
 import { describeDeforestationBadge } from '@/lib/qcTopologyValidation'
 import { calcularPctCobertura, buildCoberturaAvisoMensaje } from '@/lib/qcCoberturaUsoSuelo'
@@ -13,6 +13,24 @@ import { buildConflictoParcelaMensaje } from '@/lib/qcCodigoParcelaUnico'
 // specs/gis_qc_rearchitecture.md (el prompt que pidió esta reorganización
 // decía "preserva el visor de evidencia fotográfica" como si ya existiera
 // acá — no era cierto, verificado por grep, es una adición nueva).
+//
+// CAUSA RAÍZ REAL de "las fotos no cargan" (2026-09-09, confirmado en vivo
+// contra la instancia real, no solo leyendo código -- ver AI_STATE.md):
+// createSignedUrl exige RLS `authenticated` sobre storage.objects
+// (rls_storage_select_evidencias, supabase/migrations/20260816_fase3_seguridad_rls.sql,
+// `(storage.foldername(name))[1] = auth_org_id()`), pero este componente
+// llamaba a getSupabaseClient() (lib/supabaseClient.js, createClient()
+// con solo la anon key, SIN sesión -- no lee cookies) para firmar la URL.
+// Con la anon key, la llamada real devuelve 400 "Object not found" (RLS
+// oculta la fila, Storage no puede distinguir "no existe" de "no
+// autorizado") -- confirmado con el objeto real
+// ORG-TEST-DEMO/geom-movil-monitoreo-eudr_20260909092224015.jpg (existe
+// en el bucket, confirmado por Storage List). Con una sesión real
+// (auditor-qc-demo@ryzos-demo.test) el mismo objeto firma 200. Fix:
+// getSupabaseBrowserClient() (lib/supabase/browserClient.js,
+// createBrowserClient de @supabase/ssr, sí lee la sesión real de las
+// cookies) -- antes de esta tarea, ese cliente solo se usaba en
+// app/login/page.jsx.
 const EVIDENCIA_BUCKET = 'evidencias_eudr'
 const SIGNED_URL_TTL_SECONDS = 3600
 
@@ -68,6 +86,11 @@ export default function QcDetailEditor({
   setMotivo,
   onApprove,
   onReject,
+  // specs/revertir_aprobado_a_qc.md — solo se usa cuando
+  // record.estado_revision === 'APROBADO' (ver el render de los botones
+  // más abajo, que reemplaza Aprobar/Rechazar por este único botón en
+  // ese caso).
+  onRevert,
   busy,
   // Validación topológica & EUDR — el resultado vive en page.jsx
   // (validationResults, keyed por record.key), no acá: QcTable.jsx
@@ -101,6 +124,10 @@ export default function QcDetailEditor({
   // padre, así que el conflicto (si existe) ya se refleja al revisar ese
   // Monitoreo, no acá.
   const esMonitoreo = record.tabla_origen === 'EUDR_MONITOREO'
+  // specs/revertir_aprobado_a_qc.md — un registro APROBADO reemplaza
+  // Aprobar/Rechazar por un único botón "Revertir a Revisión" (ver el
+  // render de los botones más abajo).
+  const esAprobado = record.estado_revision === 'APROBADO'
   const [conflictoParcela, setConflictoParcela] = useState(null)
   const [conflictoLoading, setConflictoLoading] = useState(false)
   const [conflictoError, setConflictoError] = useState(null)
@@ -142,7 +169,7 @@ export default function QcDetailEditor({
   // Leaflet persiste entre selecciones).
   useEffect(() => {
     if (!record.evidencia_foto) return
-    const supabase = getSupabaseClient()
+    const supabase = getSupabaseBrowserClient()
     if (!supabase) return
     supabase.storage
       .from(EVIDENCIA_BUCKET)
@@ -525,29 +552,42 @@ export default function QcDetailEditor({
       <textarea
         value={motivo}
         onChange={(e) => setMotivo(e.target.value)}
-        placeholder="Observaciones / motivo (obligatorio para rechazar)"
+        placeholder={
+          esAprobado ? 'Observaciones / motivo (opcional)' : 'Observaciones / motivo (obligatorio para rechazar)'
+        }
         className="w-full rounded border border-gray-200 p-2 text-sm"
         rows={2}
       />
 
-      <div className="flex gap-2">
+      {esAprobado ? (
         <button
           type="button"
-          onClick={onApprove}
-          disabled={busy || conflictoParcela?.tiene_conflicto || orgMismatch?.tieneConflicto}
-          className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={onRevert}
+          disabled={busy}
+          className="w-full rounded-lg border border-amber-400 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {busy ? 'Procesando…' : '✓ Aprobar'}
+          {busy ? 'Procesando…' : '↩ Revertir a Revisión'}
         </button>
-        <button
-          type="button"
-          onClick={onReject}
-          disabled={busy || !motivo.trim() || conflictoParcela?.tiene_conflicto}
-          className="flex-1 rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {busy ? 'Procesando…' : '✕ Rechazar'}
-        </button>
-      </div>
+      ) : (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onApprove}
+            disabled={busy || conflictoParcela?.tiene_conflicto || orgMismatch?.tieneConflicto}
+            className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? 'Procesando…' : '✓ Aprobar'}
+          </button>
+          <button
+            type="button"
+            onClick={onReject}
+            disabled={busy || !motivo.trim() || conflictoParcela?.tiene_conflicto}
+            className="flex-1 rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? 'Procesando…' : '✕ Rechazar'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
