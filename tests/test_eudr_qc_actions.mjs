@@ -16,6 +16,7 @@ import {
   fetchComparisonGeometries,
   approveRecord,
   rejectRecord,
+  resolveNuevaParcelaAsignacion,
   EUDRQcError,
   PENDING_STATE,
 } from '../lib/eudrQcActions.js'
@@ -291,12 +292,18 @@ test('fetchPendingRecords aísla por organización — nunca devuelve PENDIENTE 
 // approveRecord / rejectRecord
 // ---------------------------------------------------------------
 
+// ID_Parcela_Fija: 'COOP-JS-001' por defecto -- ninguno de los tests
+// existentes (previos a specs/asignacion_automatica_codigo_parcela.md)
+// probaba el caso "parcela nueva", así que se fija acá para que sigan
+// ejerciendo el UPDATE simple de siempre; el caso ID_Parcela_Fija NULO se
+// prueba explícitamente más abajo con overrides.
 function baseRecord(overrides = {}) {
   return {
     tabla_origen: 'EUDR_MONITOREO',
     id_monitoreo: 'uuid-1',
     id_origen: 'uuid-1',
     ID_Organizacion: 'COOP-JS',
+    ID_Parcela_Fija: 'COOP-JS-001',
     estado_revision: PENDING_STATE,
     observaciones: '',
     ...overrides,
@@ -345,6 +352,103 @@ test('approveRecord rechaza si el registro no pertenece a la organización activ
   })
   const record = baseRecord({ ID_Organizacion: 'OTRA-COOP' })
   await assert.rejects(() => approveRecord(supabase, record, 'COOP-JS'), EUDRQcError)
+})
+
+// ---------------------------------------------------------------
+// approveRecord / resolveNuevaParcelaAsignacion — asignación automática
+// de código de parcela (specs/asignacion_automatica_codigo_parcela.md).
+// ---------------------------------------------------------------
+
+test('resolveNuevaParcelaAsignacion calcula el siguiente correlativo del socio real, ignorando parcelas de otros socios/organizaciones', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Socio: 'COOP-JS-SOC-01' }],
+    PADRON_PARCELAS: [
+      { ID_Socio: 'COOP-JS-SOC-01', ID_Organizacion: 'COOP-JS', parcela_codigo: 'P-00001' },
+      { ID_Socio: 'COOP-JS-SOC-01', ID_Organizacion: 'COOP-JS', parcela_codigo: 'P-00002' },
+      { ID_Socio: 'OTRO-SOCIO', ID_Organizacion: 'COOP-JS', parcela_codigo: 'P-00099' },
+      { ID_Socio: 'COOP-JS-SOC-01', ID_Organizacion: 'OTRA-COOP', parcela_codigo: 'P-00050' },
+    ],
+  })
+  const idParcelaFija = await resolveNuevaParcelaAsignacion(supabase, baseRecord({ ID_Parcela_Fija: null }))
+  assert.equal(idParcelaFija, 'COOP-JS-SOC-01-P-00003')
+})
+
+test('resolveNuevaParcelaAsignacion lanza EUDRQcError si el monitoreo no tiene ID_Socio', async () => {
+  const supabase = makeFakeSupabase({
+    EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Socio: null }],
+    PADRON_PARCELAS: [],
+  })
+  await assert.rejects(() => resolveNuevaParcelaAsignacion(supabase, baseRecord({ ID_Parcela_Fija: null })), EUDRQcError)
+})
+
+test('approveRecord con ID_Parcela_Fija NULO llama a fn_aprobar_monitoreo_nueva_parcela con el código calculado, en vez del UPDATE simple', async () => {
+  let capturedParams = null
+  const supabase = makeFakeSupabase(
+    {
+      EUDR_MONITOREO: [
+        { id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', ID_Socio: 'COOP-JS-SOC-01', estado_revision: PENDING_STATE },
+      ],
+      PADRON_PARCELAS: [],
+    },
+    {
+      rpcResponses: {
+        fn_aprobar_monitoreo_nueva_parcela: (params) => {
+          capturedParams = params
+          return { data: { id_monitoreo: params.p_id_monitoreo, id_parcela_fija: params.p_id_parcela_fija }, error: null }
+        },
+      },
+    }
+  )
+  await approveRecord(supabase, baseRecord({ ID_Parcela_Fija: null }), 'COOP-JS')
+  assert.deepEqual(capturedParams, {
+    p_id_monitoreo: 'uuid-1',
+    p_organizacion: 'COOP-JS',
+    p_id_parcela_fija: 'COOP-JS-SOC-01-P-00001',
+  })
+})
+
+test('approveRecord NO llama a fn_aprobar_monitoreo_nueva_parcela cuando el monitoreo ya tiene ID_Parcela_Fija (parcela existente, flujo sin cambios)', async () => {
+  let rpcCalled = false
+  const supabase = makeFakeSupabase(
+    { EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', estado_revision: PENDING_STATE }] },
+    { rpcResponses: { fn_aprobar_monitoreo_nueva_parcela: () => { rpcCalled = true; return { data: null, error: null } } } }
+  )
+  await approveRecord(supabase, baseRecord(), 'COOP-JS')
+  assert.equal(rpcCalled, false)
+})
+
+test('approveRecord propaga un error de fn_aprobar_monitoreo_nueva_parcela (ej. colisión de PK por aprobación concurrente) como EUDRQcError con el mensaje real', async () => {
+  const supabase = makeFakeSupabase(
+    {
+      EUDR_MONITOREO: [
+        { id_monitoreo: 'uuid-1', ID_Organizacion: 'COOP-JS', ID_Socio: 'COOP-JS-SOC-01', estado_revision: PENDING_STATE },
+      ],
+      PADRON_PARCELAS: [],
+    },
+    {
+      rpcResponses: {
+        fn_aprobar_monitoreo_nueva_parcela: () => ({
+          data: null,
+          error: { message: 'duplicate key value violates unique constraint "PADRON_PARCELAS_pkey"' },
+        }),
+      },
+    }
+  )
+  await assert.rejects(
+    () => approveRecord(supabase, baseRecord({ ID_Parcela_Fija: null }), 'COOP-JS'),
+    (err) => err instanceof EUDRQcError && err.message.includes('PADRON_PARCELAS_pkey')
+  )
+})
+
+test('approveRecord con ID_Parcela_Fija NULO rechaza por mismatch de organización ANTES de llamar a la RPC (aislamiento multi-tenant, nunca genera código para otra organización)', async () => {
+  let rpcCalled = false
+  const supabase = makeFakeSupabase(
+    { EUDR_MONITOREO: [{ id_monitoreo: 'uuid-1', ID_Organizacion: 'OTRA-COOP', estado_revision: PENDING_STATE }] },
+    { rpcResponses: { fn_aprobar_monitoreo_nueva_parcela: () => { rpcCalled = true; return { data: null, error: null } } } }
+  )
+  const record = baseRecord({ ID_Organizacion: 'OTRA-COOP', ID_Parcela_Fija: null })
+  await assert.rejects(() => approveRecord(supabase, record, 'COOP-JS'), EUDRQcError)
+  assert.equal(rpcCalled, false)
 })
 
 test('rejectRecord requiere un motivo no vacío', async () => {

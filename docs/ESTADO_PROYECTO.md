@@ -1,5 +1,5 @@
 # ESTADO DEL PROYECTO RYZOS
-*Última actualización: 4 de septiembre, 2026*
+*Última actualización: 9 de septiembre, 2026*
 
 > Este documento es la "bitácora" del proyecto. Aquí se anota qué se hizo, qué falta y qué decisiones están pendientes. No contiene reglas técnicas fijas (esas viven en el prompt orquestador RYZOS V3.1) — esto es solo el día a día.
 
@@ -31,6 +31,55 @@
 > hitos — historial completo movido a
 > [`docs/archive/ESTADO_HISTORICO.md`](archive/ESTADO_HISTORICO.md)
 > (no leído por defecto).
+
+- **(2026-09-09) Asignación automática de código de parcela al aprobar QC
+  (`fn_aprobar_monitoreo_nueva_parcela`):** al aprobar en la Consola QC un
+  `EUDR_MONITOREO` capturado en campo (QField) sin `ID_Parcela_Fija` (parcela
+  nueva, sin alta previa en el padrón), `approveRecord`
+  (`lib/eudrQcActions.js`) calcula el código con las funciones ya
+  existentes `computeNextParcelaCode`/`computeSuggestedParcelaId`
+  (`lib/parcelaDefaults.js`, sin modificar — mismo formato ya usado en
+  `/dashboard/socios`/Editor Vectorial, ver ADR-021) y delega el alta en
+  `PADRON_PARCELAS` + el `UPDATE` del propio monitoreo a una RPC nueva,
+  única forma de que ambas escrituras sean atómicas desde una Server
+  Action (mismo patrón que `fn_crear_socio_con_certificaciones`, ver
+  migración `20260909120000_fn_aprobar_monitoreo_nueva_parcela.sql`). Un
+  monitoreo que ya tiene `ID_Parcela_Fija` (parcela existente) sigue el
+  flujo de siempre sin cambios.
+  **Corrección de premisa importante (spec:
+  `specs/asignacion_automatica_codigo_parcela.md`):** el prompt original
+  pedía además propagar el código a `EUDR_USO_SUELO`/`EUDR_INSTALACIONES`
+  escribiendo una columna `ID_Parcela_Fija` en esas tablas — **esa columna
+  no existe**, y crearla habría reintroducido la "colisión de significado"
+  entre código legible y GUID técnico (`id_parcela`/`qfield_relation_id`)
+  que ADR-021 ya corrigió. Se omitió esa parte a propósito: el código ya
+  es resoluble para las tablas hijas vía el JOIN existente
+  (`fn_cobertura_uso_suelo_parcela`), sin duplicar el dato.
+  **No requirió tocar RLS** (`PADRON_PARCELAS` ya permite `INSERT` a
+  cualquier `authenticated` desde `20260906220000_enforce_padron_admin_trigger.sql`)
+  — la RPC nueva es `SECURITY INVOKER`, con `GRANT EXECUTE` explícito solo
+  a `authenticated`.
+  **Verificación:** no fue posible probar en vivo contra Supabase real —
+  `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` siguen
+  completamente vacías en la instancia real (mismo hallazgo abierto ya
+  documentado en la entrada de ADR-035 más abajo, sin causa determinada
+  todavía). Cubierto con 6 tests unitarios nuevos en
+  `tests/test_eudr_qc_actions.mjs` (código calculado correctamente
+  ignorando otros socios/organizaciones, error claro sin `ID_Socio`, la
+  RPC se llama solo cuando corresponde, error de la RPC propagado como
+  `EUDRQcError`, aislamiento multi-tenant) — suite completa `node --test
+  tests/*.mjs`: 699/711 passing (los 9 fallos restantes son preexistentes
+  y no relacionados, confirmado con `git stash` antes/después de esta
+  tarea). `npm run build` limpio.
+  **Nota de autoría/revisión:** redactada y ejecutada por Claude (Cowork)
+  de punta a punta — spec con corrección de premisas, migración, código,
+  tests y esta bitácora — sin segunda revisión de Gemini en el medio. Por
+  el punto 2 de `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1 ("si se trabajó con
+  Claude (Cowork) desde el principio, la revisión ya queda cubierta en el
+  mismo flujo"), el gate de segunda revisión para esta migración queda
+  cubierto así. La migración SQL no se aplicó contra producción — queda
+  para aplicación manual posterior en Supabase Studio, como toda migración
+  de este repo.
 
 - **(2026-09-05) ADR-035 cerrado — piloto de "Camino 1" (Fase D Paso 2):
   `updateQcRecordAttributes`/`updateQcRecordGeometry` migran de Service
