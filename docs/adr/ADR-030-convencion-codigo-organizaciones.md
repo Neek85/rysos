@@ -65,3 +65,29 @@ se implementa en este ADR.
   no antes.
 - No se toca el schema de `ORGANIZACIONES` en este ADR — es una
   convención de valores, no un cambio de columna/constraint.
+
+## Extensión (2026-09-10) — segundo tipo real: `GRANJA`
+
+Apareció el primer caso real de una organización que no es cooperativa:
+**Granja Valencia**, el tenant piloto del módulo Pecuario Cuyes MVP (ver
+`specs/pecuario_cuyes_mvp.md`, `docs/schema_live_pecuario.md`). Siguiendo
+la regla ya fijada arriba ("se define recién cuando aparezca el primer
+caso real"), se agrega:
+
+- **`GRANJA`** — explotación pecuaria/agropecuaria individual (no
+  cooperativa). Primer y único caso real: `GRANJA-VALENCIA`
+  (`Nombre_Organizacion` = "Granja Valencia").
+
+**Slug igual que antes:** versión legible en mayúsculas del nombre
+distintivo, sin la palabra genérica del tipo ("Granja" ya la cubre el
+prefijo) — "Granja Valencia" → `VALENCIA`... pero acá se prefirió
+mantener `GRANJA-VALENCIA` completo (repitiendo "Valencia" no aporta
+ambigüedad porque es un nombre propio corto de una sola palabra, y
+`GRANJA-VALENCIA` es más legible en logs/UI que un slug de una sola
+palabra) — la regla de "omitir palabras genéricas" sigue aplicando para
+organizaciones con nombres más largos; no es una excepción a la
+convención, es cómo se resuelve cuando el nombre distintivo es una sola
+palabra corta.
+
+Sigue sin haber validación automática (`CHECK`) sobre `"ID"` — misma
+decisión que el cuerpo original de este ADR.
