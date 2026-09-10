@@ -1,5 +1,20 @@
 # Spec — Botón "Sincronizar Google Drive"
 
+## Actualización (2026-09-09) — botón ocultado de la UI
+
+El botón `<DriveSyncButton />` se quitó de `app/dashboard/qc/page.jsx`
+(su único render real — nunca llegó a renderizarse desde
+`/dashboard/mapa`, corrigiendo lo que dice el párrafo de Contexto abajo).
+Motivo: el propio hallazgo de esta spec (sección "Decisivo", más abajo)
+sigue vigente — sigue sin existir integración real con la API de Google
+Drive, `drive_root` sigue siendo una ruta de filesystem local que solo
+funciona en desarrollo con `RYZOS_DRIVE_ROOT` configurada. El componente
+(`components/gis/DriveSyncButton.jsx`) y el Route Handler
+(`app/api/gis/sync-drive/route.js`) **no se borraron** — quedan en pausa,
+documentados, hasta que exista esa integración real para una organización
+paga. Ver `docs/ESTADO_PROYECTO.md` (entrada 2026-09-09) para el detalle
+de la tarea que lo ocultó.
+
 ## Contexto
 
 Un prompt `[PROMPT PARA CLAUDE]` pidió un `Route Handler`

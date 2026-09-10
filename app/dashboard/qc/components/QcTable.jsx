@@ -40,7 +40,19 @@ function displayParcela(record) {
   return record?.parcela_nombre || 'Parcela sin código'
 }
 
-export default function QcTable({ records, selectedKey, onSelect, validationResults, loading, error, onValidateTopology }) {
+export default function QcTable({
+  records,
+  selectedKey,
+  onSelect,
+  validationResults,
+  loading,
+  error,
+  onValidateTopology,
+  // Solo afecta textos (specs/revertir_aprobado_a_qc.md) — el resto del
+  // comportamiento (selección, badges, validación batch) es idéntico
+  // para ambas pestañas.
+  viewMode = 'PENDIENTES',
+}) {
   const [batchRunning, setBatchRunning] = useState(false)
   const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 })
 
@@ -66,9 +78,11 @@ export default function QcTable({ records, selectedKey, onSelect, validationResu
     setBatchRunning(false)
   }
 
+  const estadoLabel = viewMode === 'APROBADOS' ? 'aprobados' : 'pendientes'
+
   if (loading) return <p className="text-sm text-gray-400">Cargando registros…</p>
   if (error) return <p className="rounded bg-red-50 p-2 text-sm text-red-600">{error}</p>
-  if (records.length === 0) return <p className="text-sm text-gray-400">Sin registros pendientes en esta capa.</p>
+  if (records.length === 0) return <p className="text-sm text-gray-400">Sin registros {estadoLabel} en esta capa.</p>
 
   const eligibleCount = filterBatchValidatableRecords(records).length
 
@@ -84,7 +98,7 @@ export default function QcTable({ records, selectedKey, onSelect, validationResu
           >
             {batchRunning
               ? `Validando… ${batchProgress.done}/${batchProgress.total}`
-              : `Validar Todos PENDIENTES (${eligibleCount})`}
+              : `Validar Todos ${estadoLabel.toUpperCase()} (${eligibleCount})`}
           </button>
           {batchRunning && (
             <div className="h-1 w-full overflow-hidden rounded-full bg-gray-100">

@@ -1,5 +1,5 @@
 # ESTADO DEL PROYECTO RYZOS
-*Última actualización: 4 de septiembre, 2026*
+*Última actualización: 9 de septiembre, 2026*
 
 > Este documento es la "bitácora" del proyecto. Aquí se anota qué se hizo, qué falta y qué decisiones están pendientes. No contiene reglas técnicas fijas (esas viven en el prompt orquestador RYZOS V3.1) — esto es solo el día a día.
 
@@ -31,6 +31,211 @@
 > hitos — historial completo movido a
 > [`docs/archive/ESTADO_HISTORICO.md`](archive/ESTADO_HISTORICO.md)
 > (no leído por defecto).
+
+- **(2026-09-09) Motor de Pre-Validación Satelital EUDR: ANP + deforestación
+  reales conectados a `fn_validar_topologia_eudr`:** cierra lo pausado en
+  agosto (`specs/qc_topological_eudr_validation.md`,
+  `specs/eudr_forest_cover_2020_schema.md`). Nueva tabla
+  `EUDR_AREAS_PROTEGIDAS` (SERNANP, dataset compartido no multi-tenant,
+  mismo criterio que `EUDR_COBERTURA_BOSCOSA_2020`) + 2 funciones
+  utilitarias (`fn_evaluar_anp_eudr`/`fn_evaluar_deforestacion_eudr`) +
+  `fn_validar_topologia_eudr` extendida con las claves `anp`/`deforestacion`
+  reales. Sentinel-2/NDVI queda fuera de alcance a propósito.
+  **2 correcciones de premisa importantes, verificadas en vivo antes de
+  escribir la migración** (ver `specs/motor_prevalidacion_satelital_anp_bosque.md`):
+  (1) `EUDR_COBERTURA_BOSCOSA_2020` **no existe** en la instancia real
+  (la migración de agosto que la crea nunca se aplicó) — la migración
+  nueva la vuelve a crear con `IF NOT EXISTS`, idempotente; (2) la
+  definición VIGENTE hoy de `fn_validar_topologia_eudr` (confirmado
+  invocando la RPC real) es la de agosto 22
+  (`contenido_en_parcela_propia`), no la de agosto 20 que citaba el
+  prompt — esa versión de agosto 22 ya tenía la lógica de deforestación
+  regresionada a `{disponible:false}` fijo desde entonces, sin que nadie
+  lo notara; la migración nueva parte de la base correcta para no volver
+  a regresionar la contención. Además: `scripts/ingest_forest_loss_layer.py`
+  que pedía el prompt **ya existía** como `scripts/ingest_forest_cover.py`
+  — no se duplicó, se le agregó la idempotencia por `dataset_version` que
+  le faltaba (y a `scripts/ingest_anp_layer.py`, genuinamente nuevo).
+  Tests: `tests/test_motor_prevalidacion_satelital_anp_bosque.py`
+  (`@NEEDS_SUPABASE`, se salta — la migración todavía no está aplicada),
+  más `tests/test_ingest_anp_layer.py` y extensiones a
+  `tests/test_ingest_forest_cover.py`/`lib/qcTopologyValidation.js`.
+  `node --test`: 727 tests, 718 passing (mismos 9 fallos preexistentes).
+  `python -m pytest`: 515 passed, 27 skipped (mismos 5 fallos
+  preexistentes). `npm run build` limpio. La migración no se aplica sola
+  contra producción — queda como paso manual del usuario, junto con la
+  de agosto (`20260820_eudr_cobertura_boscosa_2020.sql`), que sigue
+  pendiente.
+  **Nota de autoría/revisión:** redactada y ejecutada por Claude (Cowork)
+  de punta a punta; gate de segunda revisión cubierto por autoría 100%
+  Claude (Cowork). No toca ninguna política RLS de escritura nueva (solo
+  `SELECT` de solo lectura para `authenticated`, mismo criterio ya
+  aplicado a `EUDR_COBERTURA_BOSCOSA_2020`).
+
+- **(2026-09-09) Revertir Aprobado a revisión + fix real de fotos de evidencia
+  (Mapa/QC) + botón "Sincronizar Google Drive" ocultado:** tarea de 4 partes.
+  - **Parte 1 — Revertir Aprobado:** pestañas "Pendientes"/"Aprobados" en
+    `/dashboard/qc` (`fetchApprovedRecords`, reusa `fetchRecordsByState` —
+    mismo refactor sin cambio de comportamiento para `fetchPendingRecords`);
+    un registro `APROBADO` muestra un único botón "↩ Revertir a Revisión"
+    en vez de Aprobar/Rechazar (`reopenRecord`/`reopenQcRecord`, mismo
+    patrón que `approveRecord`/`rejectRecord`). **Nunca toca
+    `PADRON_PARCELAS`** (confirmado con el usuario). El trigger
+    `fn_enforce_qc_approval_roles` (ADR-039) ya cubre este `UPDATE` —
+    **confirmado en vivo con sesiones reales** (`auditor-qc-demo` permitido,
+    `tecnico-campo-demo` bloqueado `42501`), no solo leído. `audit_logs`
+    gana `accion='REVERTIDO'` (requirió ampliar un `CHECK` real de columna,
+    `20260909150000_audit_logs_revertido.sql` — no una política RLS).
+    Corrección de firma: el prompt pedía `reopenQcRecord(tablaOrigen,
+    registroId, ...) => {ok,error}` — no coincide con el patrón real
+    (`approveQcRecord`/`rejectQcRecord` reciben el registro completo y
+    lanzan `EUDRQcError`); se siguió el patrón real.
+  - **Parte 2/3 — Fotos no cargaban:** causa real confirmada en vivo (no
+    hipótesis): `QcDetailEditor.jsx`/`MapDashboard.jsx::loadPhoto` firmaban
+    la URL con `getSupabaseClient()` (anon key, sin sesión), pero
+    `rls_storage_select_evidencias` exige `authenticated`. Reproducido con
+    el objeto real `ORG-TEST-DEMO/geom-movil-monitoreo-eudr_20260909092224015.jpg`:
+    anon → `400 Object not found`; sesión real → `200`. Fix: ambos
+    componentes pasan a `getSupabaseBrowserClient()` (ya existía, antes
+    solo se usaba en `/login`) para esa llamada específica —
+    `fetchRecords`/`vw_monitoreo_web` siguen con el cliente anon a
+    propósito. **Verificado en el navegador real** (login real como
+    `auditor-qc-demo`, no solo REST): la foto de un registro real de
+    `EUDR_INSTALACIONES` cargó en el panel de la Consola QC.
+  - **Parte 4 — Botón "Sincronizar Google Drive" oculto:** se quitó su
+    único render real (`app/dashboard/qc/page.jsx` — nunca se renderizaba
+    desde `/dashboard/mapa`, corrigiendo esa premisa de
+    `specs/drive_sync_trigger.md`). Componente y Route Handler quedan sin
+    borrar, documentados como en pausa.
+  - **Nota operativa:** para la verificación en el navegador se fijó una
+    contraseña temporal a la cuenta demo `auditor-qc-demo@ryzos-demo.test`
+    (Admin API) — si alguien más la usaba con otra contraseña, ya no es
+    válida; es una cuenta de prueba compartida (`ORG-TEST-DEMO`), no una
+    cuenta real de un usuario.
+  - Ver `specs/revertir_aprobado_a_qc.md`, `AI_STATE.md` (entrada
+    2026-09-09) y `specs/drive_sync_trigger.md` para el detalle completo.
+    Tests nuevos: `tests/test_qc_reopen_rbac_rls.py` (`@NEEDS_SUPABASE`,
+    sesiones reales), `tests/test_qc_evidencia_foto_session.mjs`, más
+    extensiones a `tests/test_eudr_qc_actions.mjs`/`test_qc_batch_audit.mjs`.
+    `node --test tests/*.mjs`: 722 tests, 713 passing (9 fallos
+    preexistentes no relacionados). `python -m pytest tests/`: 483 passed,
+    22 skipped, 5 fallos preexistentes no relacionados (confirmados con
+    `git stash` antes/después). `npm run build` limpio.
+  **Nota de autoría/revisión:** redactada y ejecutada por Claude (Cowork)
+  de punta a punta; gate de segunda revisión cubierto por autoría 100%
+  Claude (Cowork), igual que las 2 entradas anteriores. No tocó ninguna
+  política RLS nueva (solo un `CHECK` de columna en `audit_logs`).
+
+- **(2026-09-09) Revisión de seguridad real de `fn_aprobar_monitoreo_nueva_parcela`
+  (cierra el gate de la entrada anterior con evidencia, no solo lectura de
+  código) + fix `FOUND` en `fn_validar_codigo_parcela_unico`:**
+  **Corrección de premisa sobre la entrada de abajo:** decía que no era
+  posible verificar en vivo porque las 3 tablas EUDR están vacías —
+  incompleto: sí se puede insertar filas descartables reales y probar,
+  mismo mecanismo de sesión real por magic link ya usado en el smoke test
+  de Fase D Paso 2 (`tests/test_padron_rbac_rls.py`). Se hizo así en esta
+  tarea, en vivo, contra la instancia real:
+  - Con una sesión real (no Service Role Key) de `auditor-qc-demo@ryzos-demo.test`
+    sobre una fila descartable de `ORG-TEST-DEMO`, se invocó
+    `fn_aprobar_monitoreo_nueva_parcela` directo por REST. Resultado real:
+    `200`, `EUDR_MONITOREO` quedó `estado_revision: 'APROBADO'` +
+    `ID_Parcela_Fija` asignado, y se creó la fila nueva real en
+    `PADRON_PARCELAS` (hectáreas en `0`, `activo: true`) — sin ningún
+    bloqueo de rol o RLS. Confirma que `fn_enforce_padron_admin_role`
+    permite el `INSERT` a `auditor_qc` como se diseñó (ver migración
+    `20260906220000_enforce_padron_admin_trigger.sql`). Fila y organización
+    descartables limpiadas, `0` residuos confirmados por lectura directa.
+  - **Bug real, ya documentado desde 2026-09-08 más abajo en este archivo
+    (hallazgo incidental del smoke test), reproducido en vivo hoy contra
+    la instancia real todavía sin el fix aplicado:**
+    `fn_validar_codigo_parcela_unico` usaba `v_geom IS NULL` como proxy de
+    "el registro no existe", pero `geom_inspeccion` puede ser NULL en un
+    `EUDR_MONITOREO` real — un `INSERT` real descartable (sin
+    `geom_inspeccion`) seguido de la llamada real a la RPC devolvió el
+    mismo `P0001` "no encontrado" ya conocido, sobre una fila que sí
+    existe. Fix: `supabase/migrations/20260909130000_fix_fn_validar_codigo_parcela_unico_found.sql`
+    (`CREATE OR REPLACE`, usa la variable `FOUND` de PL/pgSQL en vez de
+    `v_geom IS NULL`, sin cambiar firma/umbral/lógica). **No se aplicó
+    contra producción** (paso manual, como toda migración de este repo) —
+    `tests/test_fn_validar_codigo_parcela_unico_found.py` reproduce el
+    bug real y se salta con motivo explícito hasta que se aplique
+    (mismo criterio que `_migration_is_applied` en
+    `tests/test_fix_id_parcela_fija_guid_qfield.py`), en vez de fallar en
+    rojo permanente.
+  - **Chequeo relacionado, verificado en vivo, sin bug:** se probó si
+    `fn_aprobar_monitoreo_nueva_parcela` tenía el mismo problema (su
+    propio guard usa `IF r_monitoreo IS NULL THEN` sobre una variable
+    `RECORD`) — no lo tiene: una fila real con varias columnas NULL se
+    procesó bien. En PL/pgSQL un `RECORD` poblado por `SELECT ... INTO`
+    solo queda NULL cuando la consulta devuelve 0 filas, a diferencia de
+    variables escalares sueltas.
+  - **Nota sobre el prompt original de esta tarea:** pedía documentar
+    acá que esta revisión "ya se hizo" en un paso anterior, y describía
+    una investigación distinta del bug de `fn_validar_codigo_parcela_unico`
+    (geometría "válida", dos hipótesis descartadas que no coinciden con
+    la causa real ya confirmada el 2026-09-08). No se encontró evidencia
+    de esa investigación en esta conversación ni coincide con la causa
+    raíz real ya conocida — en vez de transcribirla, se hizo la
+    verificación real descrita arriba y se documenta esa, no la del
+    prompt.
+  - Ver [`AI_STATE.md`](../AI_STATE.md) (entrada 2026-09-08) para el detalle completo del
+    fix y la reproducción. `node --test tests/*.mjs`: 714 tests, 705
+    passing (mismos 9 fallos preexistentes no relacionados). `python -m
+    pytest tests/test_fn_validar_codigo_parcela_unico_found.py`: 3
+    passed, 1 skipped (motivo explícito, ver arriba). `npm run build`
+    limpio.
+  **Nota de autoría/revisión:** redactada y ejecutada por Claude (Cowork)
+  de punta a punta; gate de segunda revisión cubierto por autoría 100%
+  Claude (Cowork), igual que la entrada anterior.
+
+- **(2026-09-09) Asignación automática de código de parcela al aprobar QC
+  (`fn_aprobar_monitoreo_nueva_parcela`):** al aprobar en la Consola QC un
+  `EUDR_MONITOREO` capturado en campo (QField) sin `ID_Parcela_Fija` (parcela
+  nueva, sin alta previa en el padrón), `approveRecord`
+  (`lib/eudrQcActions.js`) calcula el código con las funciones ya
+  existentes `computeNextParcelaCode`/`computeSuggestedParcelaId`
+  (`lib/parcelaDefaults.js`, sin modificar — mismo formato ya usado en
+  `/dashboard/socios`/Editor Vectorial, ver ADR-021) y delega el alta en
+  `PADRON_PARCELAS` + el `UPDATE` del propio monitoreo a una RPC nueva,
+  única forma de que ambas escrituras sean atómicas desde una Server
+  Action (mismo patrón que `fn_crear_socio_con_certificaciones`, ver
+  migración `20260909120000_fn_aprobar_monitoreo_nueva_parcela.sql`). Un
+  monitoreo que ya tiene `ID_Parcela_Fija` (parcela existente) sigue el
+  flujo de siempre sin cambios.
+  **Corrección de premisa importante (spec:
+  `specs/asignacion_automatica_codigo_parcela.md`):** el prompt original
+  pedía además propagar el código a `EUDR_USO_SUELO`/`EUDR_INSTALACIONES`
+  escribiendo una columna `ID_Parcela_Fija` en esas tablas — **esa columna
+  no existe**, y crearla habría reintroducido la "colisión de significado"
+  entre código legible y GUID técnico (`id_parcela`/`qfield_relation_id`)
+  que ADR-021 ya corrigió. Se omitió esa parte a propósito: el código ya
+  es resoluble para las tablas hijas vía el JOIN existente
+  (`fn_cobertura_uso_suelo_parcela`), sin duplicar el dato.
+  **No requirió tocar RLS** (`PADRON_PARCELAS` ya permite `INSERT` a
+  cualquier `authenticated` desde `20260906220000_enforce_padron_admin_trigger.sql`)
+  — la RPC nueva es `SECURITY INVOKER`, con `GRANT EXECUTE` explícito solo
+  a `authenticated`.
+  **Verificación:** no fue posible probar en vivo contra Supabase real —
+  `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` siguen
+  completamente vacías en la instancia real (mismo hallazgo abierto ya
+  documentado en la entrada de ADR-035 más abajo, sin causa determinada
+  todavía). Cubierto con 6 tests unitarios nuevos en
+  `tests/test_eudr_qc_actions.mjs` (código calculado correctamente
+  ignorando otros socios/organizaciones, error claro sin `ID_Socio`, la
+  RPC se llama solo cuando corresponde, error de la RPC propagado como
+  `EUDRQcError`, aislamiento multi-tenant) — suite completa `node --test
+  tests/*.mjs`: 699/711 passing (los 9 fallos restantes son preexistentes
+  y no relacionados, confirmado con `git stash` antes/después de esta
+  tarea). `npm run build` limpio.
+  **Nota de autoría/revisión:** redactada y ejecutada por Claude (Cowork)
+  de punta a punta — spec con corrección de premisas, migración, código,
+  tests y esta bitácora — sin segunda revisión de Gemini en el medio. Por
+  el punto 2 de `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1 ("si se trabajó con
+  Claude (Cowork) desde el principio, la revisión ya queda cubierta en el
+  mismo flujo"), el gate de segunda revisión para esta migración queda
+  cubierto así. La migración SQL no se aplicó contra producción — queda
+  para aplicación manual posterior en Supabase Studio, como toda migración
+  de este repo.
 
 - **(2026-09-05) ADR-035 cerrado — piloto de "Camino 1" (Fase D Paso 2):
   `updateQcRecordAttributes`/`updateQcRecordGeometry` migran de Service

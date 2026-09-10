@@ -1,20 +1,16 @@
 """
-Pruebas de scripts/ingest_forest_cover.py — ver
-specs/eudr_forest_ingestion_cli.md.
+Pruebas de scripts/ingest_anp_layer.py — ver
+specs/motor_prevalidacion_satelital_anp_bosque.md.
 
-Sin test de integración contra Supabase real (a diferencia de lo que
-pedía el prompt original, "verificar que fn_validar_topologia_eudr
-detecte solapamientos reales"): EUDR_COBERTURA_BOSCOSA_2020 todavía no
-está aplicada en la instancia real (confirmado en
-supabase/migrations/20260820_eudr_cobertura_boscosa_2020.sql, pendiente
-de aplicación manual como toda migración de este repo) — un test
-NEEDS_SUPABASE que asumiera la tabla ya creada fallaría en CI con
-"relation does not exist" en vez de saltarse limpio, hasta que alguien
-aplique la migración a mano. Se cubre en cambio el pipeline completo de
-transformación (reproyección, reparación/simplificación de geometría,
-resolución de año, construcción de payload, chunking/batching) con un
-cliente Supabase falso inyectado (mismo patrón que
-tests/test_fase2_etl.py::test_pipeline_sets_pendiente_on_insert).
+Mismo criterio exacto que tests/test_ingest_forest_cover.py (su hermano
+para EUDR_COBERTURA_BOSCOSA_2020): sin test de integración contra
+Supabase real — EUDR_AREAS_PROTEGIDAS tampoco existe todavía en la
+instancia real (confirmado por REST en vivo, ver la migración de esta
+tarea), pendiente de aplicación manual como toda migración de este repo.
+Se cubre el pipeline completo de transformación (reproyección,
+reparación/simplificación de geometría, resolución de campos de texto,
+construcción de payload, chunking/batching, idempotencia por
+dataset_version) con un cliente Supabase falso inyectado.
 """
 
 import math
@@ -24,12 +20,12 @@ from unittest.mock import MagicMock
 import geopandas as gpd
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 
-from scripts.ingest_forest_cover import (
+from scripts.ingest_anp_layer import (
     ALLOWED_COLUMNS,
     build_rows,
     chunked,
     ingest,
-    resolve_anio_perdida,
+    resolve_text_field,
     sanitize_geometry,
 )
 
@@ -45,7 +41,6 @@ class TestSanitizeGeometry(unittest.TestCase):
         self.assertEqual(result.geom_type, "MultiPolygon")
 
     def test_bowtie_invalido_se_repara(self):
-        """Un polígono con auto-intersección real (make_valid) queda válido tras sanitize."""
         self.assertFalse(BOWTIE.is_valid)
         result = sanitize_geometry(BOWTIE)
         self.assertIsNotNone(result)
@@ -56,8 +51,6 @@ class TestSanitizeGeometry(unittest.TestCase):
         self.assertIsNone(sanitize_geometry(None))
 
     def test_geometria_no_polygonal_se_descarta(self):
-        """Este dataset es de polígonos de cobertura/pérdida forestal — un punto o línea
-        (ej. una columna de geometría mal detectada por GDAL) nunca debe llegar a insertarse."""
         self.assertIsNone(sanitize_geometry(Point(-77.0, -6.0)))
         self.assertIsNone(sanitize_geometry(LineString([(-77.0, -6.0), (-76.9, -6.0)])))
 
@@ -67,55 +60,68 @@ class TestSanitizeGeometry(unittest.TestCase):
         self.assertEqual(result.geom_type, "MultiPolygon")
 
 
-class TestResolveAnioPerdida(unittest.TestCase):
-    def test_columna_con_valor_entero(self):
-        row = {"lossyear": 22}
-        self.assertEqual(resolve_anio_perdida(row, "lossyear"), 22)
+class TestResolveTextField(unittest.TestCase):
+    def test_columna_con_valor_string(self):
+        row = {"nombre": "Parque Nacional Cutervo"}
+        self.assertEqual(resolve_text_field(row, "nombre"), "Parque Nacional Cutervo")
 
     def test_columna_con_nan_devuelve_none(self):
-        """Patrón 'NaN es truthy' — ya mordió este proyecto 3 veces en
-        scripts/etl_drive_to_supabase.py (ver docs/schema_live.md / memoria),
-        se prueba explícitamente acá para no repetirlo una cuarta."""
-        row = {"lossyear": float("nan")}
-        self.assertIsNone(resolve_anio_perdida(row, "lossyear"))
+        """Mismo patrón 'NaN es truthy' que resolve_anio_perdida en
+        scripts/ingest_forest_cover.py — una columna de texto vacía leída
+        por geopandas puede traer NaN (float), nunca debe guardarse como
+        el string "nan"."""
+        row = {"nombre": float("nan")}
+        self.assertIsNone(resolve_text_field(row, "nombre"))
 
     def test_sin_columna_configurada_devuelve_none(self):
-        self.assertIsNone(resolve_anio_perdida({"lossyear": 22}, None))
+        self.assertIsNone(resolve_text_field({"nombre": "X"}, None))
 
     def test_columna_ausente_en_la_fila_devuelve_none(self):
-        self.assertIsNone(resolve_anio_perdida({}, "lossyear"))
+        self.assertIsNone(resolve_text_field({}, "nombre"))
 
-    def test_valor_no_convertible_devuelve_none_sin_lanzar(self):
-        self.assertIsNone(resolve_anio_perdida({"lossyear": "no-es-un-año"}, "lossyear"))
+    def test_string_vacio_o_solo_espacios_devuelve_none(self):
+        self.assertIsNone(resolve_text_field({"nombre": "   "}, "nombre"))
+
+    def test_valor_numerico_se_convierte_a_string(self):
+        """Una columna de categoría codificada como entero (ej. un ID de
+        categoría) no debe lanzar — se guarda como string, igual que
+        cualquier otro texto."""
+        self.assertEqual(resolve_text_field({"categoria": 5}, "categoria"), "5")
 
 
 class TestBuildRows(unittest.TestCase):
-    def _gdf(self, geometries):
-        return gpd.GeoDataFrame({"lossyear": [22] * len(geometries)}, geometry=geometries, crs="EPSG:4326")
+    def _gdf(self, geometries, **cols):
+        data = {"nombre": ["ANP Test"] * len(geometries)}
+        data.update(cols)
+        return gpd.GeoDataFrame(data, geometry=geometries, crs="EPSG:4326")
 
     def test_payload_respeta_el_whitelist_de_columnas(self):
         gdf = self._gdf([VALID_SQUARE])
-        rows, _ = build_rows(gdf, anio_columna="lossyear", anio_fijo=None, fuente="HANSEN_GFW", dataset_version="v1")
+        rows, _ = build_rows(gdf, "nombre", None, None, "SERNANP", "v1")
         self.assertTrue(all(set(r) <= ALLOWED_COLUMNS for r in rows))
 
     def test_geometrias_invalidas_o_no_polygonales_se_descartan_del_conteo(self):
         gdf = self._gdf([VALID_SQUARE, Point(-77.0, -6.0)])
-        rows, skipped = build_rows(gdf, anio_columna="lossyear", anio_fijo=None, fuente="HANSEN_GFW", dataset_version=None)
+        rows, skipped = build_rows(gdf, "nombre", None, None, "SERNANP", None)
         self.assertEqual(len(rows), 1)
         self.assertEqual(skipped, 1)
 
-    def test_anio_fijo_se_aplica_cuando_no_hay_columna(self):
-        gdf = gpd.GeoDataFrame({"col": [1]}, geometry=[VALID_SQUARE], crs="EPSG:4326")
-        rows, _ = build_rows(gdf, anio_columna=None, anio_fijo=2022, fuente="MINAM_GEOBOSQUES", dataset_version=None)
-        self.assertEqual(rows[0]["anio_perdida"], 2022)
+    def test_categoria_y_base_legal_se_resuelven_por_columna(self):
+        gdf = self._gdf([VALID_SQUARE], categoria=["Parque Nacional"], ley=["D.S. 001-2026"])
+        rows, _ = build_rows(gdf, "nombre", "categoria", "ley", "SERNANP", None)
+        self.assertEqual(rows[0]["categoria"], "Parque Nacional")
+        self.assertEqual(rows[0]["base_legal"], "D.S. 001-2026")
 
     def test_geom_serializado_como_geojson_no_wkt(self):
-        """Mismo formato que scripts/etl_drive_to_supabase.py (mapping(), no WKT/WKB) —
-        es lo que PostgREST acepta de verdad para una columna `geometry`."""
         gdf = self._gdf([VALID_SQUARE])
-        rows, _ = build_rows(gdf, anio_columna="lossyear", anio_fijo=None, fuente="HANSEN_GFW", dataset_version=None)
+        rows, _ = build_rows(gdf, "nombre", None, None, "SERNANP", None)
         self.assertIsInstance(rows[0]["geom"], dict)
         self.assertEqual(rows[0]["geom"]["type"], "MultiPolygon")
+
+    def test_fuente_default_sernanp(self):
+        gdf = self._gdf([VALID_SQUARE])
+        rows, _ = build_rows(gdf, "nombre", None, None, "SERNANP", None)
+        self.assertEqual(rows[0]["fuente"], "SERNANP")
 
 
 class TestChunked(unittest.TestCase):
@@ -130,30 +136,27 @@ class TestChunked(unittest.TestCase):
 
 class TestIngestDryRun(unittest.TestCase):
     def test_dry_run_no_requiere_credenciales_ni_escribe_nada(self):
-        gdf = gpd.GeoDataFrame({"lossyear": [22]}, geometry=[VALID_SQUARE], crs="EPSG:4326")
-        with unittest.mock.patch("scripts.ingest_forest_cover.load_source", return_value=gdf):
-            result = ingest("archivo-ficticio.geojson", fuente="HANSEN_GFW", anio_columna="lossyear", dry_run=True)
+        gdf = gpd.GeoDataFrame({"nombre": ["ANP Test"]}, geometry=[VALID_SQUARE], crs="EPSG:4326")
+        with unittest.mock.patch("scripts.ingest_anp_layer.load_source", return_value=gdf):
+            result = ingest("archivo-ficticio.geojson", nombre_columna="nombre", dry_run=True)
         self.assertEqual(result["inserted"], 0)
         self.assertEqual(result["total"], 1)
 
 
 class TestIngestWithFakeSupabase(unittest.TestCase):
     def test_batching_y_conteo_de_insertados(self):
-        """3 features, batch_size=2 -> 2 lotes (2+1) — verifica chunking real end-to-end
-        con un cliente Supabase falso inyectado (nunca toca la red)."""
         gdf = gpd.GeoDataFrame(
-            {"lossyear": [21, 22, 23]},
+            {"nombre": ["A", "B", "C"]},
             geometry=[VALID_SQUARE, VALID_SQUARE, VALID_SQUARE],
             crs="EPSG:4326",
         )
         fake_supabase = MagicMock()
         fake_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock()
 
-        with unittest.mock.patch("scripts.ingest_forest_cover.load_source", return_value=gdf):
+        with unittest.mock.patch("scripts.ingest_anp_layer.load_source", return_value=gdf):
             result = ingest(
                 "archivo-ficticio.geojson",
-                fuente="HANSEN_GFW",
-                anio_columna="lossyear",
+                nombre_columna="nombre",
                 batch_size=2,
                 supabase_client=fake_supabase,
             )
@@ -165,7 +168,7 @@ class TestIngestWithFakeSupabase(unittest.TestCase):
 
     def test_un_lote_fallido_no_detiene_los_siguientes(self):
         gdf = gpd.GeoDataFrame(
-            {"lossyear": [21, 22]},
+            {"nombre": ["A", "B"]},
             geometry=[VALID_SQUARE, VALID_SQUARE],
             crs="EPSG:4326",
         )
@@ -175,11 +178,10 @@ class TestIngestWithFakeSupabase(unittest.TestCase):
             MagicMock(),
         ]
 
-        with unittest.mock.patch("scripts.ingest_forest_cover.load_source", return_value=gdf):
+        with unittest.mock.patch("scripts.ingest_anp_layer.load_source", return_value=gdf):
             result = ingest(
                 "archivo-ficticio.geojson",
-                fuente="HANSEN_GFW",
-                anio_columna="lossyear",
+                nombre_columna="nombre",
                 batch_size=1,
                 supabase_client=fake_supabase,
             )
@@ -188,20 +190,19 @@ class TestIngestWithFakeSupabase(unittest.TestCase):
         self.assertEqual(result["failed"], 1)
 
     def test_dataset_version_borra_solo_esa_misma_version_antes_de_insertar(self):
-        """Idempotencia (specs/motor_prevalidacion_satelital_anp_bosque.md):
-        re-correr con el mismo --dataset-version no debe duplicar filas —
-        borra solo las filas de ESA versión exacta antes de insertar de
-        nuevo."""
-        gdf = gpd.GeoDataFrame({"lossyear": [22]}, geometry=[VALID_SQUARE], crs="EPSG:4326")
+        """Idempotencia: re-correr con el mismo --dataset-version no debe
+        duplicar filas — borra (con Service Role Key, vía el cliente
+        inyectado) solo las filas de ESA versión exacta antes de
+        insertar de nuevo."""
+        gdf = gpd.GeoDataFrame({"nombre": ["A"]}, geometry=[VALID_SQUARE], crs="EPSG:4326")
         fake_supabase = MagicMock()
         fake_supabase.table.return_value.delete.return_value.eq.return_value.execute.return_value = MagicMock(data=[{"id": 1}, {"id": 2}])
         fake_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock()
 
-        with unittest.mock.patch("scripts.ingest_forest_cover.load_source", return_value=gdf):
+        with unittest.mock.patch("scripts.ingest_anp_layer.load_source", return_value=gdf):
             result = ingest(
                 "archivo-ficticio.geojson",
-                fuente="HANSEN_GFW",
-                anio_columna="lossyear",
+                nombre_columna="nombre",
                 dataset_version="v1",
                 supabase_client=fake_supabase,
             )
@@ -211,16 +212,12 @@ class TestIngestWithFakeSupabase(unittest.TestCase):
         self.assertEqual(result["inserted"], 1)
 
     def test_sin_dataset_version_no_borra_nada(self):
-        gdf = gpd.GeoDataFrame({"lossyear": [22]}, geometry=[VALID_SQUARE], crs="EPSG:4326")
+        gdf = gpd.GeoDataFrame({"nombre": ["A"]}, geometry=[VALID_SQUARE], crs="EPSG:4326")
         fake_supabase = MagicMock()
         fake_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock()
 
-        with unittest.mock.patch("scripts.ingest_forest_cover.load_source", return_value=gdf):
-            result = ingest("archivo-ficticio.geojson", fuente="HANSEN_GFW", anio_columna="lossyear", supabase_client=fake_supabase)
+        with unittest.mock.patch("scripts.ingest_anp_layer.load_source", return_value=gdf):
+            result = ingest("archivo-ficticio.geojson", nombre_columna="nombre", supabase_client=fake_supabase)
 
         fake_supabase.table.return_value.delete.assert_not_called()
         self.assertEqual(result["deleted_previous_same_version"], 0)
-
-
-if __name__ == "__main__":
-    unittest.main()

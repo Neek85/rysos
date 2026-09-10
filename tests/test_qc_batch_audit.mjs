@@ -21,8 +21,11 @@ import { filterBatchValidatableRecords } from '../lib/qcTopologyValidation.js'
 // validateAuditLogRequest
 // ---------------------------------------------------------------
 
-test('AUDIT_ACCIONES es APROBADO/RECHAZADO — nunca "OBSERVADO" (no existe ese estado, ver specs/gis_qc_console_v2.md)', () => {
-  assert.deepEqual(AUDIT_ACCIONES.sort(), ['APROBADO', 'RECHAZADO'])
+test('AUDIT_ACCIONES es APROBADO/RECHAZADO/REVERTIDO — nunca "OBSERVADO" (no existe ese estado, ver specs/gis_qc_console_v2.md)', () => {
+  // REVERTIDO agregado en specs/revertir_aprobado_a_qc.md (2026-09-09) —
+  // ver también supabase/migrations/20260909150000_audit_logs_revertido.sql,
+  // que amplía el CHECK real de la columna para admitirlo.
+  assert.deepEqual(AUDIT_ACCIONES.sort(), ['APROBADO', 'RECHAZADO', 'REVERTIDO'])
 })
 
 test('AUDIT_TABLAS cubre las 3 tablas EUDR_* (no solo EUDR_MONITOREO)', () => {
