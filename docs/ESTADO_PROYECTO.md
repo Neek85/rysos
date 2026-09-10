@@ -76,19 +76,17 @@
   `TAREAS` siguen sin existir, tal como se documentó arriba (gaps
   conocidos, no bugs).
 
-- **(2026-09-10) Alta de "Granja Valencia" como tenant real —
-  `ADR-030` extendido, `INSERT` verificado y listo, pendiente de
-  aplicación manual:** siguiendo `specs/alta_organizacion_real.md`
-  (runbook usado para `COOP-AROMAS-VALLE`). `ADR-030`
+- **(2026-09-10) Alta de "Granja Valencia" como tenant real — CONFIRMADA:**
+  siguiendo `specs/alta_organizacion_real.md` (runbook usado para
+  `COOP-AROMAS-VALLE`). `ADR-030`
   (`docs/adr/ADR-030-convencion-codigo-organizaciones.md`) solo
   contemplaba el tipo `COOP` — se agregó el tipo `GRANJA` (código:
   `GRANJA-VALENCIA`), primer y único caso real hoy. Verificado en vivo
-  antes de preparar el `INSERT`: `GRANJA-VALENCIA` no existe todavía en
+  antes de preparar el `INSERT`: `GRANJA-VALENCIA` no existía todavía en
   `ORGANIZACIONES` (paso 1 del runbook), y `Direccion_Fiscal` es
   nullable en el esquema real (`required` del OpenAPI de PostgREST solo
-  exige `"ID"`/`es_organizacion_prueba`) — se deja `NULL` por ahora, tal
-  como pedía el prompt si la columna aceptaba nulo, sin inventar una
-  dirección.
+  exige `"ID"`/`es_organizacion_prueba`) — se dejó `NULL`, tal como pedía
+  el prompt si la columna aceptaba nulo, sin inventar una dirección.
 
   **Decisión de negocio confirmada con el usuario (`AskUserQuestion`):**
   el catálogo `PRODUCTOS` real (verificado en vivo) solo tiene
@@ -98,19 +96,25 @@
   `PECUARIO_*`) en vez de inventar un producto `CUY` nuevo sin que el
   usuario lo pidiera.
 
-  **El `INSERT` NO se aplicó todavía.** `specs/alta_organizacion_real.md`
-  es explícito dos veces: el alta de una organización real "no es una
-  tarea de ejecución autónoma" y "nunca [se corre] sin supervisión
-  directa" de quien opera el proyecto — se respetó la letra de esa
-  instrucción aunque el prompt de esta tarea ya traía los datos reales
-  confirmados (RUC, representante legal). El SQL exacto (Paso 1-4 del
-  runbook, sin el bloque de `ORGANIZACION_PRODUCTOS` por la decisión de
-  arriba) quedó entregado al usuario en el chat para correrlo manualmente
-  en Supabase Studio SQL Editor. **Pendiente real:** una vez aplicado,
-  falta re-verificar en vivo, y recién ahí terminar de corregir
-  `docs/RYZOS_ORQUESTADOR_V3.1.md` §2 (hoy dice explícitamente "todavía
-  no fue dada de alta, pendiente de aplicación manual" — no confundir con
-  "ya activa", que sería falso hasta que se confirme el `INSERT`).
+  **El `INSERT` se preparó pero no se ejecutó desde la sesión de
+  Claude Code CLI.** `specs/alta_organizacion_real.md` es explícito dos
+  veces: el alta de una organización real "no es una tarea de ejecución
+  autónoma" y "nunca [se corre] sin supervisión directa" de quien opera
+  el proyecto — se respetó la letra de esa instrucción aunque el prompt
+  de esa tarea ya traía los datos reales confirmados (RUC, representante
+  legal). El SQL exacto (Paso 1-4 del runbook, sin el bloque de
+  `ORGANIZACION_PRODUCTOS` por la decisión de arriba) quedó entregado al
+  usuario en el chat, quien lo aplicó manualmente en Supabase Studio SQL
+  Editor.
+
+  **Confirmado en vivo (2026-09-10, mismo día):**
+  `GET .../rest/v1/ORGANIZACIONES?ID=eq.GRANJA-VALENCIA` → `200`, 1 fila,
+  con exactamente los valores preparados (`RUC: "20615504481"`,
+  `Representante_Legal: "Neyser Cruz Díaz Maldonado"`,
+  `Direccion_Fiscal: null`, `es_organizacion_prueba: false`,
+  `creado_en: "2026-09-10T22:24:49.979727+00:00"`). `GRANJA-VALENCIA` es
+  tenant real desde esa fecha. `docs/RYZOS_ORQUESTADOR_V3.1.md` §2
+  actualizado para reflejarlo.
 
 - **(2026-09-09) Motor de Pre-Validación Satelital EUDR: ANP + deforestación
   reales conectados a `fn_validar_topologia_eudr`:** cierra lo pausado en
