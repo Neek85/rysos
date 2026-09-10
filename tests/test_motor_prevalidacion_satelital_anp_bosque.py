@@ -49,6 +49,13 @@ ANP_LEJANA_WKT = (
     "SRID=4326;MULTIPOLYGON(((-76.5000 -7.5000, -76.5000 -7.4900, "
     "-76.4900 -7.4900, -76.4900 -7.5000, -76.5000 -7.5000)))"
 )
+# Pérdida forestal lejana -- no debe intersecar PLOT_WKT (mismo criterio
+# que ANP_LEJANA_WKT, coordenadas propias para no depender de que ambos
+# tests corran juntos).
+BOSQUE_LEJANO_WKT = (
+    "SRID=4326;MULTIPOLYGON(((-76.7000 -7.7000, -76.7000 -7.6900, "
+    "-76.6900 -7.6900, -76.6900 -7.7000, -76.7000 -7.7000)))"
+)
 # ANP que cubre la mitad oeste de PLOT_WKT -- intersección real, cualquier %.
 ANP_SUPERPUESTA_WKT = (
     "SRID=4326;MULTIPOLYGON(((-75.1000 -6.1000, -75.1000 -6.0900, "
@@ -161,8 +168,17 @@ class TestMotorPrevalidacionSatelitalLive(unittest.TestCase):
         self.assertFalse(result["deforestacion"]["disponible"])
 
     def test_poligono_sin_interseccion_con_ninguna_capa(self):
+        # Ambas tablas con datos reales (para que 'disponible' sea true en
+        # las 2), pero ninguno interseca PLOT_WKT -- fix de un bug real de
+        # este test (no del motor): la primera versión solo insertaba en
+        # EUDR_AREAS_PROTEGIDAS, así que deforestacion.disponible salía
+        # false legítimamente (esa tabla seguía vacía para este caso) --
+        # confirmado corriendo en vivo contra la migración ya aplicada.
         self.supabase.table("EUDR_AREAS_PROTEGIDAS").insert(
             {"geom": ANP_LEJANA_WKT, "nombre": "TEST ANP Lejana", "fuente": "TEST-ANP-BOSQUE"}
+        ).execute()
+        self.supabase.table("EUDR_COBERTURA_BOSCOSA_2020").insert(
+            {"geom": BOSQUE_LEJANO_WKT, "anio_perdida": 2022, "fuente": "TEST-ANP-BOSQUE"}
         ).execute()
         id_monitoreo = self._crear_monitoreo(PLOT_WKT)
         res = self.supabase.rpc(
