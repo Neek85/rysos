@@ -1,5 +1,5 @@
 # ESTADO DEL PROYECTO RYZOS
-*Última actualización: 9 de septiembre, 2026*
+*Última actualización: 10 de septiembre, 2026*
 
 > Este documento es la "bitácora" del proyecto. Aquí se anota qué se hizo, qué falta y qué decisiones están pendientes. No contiene reglas técnicas fijas (esas viven en el prompt orquestador RYZOS V3.1) — esto es solo el día a día.
 
@@ -31,6 +31,57 @@
 > hitos — historial completo movido a
 > [`docs/archive/ESTADO_HISTORICO.md`](archive/ESTADO_HISTORICO.md)
 > (no leído por defecto).
+
+- **(2026-09-10) Deploy a producción (ryzosagri.com, Vercel, `main`):
+  `staging` → `main`, 8 commits.** Lleva a producción todo lo acumulado en
+  `staging` desde el deploy anterior: auto-asignación de código de
+  parcela (`fn_aprobar_monitoreo_nueva_parcela`), fix `FOUND` de
+  `fn_validar_codigo_parcela_unico`, el paquete de 4 cambios de la
+  Consola QC (revertir a revisión, fix real de fotos de evidencia en
+  Mapa/QC, botón "Sincronizar Google Drive" oculto), el motor real de
+  ANP/deforestación conectado a `fn_validar_topologia_eudr`, y un fix de
+  test descubierto al preparar este mismo deploy (ver más abajo).
+  **La migración SQL de ANP/deforestación (`20260909000000_anp_y_deforestacion_real.sql`)
+  ya estaba viva en la base real desde ANTES de este deploy** — Supabase
+  es compartida entre `staging` y `main`, así que lo único pendiente era
+  el código de Next.js/Vercel, nunca el esquema.
+  **Verificación previa al merge** (branch `staging`, HEAD `d1e0308`):
+  `npm run build`/`npm run lint` limpios (solo warnings preexistentes);
+  `node --test tests/*.mjs`: 727 tests, 718 passing (mismos 9 fallos
+  preexistentes ya documentados en tareas anteriores); `python -m pytest
+  tests/`: inicialmente 6 fallos (5 conocidos + 1 nuevo,
+  `test_poligono_sin_interseccion_con_ninguna_capa` en
+  `tests/test_motor_prevalidacion_satelital_anp_bosque.py`) — investigado
+  antes de seguir: era un bug del propio test (no insertaba fila en
+  `EUDR_COBERTURA_BOSCOSA_2020`, así que `deforestacion.disponible=false`
+  era la respuesta CORRECTA de la función, no un bug del motor), corregido
+  y confirmado en un commit aparte (`d1e0308`) antes de continuar —
+  resultado final: 520 passed, 22 skipped, mismos 5 fallos preexistentes.
+  **Conflicto real de merge, no solo "falta mergear":** `main` tenía 2
+  commits `Add files via upload` (21 de agosto, subidos directo por la
+  interfaz web de GitHub, nunca pasaron por `staging`) que dejaron
+  `docs/ESTADO_PROYECTO.md` con contenido propio divergente del de
+  `staging` desde el ancestro común — mismo tipo de conflicto ya resuelto
+  una vez antes (ver el commit `c7cafb4`, "documentar primer deploy real
+  a producción", que documenta la misma situación con este mismo
+  archivo). Resuelto igual que la vez anterior: contenido de `staging`
+  completo (el contenido que tenía `main` antes del merge no aportaba
+  nada por encima de lo que ya está en el historial de commits — ver
+  `git log` si hace falta recuperarlo). `git merge-tree` (dry-run) confirmó
+  que era el ÚNICO archivo con conflicto real de los 38 tocados — el
+  resto mergeó limpio, incluidos los 2 archivos que solo existían en
+  `main` (`docs/consola_qc_layout_y_validacion.md`/`_plan.md`, mismo
+  origen de "Add files via upload"), que el merge conservó sin tocar.
+  `npm run build` limpio también sobre el estado ya mergeado, antes del
+  push final. Commit de merge: `f109583` (`--no-ff`, historial real
+  conservado, sin squash). Push a `origin/main`: `8e70f78..f109583`.
+  **Deploy de Vercel:** no se pudo verificar desde este entorno (sin CLI
+  ni acceso al dashboard configurados acá) — confirmar manualmente en
+  Vercel que el deploy de `main` terminó en éxito.
+  **Nota de autoría:** tarea de control de versiones/despliegue ejecutada
+  por Claude (Cowork), con pausas explícitas de confirmación del usuario
+  en 2 puntos (antes del merge, y sobre la resolución del conflicto) —
+  ninguna migración SQL nueva, sin cambio de esquema en este deploy.
 
 - **(2026-09-09) Motor de Pre-Validación Satelital EUDR: ANP + deforestación
   reales conectados a `fn_validar_topologia_eudr`:** cierra lo pausado en
