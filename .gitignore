@@ -36,3 +36,6 @@ temp_drive/
 
 # Padrón sintético generado localmente (scripts/generar_padron_sintetico.mjs)
 scratch/
+
+# Supabase CLI — cache local (versión del CLI, no proyecto linkeado)
+supabase/.temp/

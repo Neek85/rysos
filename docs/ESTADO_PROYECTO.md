@@ -1,5 +1,5 @@
 # ESTADO DEL PROYECTO RYZOS
-*Última actualización: 9 de septiembre, 2026*
+*Última actualización: 10 de septiembre, 2026*
 
 > Este documento es la "bitácora" del proyecto. Aquí se anota qué se hizo, qué falta y qué decisiones están pendientes. No contiene reglas técnicas fijas (esas viven en el prompt orquestador RYZOS V3.1) — esto es solo el día a día.
 
@@ -31,6 +31,44 @@
 > hitos — historial completo movido a
 > [`docs/archive/ESTADO_HISTORICO.md`](archive/ESTADO_HISTORICO.md)
 > (no leído por defecto).
+
+- **(2026-09-10) Módulo Pecuario Cuyes MVP: migración verificada contra el
+  esquema real, lista para aplicar (no aplicada todavía):**
+  redactado por Gemini, gate de segunda revisión (SQL/RLS,
+  `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1.2) hecho por Claude (Cowork),
+  verificación en vivo e implementación por Claude Code CLI.
+  **Hallazgo principal:** la premisa central del diseño original —
+  "`PECUARIO_GALPONES`/`PECUARIO_JAULAS`/`PECUARIO_LOTES`/
+  `PECUARIO_PESAJE_ALIMENTACION` ya existen en producción, Granja Valencia
+  ya opera como tenant activo" — era **falsa**, confirmado en vivo contra
+  `jhtocgxlozfuzullrtol` por 3 vías independientes (esquema OpenAPI de
+  PostgREST, `GET` directo a cada tabla → `404 PGRST205`, y
+  `ORGANIZACIONES` sin ninguna fila "Granja Valencia": solo
+  `COOP-AROMAS-VALLE`/`ORG-TEST-DEMO` existen hoy). Ver
+  `specs/pecuario_cuyes_mvp.md` sección "Verificación pendiente" y
+  `docs/schema_live_pecuario.md` para el detalle completo. La migración
+  (`supabase/migrations/20260910160000_pecuario_cuyes_core.sql`) no
+  necesitó cambios de lógica SQL — ya estaba escrita defensivamente
+  (`CREATE TABLE IF NOT EXISTS` + chequeos `information_schema` antes de
+  cada FK condicional) y esto resultó ser exactamente lo correcto bajo el
+  estado real: crea las 6 tablas nuevas desde cero, sin errores, en el
+  orden correcto. Solo se corrigieron los comentarios que afirmaban
+  falsamente "ya existe en producción". La decisión de negocio que el
+  prompt pedía confirmar (¿fusionar `PECUARIO_PESAJES` con
+  `PECUARIO_PESAJE_ALIMENTACION`?) quedó resuelta sola — la segunda tabla
+  tampoco existe. **Gap real identificado, documentado, no resuelto en
+  esta tarea:** `PECUARIO_GALPONES` se referencia por FK condicional
+  pero nunca se crea en este archivo (sin diseño real de sus columnas) —
+  `galpon_id` en `PECUARIO_JAULAS` queda sin FK real hasta que exista una
+  spec propia. Test nuevo `tests/test_pecuario_cuyes_core.py` (9 estáticos
+  siempre corren + 3 `NEEDS_SUPABASE` que incluyen aislamiento RLS
+  cross-organización, hoy se saltan porque la migración no está aplicada
+  todavía). `python -m pytest tests/` 498 passed/60 skipped (1 fallo
+  preexistente sin relación, `test_socio_creacion_atomica.py`, ya
+  documentado en sesiones anteriores). `npm run lint` limpio (mismos
+  warnings preexistentes). **Migración lista en el repo — aplicarla
+  manualmente en Supabase Studio sigue siendo un paso manual del usuario,
+  no se aplicó contra la instancia real.**
 
 - **(2026-09-09) Motor de Pre-Validación Satelital EUDR: ANP + deforestación
   reales conectados a `fn_validar_topologia_eudr`:** cierra lo pausado en
