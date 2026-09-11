@@ -112,7 +112,7 @@ class TestV2MigrationFileStatic(unittest.TestCase):
 
     def test_all_5_tables_have_rls(self):
         self.assertEqual(self.sql.count("ENABLE ROW LEVEL SECURITY"), 5)
-        self.assertEqual(self.sql.count("TO authenticated"), 5)
+        self.assertEqual(self.sql.count("FOR ALL TO authenticated"), 5)
 
     def test_closes_v1_galpon_fk_gap(self):
         self.assertIn("fk_pecuario_jaulas_galpon", self.sql)

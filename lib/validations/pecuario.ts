@@ -65,6 +65,16 @@ export const PesajeLoteSchema = z.object({
 // v3: animal_id nueva (v1 solo contemplaba venta por lote). Exactamente uno
 // de animal_id/lote_id, mismo criterio que mortalidad — poza_id queda como
 // dato de contexto opcional, no participa del XOR.
+//
+// v4 (2026-09-11, corrección de campo): la comercialización es por animal,
+// no por peso. precio_unitario es nuevo — cuando se informa, el trigger
+// fn_calcular_precio_total_venta recalcula precio_total en la base
+// (cantidad * precio_unitario), así que enviar ambos "descoordinados" no
+// genera inconsistencia real, pero replicamos el cálculo acá para dar
+// feedback inmediato en el formulario. Si no se informa precio_unitario
+// (ej. un lote con un total pactado directo), precio_total se toma tal
+// cual. peso_total_kg pasa a ser referencial/opcional, no la base del
+// precio. La venta de un animal identificado es siempre cantidad = 1.
 export const VentaRegistroSchema = z.object({
   id: z.string().uuid(),
   ID_Organizacion: IdOrganizacionSchema,
@@ -74,7 +84,8 @@ export const VentaRegistroSchema = z.object({
   fecha_venta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
   tipo_salida: z.enum(['carne', 'pie_cria', 'reproductor_saca', 'guano']),
   cantidad: z.number().int().positive(),
-  peso_total_kg: z.number().positive().optional().nullable(),
+  precio_unitario: z.number().nonnegative().optional().nullable(), // v4: precio por animal
+  peso_total_kg: z.number().positive().optional().nullable(), // v4: referencial, ya no define el precio
   precio_total: z.number().nonnegative(),
   comprador_nombre: z.string().max(150).optional().nullable(), // PII de un tercero: nunca a consola/log
   device_id: z.string().min(1),
@@ -82,6 +93,9 @@ export const VentaRegistroSchema = z.object({
 }).refine(
   (data) => !!data.animal_id !== !!data.lote_id,
   { message: 'Debe indicar un animal identificado O un lote, no ambos ni ninguno.', path: ['animal_id'] }
+).refine(
+  (data) => !data.animal_id || data.cantidad === 1,
+  { message: 'La venta de un animal identificado es siempre de cantidad 1.', path: ['cantidad'] }
 );
 
 // ---------------------------------------------------------------------
@@ -109,13 +123,28 @@ export const LimpiezaGalponSchema = z.object({
   created_offline_at: z.string().datetime(),
 });
 
+// v4 (2026-09-11, reconciliación con el diseño original de AppSheet):
+// - categoria: se agregan 'medicamento' y 'vitamina' (antes mezclados bajo
+//   'sanitario'), y 'cama' se renombra a 'material' (ver migración v4).
+//   'sanitario' se conserva para desinfectantes/limpieza de instalaciones
+//   — no administrados al animal, por eso no se fusiona con 'medicamento'.
+// - unidad_medida: pasa de texto libre a un enum fijo (evita "kg"/"Kg"/
+//   "kilogramos" como valores distintos entre técnicos/dispositivos).
+// - stock_inicial: NO es una columna de la tabla. Es un campo de solo-UI:
+//   si el técnico lo completa al dar de alta el insumo, la Server Action
+//   crea el insumo y ADEMÁS un primer movimiento (tipo 'entrada', esa
+//   cantidad) en PECUARIO_INSUMOS_MOVIMIENTOS. El stock se sigue
+//   calculando siempre por vista (vw_pecuario_insumos_stock) a partir de
+//   los movimientos — nunca se vuelve a permitir editarlo a mano, a
+//   diferencia del "Stock Actual" manual del AppSheet original.
 export const InsumoSchema = z.object({
   id: z.string().uuid(),
   ID_Organizacion: IdOrganizacionSchema,
   nombre: z.string().min(1).max(150),
-  categoria: z.enum(['alimento', 'sanitario', 'cama', 'equipo', 'otro']).default('otro'),
-  unidad_medida: z.string().min(1).max(20),
+  categoria: z.enum(['alimento', 'medicamento', 'vitamina', 'sanitario', 'material', 'equipo', 'otro']).default('otro'),
+  unidad_medida: z.enum(['kg', 'g', 'litro', 'ml', 'unidad', 'saco_50kg', 'saco_40kg']).default('unidad'),
   stock_minimo: z.number().nonnegative().optional().nullable(),
+  stock_inicial: z.number().nonnegative().optional().nullable(), // solo-UI, ver nota arriba — no se persiste tal cual
   activo: z.boolean().default(true),
 });
 

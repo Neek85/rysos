@@ -31,6 +31,66 @@
 > [`docs/archive/ESTADO_HISTORICO.md`](archive/ESTADO_HISTORICO.md)
 > (no leído por defecto) — quedan acá solo los hitos desde 2026-09-09.
 
+- **(2026-09-11, noche) Pecuario v4 — venta por animal + taxonomía de
+  insumos, CONFIRMADA en vivo — con un hallazgo importante: no hay código
+  cliente todavía que "adaptar":** spec, migración
+  (`supabase/migrations/20260911180000_pecuario_ventas_insumos_ajustes.sql`)
+  y contrato Zod redactados por Claude (Cowork) desde el principio —
+  ejecutado/verificado por Claude Code CLI. El prompt pedía actualizar
+  "Server Actions de venta e insumos" en `lib/actions/` y componentes de
+  formulario en `app/dashboard/` — **grep exhaustivo sobre `lib/actions/`,
+  `app/dashboard/` y `components/` confirmó que no existe ningún archivo
+  que referencie `PECUARIO_VENTAS`/`PECUARIO_INSUMOS`** fuera de
+  migraciones/specs/docs/tests. Consistente con la arquitectura ya
+  documentada (Pecuario es la app móvil "Granja Valencia", Expo/React
+  Native, todavía sin scaffoldear en este repo — confirmado también que no
+  existe ningún `package.json`/`app.json` de Expo) — no hay Server Actions
+  porque ese patrón es específico de la web (`anon` key sin sesión real);
+  la app móvil escribe directo a Supabase con sesión real + RLS, sin capa
+  intermedia. No se inventó código nuevo (Server Action/pantalla web) para
+  "cumplir la letra" del prompt — habría sido alcance no pedido (construir
+  la app móvil o un panel web nuevo es una tarea aparte, con su propia
+  spec). Se agregaron 2 tests nuevos que confirman que no hay una
+  regresión silenciosa de este hallazgo (fallan solos si alguien crea
+  código cliente con los valores viejos).
+  **Verificado en vivo (`jhtocgxlozfuzullrtol`):** `PECUARIO_VENTAS.precio_unitario`
+  existe, el trigger `fn_calcular_precio_total_venta` recalcula
+  `precio_total = cantidad * precio_unitario` — probado enviando un
+  `precio_total` deliberadamente incorrecto junto con `precio_unitario`
+  para confirmar que la base gana, no el cliente. `categoria_insumo`
+  acepta `medicamento`/`vitamina`/`material` y ya no acepta `cama` (RENAME
+  VALUE). `unidad_medida` es el enum `unidad_medida_insumo` (7 valores),
+  rechaza texto libre. `vw_pecuario_insumos_stock` calcula bien el stock a
+  partir de `PECUARIO_INSUMOS_MOVIMIENTOS`.
+  **Corrección propia encontrada durante la verificación:** la
+  reconstrucción de v2 (tarea anterior, `20260911090000_...sql`) no
+  incluía `vw_pecuario_insumos_stock` — la vista sí existe en la
+  instancia real desde la v2 original, y v4 la referencia como
+  "ya existente" para poder recrearla con el nuevo tipo de
+  `unidad_medida`. Se agregó al archivo de v2 en esta misma tarea
+  (`CREATE OR REPLACE VIEW`, verbatim contra la definición confirmada en
+  vivo) para que ese archivo represente la v2 real completa — no afecta
+  el comportamiento (v4 ya la recrea con `CREATE OR REPLACE` de todos
+  modos), es una corrección de exactitud documental.
+  `VentaRegistroSchema`/`InsumoSchema` en `lib/validations/pecuario.ts` ya
+  traían el contrato v4 completo (redactado por Cowork) — sin cambios.
+  Tests nuevos: `tests/test_pecuario_ventas_insumos_v4.py` (12 estáticos +
+  6 en vivo, incluye los 2 pedidos explícitamente: trigger de recálculo y
+  el rechazo de `cama`) y `tests/test_pecuario_validations_v4.mjs` (10
+  tests, primer archivo `.ts` real que se ejecuta con `node --test` en
+  este repo — Node 22+ soporta importar `.ts` directo vía type-stripping
+  nativo, sin `ts-node`/build step, confirmado funcionando con Node v24).
+  `python -m pytest tests/` completo: 572 passed, 7 failed (2 de pecuario
+  resultaron ser rate-limit transitorio de `generate_link` de Supabase
+  Auth por la corrida tan larga — confirmado pasando 2/2 en aislamiento;
+  los otros 4 son preexistentes y no relacionados, contra datos reales que
+  cambian con el tiempo — `test_certificaciones_normalizadas.py`,
+  `test_e2e_etl_drive.py`, `test_multi_producto_cafe_cacao.py`; el 7mo es
+  el ya documentado `test_socio_creacion_atomica.py`). `node --test
+  tests/*.mjs`: 725 passed/9 failed (mismos 9 preexistentes de siempre,
+  sin relación). `npm run build`/`dev`/`lint` limpios, mismas 19 rutas, no
+  hay `npm test` (confirmado, coincide con `CLAUDE.md`).
+
 - **(2026-09-11) Pecuario v3 — identificación individual de reproductoras/
   reproductores, CONFIRMADA en vivo — 16/16 tests contra la instancia
   real:** redactado con Claude (Cowork) desde el principio (rescate del

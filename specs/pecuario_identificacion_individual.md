@@ -229,31 +229,59 @@ independientes y esta v3 se construye encima, no en paralelo.
    recurrente, v2, siempre a nivel de organización). Implementado así en la
    migración.
 
-**CORRECCIÓN (2026-09-11, Claude Code CLI, verificado en vivo y contra el
-repo):** este documento afirmaba que la migración v2
-(`20260911090000_pecuario_sanidad_insumos.sql`) estaba "escrita, no
-aplicada todavía" — **es falso, el archivo no existe en el repo** (no está
-en el working tree, no está en el historial de git, no está en ningún
-stash). Solo existen v1 (`20260910160000_pecuario_cuyes_core.sql`,
-aplicada y confirmada en vivo) y v3
-(`20260911140000_pecuario_identificacion_individual.sql`, escrita, no
-aplicada). Confirmado también en vivo contra `jhtocgxlozfuzullrtol`:
-`PECUARIO_GALPONES`/`PECUARIO_INSUMOS`/`PECUARIO_INSUMOS_MOVIMIENTOS`/
-`PECUARIO_CONTROL_SANITARIO`/`PECUARIO_LIMPIEZA_GALPON` (todas las tablas
-que v2 debería crear) no existen — consistente con que la migración nunca
-se escribió, no con que se escribió y no se aplicó. El preflight de v3
-(sección 0 de esa migración) confirma esta misma dependencia y cortaría
-la ejecución si se intentara correr v3 sin v2 primero.
+**Migración escrita, no aplicada todavía.** Falta, en este orden:
+`20260911090000_pecuario_sanidad_insumos.sql` (v2) y luego
+`20260911140000_pecuario_identificacion_individual.sql` (v3), ambas contra
+la instancia real `jhtocgxlozfuzullrtol`, en Supabase Studio o vía Claude
+Code CLI. El contrato de datos (`lib/validations/pecuario.ts`) ya incluye
+`ReproductorSchema`, `HistorialMachoSchema` y `TratamientoSchema`, más las
+extensiones de `PartoRegistroSchema` (`macho_id`), `MortalidadRegistroSchema`
+y `VentaRegistroSchema` (ambas con `.refine()` replicando el `CHECK`
+correspondiente de la base, para dar feedback inmediato en el formulario
+antes de intentar guardar).
 
-`lib/validations/pecuario.ts` sí incluye el contrato completo de v2
-(`ControlSanitarioSchema`, `LimpiezaGalponSchema`, `InsumoSchema`,
-`MovimientoInsumoSchema`) además de v3 (`ReproductorSchema`,
-`HistorialMachoSchema`, `TratamientoSchema`, más las extensiones de
-`PartoRegistroSchema`/`MortalidadRegistroSchema`/`VentaRegistroSchema`) —
-el contrato de datos de v2 sí se escribió, solo falta la migración SQL
-correspondiente. No se redactó la migración v2 en esta sesión (fuera del
-alcance de esta corrección de premisa — ver `docs/ESTADO_PROYECTO.md` para
-la decisión de cómo seguir).
+## Actualización 2026-09-11 — v2 y v3 aplicadas y verificadas en vivo
+
+Confirmado por Claude Code CLI: **v2 y v3 quedaron aplicadas contra la
+instancia real** (corridas manualmente por el usuario en Supabase Studio,
+en ese orden). Detalle relevante para no repetir el mismo problema en
+futuros módulos:
+
+- El archivo `20260911090000_pecuario_sanidad_insumos.sql` (v2) nunca
+  llegó a existir en el repositorio ni en su historial de git — se había
+  redactado en esta sesión de Cowork pero recién se le envió al usuario
+  como archivo descargable después de que ya lo había corrido en Studio.
+  CLI, al no encontrarlo en el repo, asumió correctamente que no estaba
+  aplicado y preguntó — el usuario corrigió con la información real
+  ("ya lo corrí"), y CLI verificó en vivo en vez de confiar ciegamente en
+  ninguna de las dos versiones, confirmando que sí estaba aplicado.
+  **Lección de proceso:** todo archivo redactado en una sesión de Cowork
+  necesita entregarse explícitamente (como archivo descargable) antes de
+  asumir que "ya está en el repo" — no hay sincronización automática entre
+  esta sesión y el repositorio real. CLI reconstruyó el archivo columna por
+  columna contra el esquema real vía PostgREST OpenAPI (no lo adivinó) y lo
+  dejó commiteado, etiquetado como reconstrucción.
+- 16 tests nuevos (`tests/test_pecuario_sanidad_identificacion.py`) corridos
+  contra la base real, 16/16 pasando — incluye verificación explícita de que
+  los triggers `fn_dar_baja_animal_por_mortalidad`/`fn_dar_baja_animal_por_venta`
+  quedaron correctos (a diferencia del bug real detectado en el bot "Auto-Baja
+  Mortalidad" del app donante AppSheet), del trigger de cierre automático de
+  `PECUARIO_HISTORIAL_MACHOS`, del descuento de stock por tratamiento, y de
+  los tres `CHECK` de "individual XOR poblacional".
+- `npm run build`/`dev`/lint limpios. Dos commits a `staging`: `e82bfee`
+  (reconstrucción de v2) y `9df932e` (confirmación de v3 + tests + docs).
+  `docs/ESTADO_PROYECTO.md` rotado (hitos 09-05 a 09-08 movidos a
+  `docs/archive/ESTADO_HISTORICO.md`, regla de economía de tokens de
+  `CLAUDE.md`).
+- `lib/validations/pecuario.ts` no necesitó cambios — ya coincidía
+  exactamente con el esquema real verificado.
+
+**Backend de la v3 (identificación individual) queda cerrado y confirmado
+en producción.** Siguiente paso natural: extender el prototipo de pantallas
+(`app_mockup_granja_valencia.html`) con la ficha de reproductor individual
+(alta con arete/QR, registrar parto/venta/muerte desde la ficha del animal) —
+recién ahora tiene sentido, con el esquema real ya confirmado en vivo en vez
+de en diseño.
 
 ### Pendiente real (no se pudo verificar desde esta sesión)
 
@@ -265,3 +293,143 @@ instancia real, confirmar contra el esquema en vivo
 `PECUARIO_MORTALIDAD.animal_id` pasando de reservada a FK real) choca con
 algo agregado a esas tablas por fuera de esta conversación desde el
 2026-09-11.
+
+## Actualización 2026-09-11 (tarde) — ajustes de campo v4
+
+Tres correcciones pedidas por el usuario tras revisar el mockup y comparar
+contra la app AppSheet original. Las tres implican cambios sobre esquema
+**ya aplicado en producción** (v1 `PECUARIO_VENTAS`, v2 `PECUARIO_INSUMOS`),
+no solo maquetación — se manejan con una migración nueva (v4:
+`20260911180000_pecuario_ventas_insumos_ajustes.sql`), nunca alterando las
+migraciones v1/v2/v3 ya corridas.
+
+### 1. "Escanear arete" no existe en la realidad
+
+El arete físico trae un código impreso (de fábrica o asignado por la
+granja), no una etiqueta QR — no hay nada que escanear con la cámara. El
+mockup simulaba erróneamente un escaneo QR para identificar reproductores
+(Parto/Mortalidad/Venta) y también sugería, en Alta de reproductor, que
+el código "se imprime como etiqueta QR para pegar en el arete". Corregido:
+
+- Los tres selectores de reproductor (Parto, Mortalidad, Venta) ahora
+  llevan un campo de texto para digitar el código, que filtra la lista de
+  chips en vivo — el chip-row queda como acceso rápido a los animales más
+  recientes/frecuentes, no como resultado de un escaneo.
+- El buscador del directorio de Reproductores pierde su botón "Escanear"
+  redundante (ya tenía un input de búsqueda por código).
+- Alta de reproductor: el botón pasa de "Generar" (con el mensaje "se
+  imprime como QR") a "Sugerir" (asigna un correlativo propio editable) —
+  y el hint aclara que lo normal es transcribir el código que el arete ya
+  trae impreso.
+- Lectura por **chip NFC** queda anotada en el hint de los tres selectores
+  como posible fase futura (tecnología distinta a QR) — no se construye
+  nada todavía, solo se deja constancia para no perder la idea.
+- Esto es 100% mockup/UX — no toca `PECUARIO_REPRODUCTORES.codigo_arete`
+  (ya es texto libre) ni requiere migración.
+- El escaneo de **QR sí sigue vigente** para identificar ubicaciones físicas
+  (poza, jaula, lote) — esa es una etiqueta que la granja imprime y pega
+  ella misma en la estructura, no en el animal. No se tocó ese flujo.
+
+### 2. Venta: por animal, no por peso
+
+`PECUARIO_VENTAS` (v1) no tenía `precio_unitario` — solo `cantidad`,
+`peso_total_kg` (nullable) y `precio_total` (NOT NULL). El mockup pedía
+"Peso total (kg)" como si fuera la base del precio, cuando la
+comercialización real es por cantidad de animales.
+
+**Decisión:** agregar `precio_unitario NUMERIC(10,2)` (nullable — sin
+backfill retroactivo, mismo criterio que v2/v3) y un trigger
+(`fn_calcular_precio_total_venta`) que recalcula `precio_total = cantidad *
+precio_unitario` cada vez que `precio_unitario` viene informado, para que
+nunca queden desincronizados. Si el técnico no informa `precio_unitario`
+(ej. un lote con un total pactado a ojo con el comprador), `precio_total`
+se respeta tal cual se envía — no se vuelve obligatorio el precio unitario,
+solo se habilita.
+
+`peso_total_kg` se conserva pero pasa a dato referencial opcional (ej.
+conversión alimenticia, o una venta de guano donde sí aplica peso) — deja
+de ser protagonista del formulario.
+
+Mockup: Venta ahora pide Cantidad → Precio individual → Precio total
+(autocalculado, editable), con Peso total como campo secundario al final.
+En modo "Reproductor identificado", Cantidad queda oculta y fija en 1 (ya
+no solo como texto de ayuda: el stepper se bloquea en 1 de verdad).
+
+**Nota fuera de alcance, no resuelta ahora:** `tipo_salida = 'guano'`
+comparte la misma tabla y su "cantidad" no es realmente "cantidad de
+animales" — es una inconsistencia de diseño heredada de v1 que no se pidió
+corregir y no se tocó en esta pasada, para no ampliar el alcance sin pedido
+explícito.
+
+### 3. Insumos: reconciliación con el diseño de AppSheet
+
+El AppSheet original usaba Tipo (Alimento / Medicamento / Vitamina /
+Material) y Unidad (Kg / Litro / Unidad / Saco 50kg / Saco 40kg) como
+pickers fijos, más un campo "Stock Actual" editado a mano. Lo ya aplicado
+en v2 (`categoria_insumo`: alimento/sanitario/cama/equipo/otro; texto libre
+para unidad; stock siempre calculado por vista sobre
+`PECUARIO_INSUMOS_MOVIMIENTOS`) no distinguía medicamento de vitamina y no
+tenía picker fijo de unidad.
+
+**Qué se rescata del AppSheet:** la idea de picker fijo para ambos campos
+(evita variantes como "kg"/"Kg"/"kilogramos" entre técnicos y
+dispositivos), y la distinción Medicamento vs. Vitamina (importa para
+reportes de costo y porque ambos se descuentan de stock vía
+`fn_descontar_insumo_tratamiento` al registrar un tratamiento — antes
+quedaban mezclados bajo "sanitario").
+
+**Qué NO se rescata:** el campo "Stock Actual" editado a mano. Es
+exactamente el problema que v2 vino a resolver — un valor manual se
+desactualiza en cuanto alguien olvida tocarlo, mientras que el saldo
+calculado por vista nunca puede divergir de los movimientos reales. La
+manera más probable de que AppSheet lo haya resuelto así es una limitación
+de la herramienta (no soporta vistas/rollups como Postgres), no una
+decisión de negocio a preservar.
+
+**Diseño final (`categoria_insumo`, vía `ALTER TYPE`):** alimento,
+medicamento, vitamina, sanitario, material, equipo, otro. Se agregan
+`medicamento` y `vitamina`; `cama` se renombra a `material` (cubre
+viruta/cama y otros consumibles generales). `sanitario` se conserva
+aparte de `medicamento` porque cubre desinfectantes/limpieza de
+instalaciones — no se administran al animal, así que mezclarlos con
+medicamentos habría sido incorrecto para reportes de costo sanitario vs.
+costo de limpieza.
+
+**Diseño final (unidad, nuevo enum `unidad_medida_insumo`):** kg, g,
+litro, ml, unidad, saco_50kg, saco_40kg — el set de AppSheet más `g`/`ml`,
+porque medicamentos y vitaminas suelen dosificarse en cantidades chicas.
+
+**Solución de compromiso para "cuánto tengo hoy":** en vez de un campo de
+stock editable, la pantalla de alta de insumo pide "Stock actual (opcional)"
+solo como conveniencia de UI — al guardar, la Server Action crea el
+insumo y además un primer movimiento de tipo `entrada` por esa cantidad en
+`PECUARIO_INSUMOS_MOVIMIENTOS`. De ahí en adelante el stock se sigue
+viendo únicamente por `vw_pecuario_insumos_stock`, nunca editable a mano.
+Esto da la misma experiencia que pedía el AppSheet original ("escribo
+cuánto tengo") sin reintroducir el problema de un valor que se desincroniza.
+
+Cambios aplicados:
+- Migración `supabase/migrations/20260911180000_pecuario_ventas_insumos_ajustes.sql`
+  (idempotente, con guardas para no fallar si se corre dos veces; incluye
+  consultas de verificación al final para correr a mano en Studio).
+- `lib/validations/pecuario.ts`: `VentaRegistroSchema` gana `precio_unitario`
+  y un refine que exige cantidad = 1 cuando hay `animal_id`;
+  `InsumoSchema` actualiza `categoria` y `unidad_medida` a los enums
+  nuevos y agrega `stock_inicial` (campo solo-UI, no persiste tal cual —
+  ver comentario en el archivo).
+- `app_mockup_granja_valencia.html`: Parto/Mortalidad/Venta con digitación
+  manual de código de arete en vez de "Escanear arete"; Venta rediseñada
+  (Cantidad → Precio individual → Precio total autocalculado → Peso
+  referencial); Insumos gana una pestaña "Nuevo insumo" con los pickers de
+  Tipo/Unidad reconciliados y el campo "Stock actual (opcional)".
+  Publicado como Artifact, versión 6.
+
+### Pendiente real (v4)
+
+Antes de correr `20260911180000_pecuario_ventas_insumos_ajustes.sql`
+contra la instancia real: confirmar contra el esquema en vivo que
+`PECUARIO_INSUMOS` no tiene ya filas con `unidad_medida` en un formato que
+el `CASE` de la migración no contempla (revisar `SELECT DISTINCT
+unidad_medida FROM "PECUARIO_INSUMOS"` antes de correrla) — si aparece
+algo fuera de lo mapeado, hoy cae a `'unidad'` por defecto, lo cual puede
+no ser correcto y conviene revisar a mano antes de aplicar.

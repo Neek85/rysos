@@ -246,3 +246,49 @@ cross-organización **verificado en vivo**
 (`test_reproductores_cross_org_read_isolation`): una sesión real de
 `ORG-TEST-DEMO` no puede leer una fila de `PECUARIO_REPRODUCTORES`
 sembrada en `COOP-AROMAS-VALLE`.
+
+## Módulo Pecuario Cuyes — v4 (venta por animal + taxonomía de insumos), APLICADA (2026-09-11 noche)
+
+`supabase/migrations/20260911180000_pecuario_ventas_insumos_ajustes.sql`
+— ajustes de campo tras revisar el mockup contra la app AppSheet original.
+Confirmado en vivo (`jhtocgxlozfuzullrtol`):
+
+- `PECUARIO_VENTAS.precio_unitario` — `numeric(10,2)`, nullable. Trigger
+  `fn_calcular_precio_total_venta` (`BEFORE INSERT OR UPDATE`): si
+  `precio_unitario` viene informado, recalcula `precio_total = ROUND(cantidad
+  * precio_unitario, 2)` **sin importar qué `precio_total` haya mandado el
+  cliente** — verificado enviando un `precio_total` deliberadamente
+  incorrecto junto con `precio_unitario` y confirmando que el valor
+  persistido es el recalculado. Si `precio_unitario` es `NULL`,
+  `precio_total` se respeta tal cual se envía (venta de lote con precio
+  pactado directo). `peso_total_kg` se conserva sin cambios, pasa a ser
+  dato referencial.
+- `categoria_insumo` (enum, `ALTER TYPE`) — ahora `alimento`, `sanitario`,
+  `material` (renombrado desde `cama` — `cama` **ya no es un valor
+  válido**, un `INSERT` con `categoria='cama'` falla), `equipo`, `otro`,
+  `medicamento`, `vitamina` (2 nuevos). `sanitario` se conserva aparte de
+  `medicamento` (desinfectantes de instalaciones vs. fármacos
+  administrados al animal).
+- `PECUARIO_INSUMOS.unidad_medida` — pasa de `varchar` (texto libre) al
+  enum nuevo `unidad_medida_insumo`: `kg`, `g`, `litro`, `ml`, `unidad`,
+  `saco_50kg`, `saco_40kg`. Backfill de filas existentes vía `CASE`
+  (mapea variantes comunes — "Kg"/"kilogramos"/etc. — antes de convertir
+  el tipo de columna; cualquier valor no mapeado cae a `'unidad'` por
+  default).
+- `vw_pecuario_insumos_stock` — vista (no tabla), columnas `insumo_id`,
+  `ID_Organizacion`, `nombre`, `categoria`, `unidad_medida`,
+  `stock_minimo`, `stock_actual` (calculado: `SUM(entrada) - SUM(salida)`
+  de `PECUARIO_INSUMOS_MOVIMIENTOS`). Existe desde la v2 real (no desde
+  v4) — v4 la recrea (`DROP`/`CREATE OR REPLACE`) porque Postgres no deja
+  cambiar el tipo de una columna de la que depende una vista. **La
+  reconstrucción de v2 en este repo no la incluía originalmente — se
+  corrigió en la misma tarea de v4** (ver `docs/ESTADO_PROYECTO.md`).
+  RLS: la vista respeta `auth_org_id()` en su propio `WHERE`, con `GRANT
+  SELECT TO authenticated`.
+
+**Sin código cliente todavía:** confirmado por grep exhaustivo que
+`lib/actions/`, `app/dashboard/` y `components/` no tienen ningún archivo
+que referencie `PECUARIO_VENTAS`/`PECUARIO_INSUMOS` — la app móvil de
+Granja Valencia (Expo/React Native) no está scaffoldeada en este repo
+todavía. `lib/validations/pecuario.ts` es el único contrato de datos que
+existe hoy para este módulo.

@@ -224,6 +224,36 @@ EXCEPTION WHEN duplicate_object THEN null; END $$;
 CREATE INDEX IF NOT EXISTS idx_pecuario_insumos_mov_org_insumo ON public."PECUARIO_INSUMOS_MOVIMIENTOS" ("ID_Organizacion", insumo_id);
 
 -- =====================================================================
+-- 6b. vw_pecuario_insumos_stock — CORRECCIÓN (2026-09-11, Claude Code CLI,
+-- verificado en vivo): esta vista existe realmente en la instancia real
+-- desde la v2 original (la que el usuario aplicó, no esta reconstrucción)
+-- pero se había omitido en la primera versión de este archivo — no se
+-- descubrió hasta la tarea de v4
+-- (20260911180000_pecuario_ventas_insumos_ajustes.sql), que la referencia
+-- como "ya existente desde 20260911090000" para poder hacer
+-- DROP VIEW/CREATE OR REPLACE alrededor del cambio de tipo de
+-- unidad_medida. Agregada acá para que este archivo represente la v2 real
+-- completa. Definición confirmada en vivo (columnas vía OpenAPI de
+-- PostgREST: insumo_id/ID_Organizacion/nombre/categoria/unidad_medida/
+-- stock_minimo/stock_actual) y verbatim contra la que v4 recrea.
+-- =====================================================================
+CREATE OR REPLACE VIEW public.vw_pecuario_insumos_stock AS
+SELECT
+    i.id AS insumo_id,
+    i."ID_Organizacion",
+    i.nombre,
+    i.categoria,
+    i.unidad_medida,
+    i.stock_minimo,
+    COALESCE(SUM(CASE WHEN m.tipo_movimiento = 'entrada' THEN m.cantidad ELSE -m.cantidad END), 0) AS stock_actual
+FROM public."PECUARIO_INSUMOS" i
+LEFT JOIN public."PECUARIO_INSUMOS_MOVIMIENTOS" m ON m.insumo_id = i.id
+WHERE (i."ID_Organizacion" = public.auth_org_id() OR auth.role() = 'service_role' OR current_user = 'postgres')
+GROUP BY i.id, i."ID_Organizacion", i.nombre, i.categoria, i.unidad_medida, i.stock_minimo;
+
+GRANT SELECT ON public.vw_pecuario_insumos_stock TO authenticated;
+
+-- =====================================================================
 -- 7. RLS — habilitación + políticas reales, mismo patrón que v1.
 -- =====================================================================
 ALTER TABLE public."PECUARIO_GALPONES"             ENABLE ROW LEVEL SECURITY;
