@@ -41,7 +41,7 @@ tests) y documentar el schema resultante acá — no inventar columnas ni
 estructura en este archivo antes de que exista una migración real que
 las respalde.
 
-## Módulo Pecuario Cuyes MVP — migración lista, NO aplicada todavía (2026-09-10)
+## Módulo Pecuario Cuyes MVP — v1 APLICADA y confirmada en vivo (2026-09-10)
 
 **Re-confirmado en vivo (2026-09-10, Claude Code CLI) exactamente lo que
 esta sección ya decía desde el 2026-09-04:** ninguna tabla `PECUARIO_*`
@@ -56,12 +56,10 @@ Valencia" — solo `COOP-AROMAS-VALLE`/`ORG-TEST-DEMO` existen). Ver
 `specs/pecuario_cuyes_mvp.md` sección "Verificación pendiente" para el
 detalle completo.
 
-**Estado real:** la migración
-`supabase/migrations/20260910160000_pecuario_cuyes_core.sql` existe en el
-repo, lista para aplicarse, pero **no se aplicó contra la instancia real**
-(aplicarla en Supabase Studio es un paso manual del usuario, fuera del
-alcance de cualquier sesión de este agente). Cuando se aplique, creará
-desde cero:
+**Estado real (actualizado 2026-09-11):** la migración
+`supabase/migrations/20260910160000_pecuario_cuyes_core.sql` fue aplicada
+manualmente por el usuario en Supabase Studio y **confirmada en vivo**
+(las 7 tablas responden `200`, ya no `404 PGRST205`). Crea:
 
 - `PECUARIO_CONFIGURACION` — `id` (uuid pk), `ID_Organizacion` (text, FK a
   `ORGANIZACIONES."ID"`, UNIQUE), `dias_lactancia_destete` (int, default
@@ -125,7 +123,126 @@ campo de un solo tipo de usuario).
 `TAREAS` exista (verifica `to_regclass()`, emite `RAISE WARNING`, no rompe
 el `INSERT` del parto).
 
-**Gap real conocido, no resuelto por esta migración:** `PECUARIO_GALPONES`
-nunca se crea acá (solo se referencia por FK condicional desde
-`PECUARIO_JAULAS.galpon_id`) — no hay diseño real de sus columnas todavía.
-Requiere su propia spec antes de agregarse.
+**Gap de v1, cerrado por v2 (ver abajo):** `PECUARIO_GALPONES` no se creaba
+en v1 (solo se referenciaba por FK condicional desde
+`PECUARIO_JAULAS.galpon_id`) — v2 la crea y agrega la FK real.
+
+## Módulo Pecuario Cuyes — v2 (sanidad recurrente + insumos), APLICADA (2026-09-11)
+
+**Hallazgo antes de aplicar (Claude Code CLI, 2026-09-11):** el prompt de
+esta tarea afirmaba que la migración v2
+(`supabase/migrations/20260911090000_pecuario_sanidad_insumos.sql`) "ya
+estaba escrita" — **era falso**: el archivo no existía en el repo (ni en
+el working tree, ni en el historial de git, ni en ningún stash),
+confirmado antes de tocar nada. El usuario había aplicado la v2 real
+manualmente en Supabase Studio (desde una sesión de Claude Cowork que
+nunca llegó a commitear el archivo al repo) — confirmado en vivo con
+`GET`/`404`→`200` en las 5 tablas nuevas entre una verificación y la
+siguiente. `supabase/migrations/20260911090000_pecuario_sanidad_insumos.sql`
+en el repo hoy es una **reconstrucción a posteriori**, escrita columna por
+columna contra el esquema OpenAPI de PostgREST en vivo (no adivinada) —
+ver el encabezado de ese archivo para el detalle completo de qué se pudo
+confirmar por REST y qué no (nombres exactos de constraints/políticas, que
+PostgREST no expone).
+
+Tablas (columnas confirmadas en vivo, `jhtocgxlozfuzullrtol`):
+
+- `PECUARIO_GALPONES` — `id` (uuid pk), `ID_Organizacion` (text NOT NULL,
+  FK), `codigo_galpon` (varchar NOT NULL), `nombre` (varchar),
+  `capacidad_pozas` (int), `dias_frecuencia_limpieza` (int, default 15),
+  campos offline, `created_at`/`updated_at`. Cierra el gap de v1: ahora
+  `PECUARIO_JAULAS.galpon_id` tiene FK real a esta tabla.
+- `PECUARIO_CONTROL_SANITARIO` — `id`, `ID_Organizacion` (NOT NULL, FK),
+  `fecha` (date NOT NULL), `producto_usado`/`responsable` (varchar),
+  `observaciones` (text), campos offline, `created_at`. Desinfección
+  recurrente **a nivel de organización** (no de galpón/lote/individual —
+  eso es `PECUARIO_TRATAMIENTOS`, v3).
+- `PECUARIO_LIMPIEZA_GALPON` — `id`, `ID_Organizacion` (NOT NULL, FK),
+  `galpon_id` (uuid NOT NULL, FK a `PECUARIO_GALPONES`), `fecha` (date NOT
+  NULL), `observaciones`, campos offline, `created_at`.
+- `PECUARIO_INSUMOS` — `id`, `ID_Organizacion` (NOT NULL, FK), `nombre`
+  (varchar NOT NULL), `categoria` (enum `categoria_insumo`:
+  `alimento`/`sanitario`/`cama`/`equipo`/`otro`, default `otro`),
+  `unidad_medida` (varchar NOT NULL, default `'unidad'`), `stock_minimo`
+  (numeric), `activo` (boolean, default `true`), campos offline,
+  `created_at`. **Sin columna de stock actual** — se deriva sumando
+  `PECUARIO_INSUMOS_MOVIMIENTOS` (entrada − salida), no se denormaliza.
+- `PECUARIO_INSUMOS_MOVIMIENTOS` — `id`, `ID_Organizacion` (NOT NULL, FK),
+  `insumo_id` (uuid NOT NULL, FK a `PECUARIO_INSUMOS`), `tipo_movimiento`
+  (enum `tipo_movimiento_insumo`: `entrada`/`salida`), `cantidad` (numeric
+  NOT NULL, CHECK > 0), `fecha` (date NOT NULL), `poza_id`/`lote_id`
+  (uuid, opcionales), `observaciones`, campos offline, `created_at`. v3
+  inserta acá automáticamente al registrar un tratamiento que consume un
+  insumo (`fn_descontar_insumo_tratamiento`).
+
+**RLS:** mismo patrón que v1 en las 5 tablas — `FOR ALL TO authenticated`,
+scoped por `ID_Organizacion`, sin condición de rol. Confirmado en vivo que
+`anon` no lee ninguna (`GET` con anon key → `200` con lista vacía en las 5).
+
+## Módulo Pecuario Cuyes — v3 (identificación individual), APLICADA (2026-09-11)
+
+`supabase/migrations/20260911140000_pecuario_identificacion_individual.sql`
+— overlay opcional sobre el manejo poblacional (ver
+`specs/pecuario_identificacion_individual.md` para el diseño completo,
+incluido el análisis del app donante en AppSheet "CuyManager SaaS V1").
+Confirmada en vivo, incluida la lógica de negocio (no solo columnas) —
+`tests/test_pecuario_sanidad_identificacion.py`, 16/16 passing contra la
+instancia real:
+
+- `PECUARIO_REPRODUCTORES` — `id`, `ID_Organizacion` (NOT NULL, FK),
+  `codigo_arete` (varchar NOT NULL, UNIQUE junto con `ID_Organizacion`),
+  `sexo` (enum `sexo_cuy`: `macho`/`hembra`, NOT NULL), `raza`,
+  `fecha_nacimiento`, `madre_id`/`padre_id` (uuid, auto-referencia FK),
+  `jaula_actual_id` (FK a `PECUARIO_JAULAS`), `proposito` (enum
+  `proposito_animal`, default `reproductor`), `estado` (enum
+  `estado_animal`, default `activo`), `fecha_salida`, `foto_url`, `notas`,
+  campos offline, `created_at`/`updated_at`.
+- `PECUARIO_HISTORIAL_MACHOS` — `id`, `ID_Organizacion` (NOT NULL, FK),
+  `macho_id` (FK a `PECUARIO_REPRODUCTORES`), `jaula_id` (FK a
+  `PECUARIO_JAULAS`), `fecha_entrada` (date NOT NULL, default
+  `CURRENT_DATE`), `fecha_salida` (nullable — `NULL` = todavía activo en
+  esa jaula), campos offline, `created_at`. Trigger
+  `fn_cerrar_historial_macho_anterior` (`AFTER INSERT`): al asignar un
+  macho nuevo a una jaula, cierra automáticamente cualquier asignación
+  anterior de esa misma jaula que siguiera abierta — **verificado en vivo**
+  (`test_historial_macho_auto_closes_previous_open_record`).
+- `PECUARIO_TRATAMIENTOS` — `id`, `ID_Organizacion` (NOT NULL, FK),
+  `alcance` (enum `alcance_tratamiento`: `galpon`/`lote`/`individual`, NOT
+  NULL), `galpon_id`/`lote_id`/`animal_id` (exactamente uno según
+  `alcance`, `CHECK chk_tratamientos_alcance_target` — **verificado en
+  vivo que rechaza un mismatch**), `fecha`, `tipo_tratamiento` (enum
+  `tipo_tratamiento_sanitario`: `preventivo`/`curativo`/`vitaminas`),
+  `diagnostico`, `insumo_id` (FK a `PECUARIO_INSUMOS`), `cantidad_dosis`,
+  `costo_estimado`, campos offline, `created_at`. Trigger
+  `fn_descontar_insumo_tratamiento` (`AFTER INSERT`): si trae
+  `insumo_id`+`cantidad_dosis`, inserta un movimiento `salida` en
+  `PECUARIO_INSUMOS_MOVIMIENTOS` — **verificado en vivo**
+  (`test_tratamiento_descuenta_insumo_del_kardex`).
+
+**Columnas nuevas en tablas de v1:** `PECUARIO_PARTOS.macho_id` (FK a
+`PECUARIO_REPRODUCTORES`, complementa `macho_activo_codigo` de texto
+libre), `PECUARIO_PARTOS.madre_id` (pasa de reservada sin FK a FK real),
+`PECUARIO_MORTALIDAD.animal_id` (pasa de reservada a FK real + `CHECK
+chk_mortalidad_individual_xor_poblacional`), `PECUARIO_VENTAS.animal_id`
+(nueva, FK real + `CHECK chk_ventas_individual_xor_lote`). Los 2 `CHECK`
+XOR están **verificados en vivo que rechazan** la combinación inválida
+(`23514`) tanto "ambos llenos" como "ninguno lleno".
+
+**Triggers de baja automática — versión corregida del bug real detectado
+en el app donante** (ese bot dejaba `estado="Vendido"` en cualquier
+muerte, por 2 acciones encadenadas e invertidas): `fn_dar_baja_animal_por_mortalidad`
+marca `estado='muerto'` (verificado en vivo, no 'vendido'),
+`fn_dar_baja_animal_por_venta` marca `estado='vendido'` — ambos limpian
+`jaula_actual_id` y fijan `fecha_salida` a la fecha del evento.
+
+**Consanguinidad:** `fn_son_parientes(animal_a, animal_b, generaciones
+default 3)`, `WITH RECURSIVE` sobre `madre_id`/`padre_id` — validación en
+la app antes de asignar un macho, no `CHECK` bloqueante en la base (no
+rompe la escritura offline). No cubierta por el test suite automatizado
+todavía (requiere armar un árbol genealógico de varias generaciones).
+
+**RLS:** mismo patrón que v1/v2 en las 3 tablas nuevas. Aislamiento
+cross-organización **verificado en vivo**
+(`test_reproductores_cross_org_read_isolation`): una sesión real de
+`ORG-TEST-DEMO` no puede leer una fila de `PECUARIO_REPRODUCTORES`
+sembrada en `COOP-AROMAS-VALLE`.
