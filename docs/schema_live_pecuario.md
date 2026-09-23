@@ -491,3 +491,89 @@ sesión de `ORG-TEST-DEMO` no ve ni puede insertar una venta de
 subproducto con `ID_Organizacion` de `COOP-AROMAS-VALLE`); 0 filas
 históricas con `tipo_salida='guano'` en `PECUARIO_VENTAS` confirmado
 también como test automatizado.
+
+## Módulo Pecuario Cuyes — v8 (evidencia fotográfica en Mortalidad), APLICADA (2026-09-23)
+
+`supabase/migrations/20260923120000_pecuario_mortalidad_evidencia_fotografica.sql`
+(`specs/pecuario_mortalidad_evidencia_fotografica.md` referenciada, pero
+nunca existió en este repo — mismo hallazgo que en Guano). **Decisión de
+arquitectura:** tabla `PECUARIO_MORTALIDAD_FOTOS` (una fila por foto), no
+un array de URLs sobre `PECUARIO_MORTALIDAD` — sin tope de cantidad por
+registro todavía (spec §5, pendiente de confirmar con Neyser/técnicos).
+
+- `PECUARIO_MORTALIDAD_FOTOS` — columnas reales confirmadas en vivo
+  (`information_schema.columns` vía `supabase db query --linked`, no
+  solo el esquema OpenAPI de PostgREST):
+
+  | columna | tipo | nullable | default |
+  |---|---|---|---|
+  | `id` | uuid | NO | `gen_random_uuid()` |
+  | `ID_Organizacion` | text | NO | — (FK → `ORGANIZACIONES."ID"`) |
+  | `mortalidad_id` | uuid | NO | — (FK → `PECUARIO_MORTALIDAD.id`, `ON DELETE CASCADE`) |
+  | `storage_path` | text | NO | — (`UNIQUE`, `{ID_Organizacion}/mortalidad/{mortalidad_id}/{filename}`) |
+  | `device_id` | character varying | YES | — |
+  | `created_offline_at` | timestamptz | YES | — |
+  | `synced_at` | timestamptz | YES | `now()` |
+  | `created_at` | timestamptz | YES | `now()` |
+
+  RLS: mismo patrón `FOR ALL TO authenticated` scoped por
+  `ID_Organizacion` (`auth_org_id()`).
+
+- **Bucket Storage `evidencias_pecuario`** (nuevo, no reutiliza
+  `evidencias_eudr` — otro vertical): `public=false`,
+  `file_size_limit=10485760` (10MB, mismo tope que `evidencias_eudr`),
+  `allowed_mime_types=['image/jpeg','image/png','image/webp']`.
+  Convención de ruta: `{ID_Organizacion}/mortalidad/{mortalidad_id}/{filename}`
+  — un nivel más granular que `evidencias_eudr`, deja lugar para
+  extender la misma capacidad a otras pantallas (Sanidad, Parto) sin otra
+  migración.
+
+  **Las 4 políticas RLS de `storage.objects`** — confirmadas en vivo
+  contra `pg_policies` (vía `supabase db query --linked`, ver nota sobre
+  esta capacidad más abajo):
+
+  | policyname | cmd | roles | expresión (`USING`/`WITH CHECK`) |
+  |---|---|---|---|
+  | `rls_storage_select_evidencias_pecuario` | SELECT | `{authenticated}` | `USING`: `bucket_id = 'evidencias_pecuario' AND ((storage.foldername(name))[1] = auth_org_id() OR auth.role() = 'service_role' OR CURRENT_USER = 'postgres')` |
+  | `rls_storage_insert_evidencias_pecuario` | INSERT | `{authenticated}` | `WITH CHECK`: misma condición que arriba |
+  | `rls_storage_update_evidencias_pecuario` | UPDATE | `{authenticated}` | `USING` + `WITH CHECK`: misma condición, ambas cláusulas |
+  | `rls_storage_delete_evidencias_pecuario` | DELETE | `{authenticated}` | `USING`: misma condición |
+
+**Nota sobre `supabase db query --linked`:** esta sesión descubrió y usó
+por primera vez esta capacidad de la CLI (Management API, sin
+`DATABASE_URL`/contraseña de Postgres directa) para traer evidencia
+literal de `pg_policies`/`information_schema` — **usada exclusivamente
+para lecturas** (`SELECT`). Aplicar migraciones (DDL) sigue siendo,
+sin excepción, un paso manual del usuario en Studio (§4.1.4) —
+esta capacidad no cambia eso, solo la forma en que Claude Code CLI puede
+verificar el estado real de la base sin depender únicamente de lo que
+PostgREST expone. Ver `AI_STATE.md` para el detalle completo.
+
+**Verificado en vivo** (`tests/test_pecuario_mortalidad_fotos.py`,
+**19/19**): `INSERT` de prueba real —
+
+```json
+{
+  "id": "68349e71-5c14-4af0-934e-a0e1d3e4e481",
+  "ID_Organizacion": "ORG-TEST-DEMO",
+  "mortalidad_id": "992bf948-7d2b-4fa3-bbb5-2286bd6a63ff",
+  "storage_path": "ORG-TEST-DEMO/mortalidad/992bf948-7d2b-4fa3-bbb5-2286bd6a63ff/foto1.jpg",
+  "device_id": null,
+  "created_offline_at": null,
+  "synced_at": "2026-09-23T04:20:00.735813+00:00",
+  "created_at": "2026-09-23T04:20:00.735813+00:00"
+}
+```
+
+— duplicado del mismo `storage_path` rechazado (`409`,
+`23505 duplicate key value violates unique constraint "uq_mortalidad_fotos_storage_path"`);
+aislamiento RLS de la tabla (sesión de `ORG-TEST-DEMO` leyendo una fila
+sembrada en `COOP-AROMAS-VALLE` → `200` con `[]`); aislamiento RLS del
+bucket en ambas direcciones — subida cruzada (`ORG-TEST-DEMO` intentando
+escribir en la carpeta de `COOP-AROMAS-VALLE`) → `400`
+`{"statusCode":"403","error":"Unauthorized","message":"new row violates row-level security policy","code":"AccessDenied"}`;
+lectura cruzada de un objeto sembrado en `COOP-AROMAS-VALLE` → `400`
+`{"statusCode":"404","error":"not_found","message":"Object not found","code":"NoSuchKey"}`
+(RLS hace el objeto indistinguible de "no existe" para quien no tiene
+acceso); subida y lectura de la propia organización, ambas exitosas
+(`200`, bytes idénticos a los subidos).

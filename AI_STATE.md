@@ -1061,3 +1061,70 @@ todo el archivo.
 failed (mismos 5 preexistentes de siempre, sin relación con Pecuario).
 
 **Tarea cerrada.** Sin merge a `main` — decisión manual del usuario.
+
+---
+
+## 2026-09-23 (continuación) — Evidencia fotográfica en Mortalidad: ya estaba aplicada, y una capacidad nueva descubierta
+
+Mismo patrón que Guano: al verificar antes de tocar nada,
+`PECUARIO_MORTALIDAD_FOTOS` y el bucket `evidencias_pecuario` **ya
+existían** en vivo, exactos a lo que especifica
+`20260923120000_pecuario_mortalidad_evidencia_fotografica.sql`. No había
+nada que aplicar en Studio.
+
+**El usuario pidió evidencia literal explícita** (columnas reales, las 4
+políticas de `storage.objects`, resultado del insert) — no alcanzaba con
+lo que expone PostgREST (no expone `pg_policies` ni permite `SELECT`
+arbitrario sobre `information_schema`). Para conseguirla:
+
+1. `supabase link --project-ref jhtocgxlozfuzullrtol` — funcionó sin
+   pedir contraseña de Postgres (el CLI ya tenía un token de acceso
+   cacheado de antes, confirmado en tareas anteriores con
+   `supabase projects list`). Solo escribe `supabase/.temp/project-ref`
+   (ya en `.gitignore`, no ensucia el repo).
+2. `supabase db query --linked "<SELECT ...>"` — ejecuta SQL contra la
+   base real vía la Management API de Supabase, **sin necesitar
+   `DATABASE_URL` ni contraseña de Postgres directa**. Usado para:
+   - `SELECT policyname, cmd, roles::text FROM pg_policies WHERE ...`
+     → las 4 políticas de `storage.objects` para `evidencias_pecuario`.
+   - Lo mismo con `qual`/`with_check` → las expresiones `USING`/`WITH
+     CHECK` exactas de cada política.
+   - `SELECT column_name, data_type, is_nullable, column_default FROM
+     information_schema.columns WHERE table_name = ...` → columnas
+     reales de `PECUARIO_MORTALIDAD_FOTOS`.
+
+**Esto es una capacidad real que no tenía identificada en tareas
+anteriores** — en varias tareas previas de esta sesión dije que "no hay
+vía técnica para aplicar DDL... sin `DATABASE_URL`", lo cual sigue siendo
+cierto para *aplicar* (DDL), pero *leer* metadata real (`pg_policies`,
+`information_schema`, cualquier `SELECT`) sí es posible con esta
+herramienta, sin necesitar la contraseña de Postgres. **Uso que le doy a
+esto, explícito:** exclusivamente `SELECT` de solo lectura, para traer
+evidencia literal verificable en vez de inferir desde el esquema OpenAPI
+de PostgREST (que no expone políticas RLS ni metadata de constraints).
+**Nunca** la uso para `INSERT`/`UPDATE`/`DELETE`/DDL contra la base real
+— aplicar una migración sigue siendo, sin excepción y sin importar qué
+herramienta esté disponible, un paso manual del usuario en Studio
+(§4.1.4). Si en algún momento se planteara usarla para algo más que
+lectura, eso requeriría parar y preguntar primero — no es una decisión
+que tome sola.
+
+Hice el `INSERT` de prueba real (con cleanup completo después) + probé
+ambas direcciones del aislamiento de Storage (subida cruzada rechazada
+`AccessDenied`, lectura cruzada rechazada `NoSuchKey` — RLS hace el
+objeto indistinguible de "no existe" para quien no tiene acceso — y
+ambas operaciones exitosas dentro de la propia organización). Todo
+pegado literal en el chat y en `docs/schema_live_pecuario.md`, no solo
+resumido, como pidió el usuario.
+
+`tests/test_pecuario_mortalidad_fotos.py`: 19/19 en vivo. 3 bugs propios
+en el primer intento, mismos patrones recurrentes de esta sesión: 2
+`assertNotIn` demasiado amplios sobre texto que aparece legítimamente en
+comentarios explicando qué NO se toca (`evidencias_eudr` mencionado al
+explicar que no se reutiliza), y un `TypeError` por pasarle 4 argumentos
+posicionales a `assertEqual` (solo acepta hasta 3) — corregidos.
+
+`npm run build`/`lint` limpios. Suite completa: 654 passed, 8 skipped, 5
+failed (mismos 5 preexistentes de siempre, sin relación con Pecuario).
+
+**Tarea cerrada.** Sin merge a `main` — decisión manual del usuario.

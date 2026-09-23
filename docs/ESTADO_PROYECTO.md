@@ -620,6 +620,39 @@
   skipped, 5 failed — mismos 5 preexistentes de siempre, sin relación con
   Pecuario. **Tarea cerrada** — sin merge a `main`.
 
+- **(2026-09-23) Evidencia fotográfica en Mortalidad — APLICADA y
+  confirmada en vivo (19/19 tests, con evidencia literal pegada en el
+  chat):** `PECUARIO_MORTALIDAD_FOTOS` (una fila por foto, sin tope de
+  cantidad todavía — spec §5 pendiente) + bucket privado
+  `evidencias_pecuario` con 4 políticas RLS de `storage.objects` por
+  prefijo `ID_Organizacion`, mismo patrón ya probado en `evidencias_eudr`.
+  Redactada por Claude (Cowork) — gate de segunda revisión (§4.1.2)
+  cubierto por autoría.
+  **Igual que Guano: la migración ya estaba aplicada en vivo al empezar
+  la tarea** — tabla y bucket confirmados exactos contra el esquema
+  OpenAPI de PostgREST/API de Storage antes de tocar nada.
+  **Capacidad nueva descubierta y usada solo para lectura:** `supabase db
+  query --linked` (Management API, sin `DATABASE_URL`/contraseña de
+  Postgres) permite `SELECT` de solo lectura contra la base real — usado
+  para traer literal `pg_policies`/`information_schema.columns`, nunca
+  para aplicar DDL (eso sigue prohibido por §4.1.4 sin importar la
+  herramienta). Detalle completo en `AI_STATE.md`.
+  **Evidencia literal verificada** (pegada completa en el chat, no solo
+  resumida): las 8 columnas reales de la tabla (`information_schema.columns`),
+  las 4 políticas de `storage.objects` con su `USING`/`WITH CHECK`
+  exactos, el `INSERT` de prueba real (201, fila completa devuelta), un
+  duplicado de `storage_path` rechazado (`409`/`23505`), aislamiento RLS
+  de la tabla (lectura cruzada → `[]`), y aislamiento RLS del bucket en
+  ambas direcciones (subida cruzada rechazada `AccessDenied`, lectura
+  cruzada rechazada `NoSuchKey`, subida/lectura de la propia organización
+  exitosas).
+  Tests nuevos `tests/test_pecuario_mortalidad_fotos.py`: 19/19 (10
+  estáticos + 2 de contrato Zod + 7 en vivo, incluidos los 2 casos de
+  aislamiento de Storage que pidió el usuario explícitamente). `npm run
+  build`/`lint` limpios. `python -m pytest tests/`: 654 passed, 8
+  skipped, 5 failed — mismos 5 preexistentes de siempre, sin relación con
+  Pecuario. **Tarea cerrada** — sin merge a `main`.
+
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

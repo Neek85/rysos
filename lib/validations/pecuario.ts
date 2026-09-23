@@ -327,6 +327,30 @@ export const VentaSubproductoSchema = z.object({
   created_offline_at: z.string().datetime(),
 });
 
+
+// ---------------------------------------------------------------------
+// v7 (2026-09-23): evidencia fotográfica en Mortalidad —
+// PECUARIO_MORTALIDAD_FOTOS (una fila por foto) + bucket privado
+// evidencias_pecuario — migración
+// 20260923120000_pecuario_mortalidad_evidencia_fotografica.sql. Este
+// schema valida la FILA que referencia la foto ya subida a Storage
+// (storage_path), no el archivo en sí — la subida del binario al bucket
+// es un paso aparte del cliente contra la API de Storage, no algo que
+// Zod valide. Sin tope de cantidad por registro todavía (spec §5,
+// pendiente de confirmar con Neyser/técnicos) — se aplicará acá cuando
+// se confirme el número.
+// ---------------------------------------------------------------------
+
+export const MortalidadFotoSchema = z.object({
+  id: z.string().uuid(),
+  ID_Organizacion: IdOrganizacionSchema,
+  mortalidad_id: z.string().uuid(),
+  storage_path: z.string().min(1), // {ID_Organizacion}/mortalidad/{mortalidad_id}/{filename}
+  device_id: z.string().min(1),
+  created_offline_at: z.string().datetime(),
+});
+
+export type MortalidadFotoInput = z.infer<typeof MortalidadFotoSchema>;
 export type PartoRegistroInput = z.infer<typeof PartoRegistroSchema>;
 export type MortalidadRegistroInput = z.infer<typeof MortalidadRegistroSchema>;
 export type PesajeLoteInput = z.infer<typeof PesajeLoteSchema>;
