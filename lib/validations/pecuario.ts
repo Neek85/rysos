@@ -62,19 +62,19 @@ export const PesajeLoteSchema = z.object({
   created_offline_at: z.string().datetime(),
 });
 
-// v3: animal_id nueva (v1 solo contemplaba venta por lote). Exactamente uno
-// de animal_id/lote_id, mismo criterio que mortalidad — poza_id queda como
-// dato de contexto opcional, no participa del XOR.
-//
-// v4 (2026-09-11, corrección de campo): la comercialización es por animal,
-// no por peso. precio_unitario es nuevo — cuando se informa, el trigger
-// fn_calcular_precio_total_venta recalcula precio_total en la base
-// (cantidad * precio_unitario), así que enviar ambos "descoordinados" no
-// genera inconsistencia real, pero replicamos el cálculo acá para dar
-// feedback inmediato en el formulario. Si no se informa precio_unitario
-// (ej. un lote con un total pactado directo), precio_total se toma tal
-// cual. peso_total_kg pasa a ser referencial/opcional, no la base del
-// precio. La venta de un animal identificado es siempre cantidad = 1.
+// v5 (2026-09-23, venta de pelado/beneficiado — ver
+// specs/pecuario_venta_pelado_beneficiado.md y la migración
+// 20260923090000_pecuario_venta_pelado_beneficiado.sql):
+// - tipo_salida gana 'pelado_beneficiado'.
+// - base_precio ('por_animal' default | 'por_kg') — solo 'por_kg' cuando
+//   tipo_salida='pelado_beneficiado'; en ese caso peso_total_kg y
+//   precio_kg pasan a ser obligatorios (antes peso_total_kg era
+//   puramente referencial). Mismo criterio XOR que el resto del archivo,
+//   replicando chk_ventas_base_precio_coherente.
+// - peso_vivo_pre_beneficio_kg (Ronda 46, 2026-09-22): opcional, base de
+//   Rendimiento de carcasa — no se valida como obligatorio ni en la base
+//   ni acá, mismo criterio de no bloquear captura offline por un dato
+//   faltante (ver comentario de la columna en la migración).
 export const VentaRegistroSchema = z.object({
   id: z.string().uuid(),
   ID_Organizacion: IdOrganizacionSchema,
@@ -82,12 +82,15 @@ export const VentaRegistroSchema = z.object({
   poza_id: z.string().uuid().optional().nullable(),
   animal_id: z.string().uuid().optional().nullable(), // v3: venta de un reproductor identificado
   fecha_venta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
-  tipo_salida: z.enum(['carne', 'pie_cria', 'reproductor_saca', 'guano']),
+  tipo_salida: z.enum(['carne', 'pie_cria', 'reproductor_saca', 'guano', 'pelado_beneficiado']),
   cantidad: z.number().int().positive(),
   precio_unitario: z.number().nonnegative().optional().nullable(), // v4: precio por animal
-  peso_total_kg: z.number().positive().optional().nullable(), // v4: referencial, ya no define el precio
+  peso_total_kg: z.number().positive().optional().nullable(), // v4: referencial salvo cuando base_precio='por_kg' (v5, ver abajo)
   precio_total: z.number().nonnegative(),
   comprador_nombre: z.string().max(150).optional().nullable(), // PII de un tercero: nunca a consola/log
+  base_precio: z.enum(['por_animal', 'por_kg']).default('por_animal'),
+  precio_kg: z.number().nonnegative().optional().nullable(),
+  peso_vivo_pre_beneficio_kg: z.number().positive().optional().nullable(),
   device_id: z.string().min(1),
   created_offline_at: z.string().datetime(),
 }).refine(
@@ -96,6 +99,18 @@ export const VentaRegistroSchema = z.object({
 ).refine(
   (data) => !data.animal_id || data.cantidad === 1,
   { message: 'La venta de un animal identificado es siempre de cantidad 1.', path: ['cantidad'] }
+).refine(
+  (data) => data.base_precio === 'por_animal' || data.tipo_salida === 'pelado_beneficiado',
+  { message: 'La base de precio "por kilogramo" solo aplica a ventas de tipo Pelado (beneficiado).', path: ['base_precio'] }
+).refine(
+  (data) => data.base_precio !== 'por_kg' || (data.peso_total_kg != null && data.precio_kg != null),
+  { message: 'Con base de precio "por kilogramo", el peso total pelado y el precio por kg son obligatorios.', path: ['precio_kg'] }
+).refine(
+  // Falta en la redacción original: chk_ventas_base_precio_coherente exige
+  // precio_kg IS NULL cuando base_precio='por_animal' -- sin este refine,
+  // el formulario podía prometer un guardado que la base rechazaría.
+  (data) => data.base_precio !== 'por_animal' || data.precio_kg == null,
+  { message: 'Con base de precio "por animal", no debe enviarse precio_kg.', path: ['precio_kg'] }
 );
 
 // ---------------------------------------------------------------------
