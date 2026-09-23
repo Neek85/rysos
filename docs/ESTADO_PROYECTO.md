@@ -584,6 +584,42 @@
   Pecuario. **Tarea cerrada** — sin merge a `main` (decisión manual del
   usuario, como siempre).
 
+- **(2026-09-23) Venta de subproductos (Guano), tabla propia — APLICADA y
+  confirmada en vivo (17/17 tests):** `PECUARIO_VENTAS_SUBPRODUCTOS`
+  nueva, separada de `PECUARIO_VENTAS` (mismo criterio arquitectónico ya
+  validado en `PECUARIO_COMPRAS` — el guano no es venta de animal: sin
+  `animal_id`/`lote_id`, sin `precio_unitario`×`cantidad`, sin disparar
+  `fn_dar_baja_animal_por_venta()`). Redactada por Claude (Cowork) — gate
+  de segunda revisión (§4.1.2) cubierto por autoría.
+  **Hallazgo al empezar la verificación: la migración ya estaba aplicada
+  en vivo** cuando se recibió esta tarea (columnas/enums/RLS confirmados
+  exactos contra el esquema OpenAPI de PostgREST antes de tocar nada) —
+  no hizo falta ni fue posible que Claude Code CLI la aplicara (tampoco
+  habría podido: sin conexión directa a Postgres, y §4.1.4 lo prohíbe de
+  todos modos sin importar la herramienta).
+  **`SELECT count(*) FROM PECUARIO_VENTAS WHERE tipo_salida='guano'`**
+  (pedido explícitamente, informativo): **0 filas** — confirma que no hay
+  datos históricos reales bajo ese valor vestigial del enum
+  `tipo_venta_cuy` (Postgres no permite eliminar valores de enum, por eso
+  sigue técnicamente en la lista, pero inerte).
+  **`VentaRegistroSchema.tipo_salida` corregido:** todavía incluía
+  `'guano'` en `lib/validations/pecuario.ts` — retirado, con la
+  confirmación de 0 filas históricas como evidencia de que no rompe
+  ningún dato real.
+  **Nota:** `specs/pecuario_venta_subproductos_guano.md`, referenciada
+  por esta migración y por otras 2 specs de la sesión, **nunca existió en
+  este repo** (confirmado por `git log --all` + búsqueda exhaustiva) — la
+  migración trae suficiente contexto en su propia cabecera para
+  verificarla sin ella, así que no bloqueó la tarea, pero queda anotado
+  por si hace falta traerla en algún momento.
+  Tests nuevos `tests/test_pecuario_venta_subproductos_guano.py`: 17/17
+  (estáticos sobre la migración + contrato Zod, aislamiento RLS cruzado
+  de lectura y escritura, los 2 `CHECK` de cantidad/precio, y la
+  confirmación de 0 filas históricas como test automatizado). `npm run
+  build`/`lint` limpios. `python -m pytest tests/`: 635 passed, 8
+  skipped, 5 failed — mismos 5 preexistentes de siempre, sin relación con
+  Pecuario. **Tarea cerrada** — sin merge a `main`.
+
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

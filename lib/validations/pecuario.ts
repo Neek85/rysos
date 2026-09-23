@@ -84,7 +84,14 @@ export const VentaRegistroSchema = z.object({
   poza_id: z.string().uuid().optional().nullable(),
   animal_id: z.string().uuid().optional().nullable(), // v3: venta de un reproductor identificado
   fecha_venta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
-  tipo_salida: z.enum(['carne', 'pie_cria', 'reproductor_saca', 'guano', 'pelado_beneficiado']),
+  // 'guano' retirado (2026-09-23, ver 20260923110000_pecuario_venta_subproductos_guano.sql):
+  // el guano ya no es un tipo_salida de PECUARIO_VENTAS -- pasa por
+  // VentaSubproductoSchema/PECUARIO_VENTAS_SUBPRODUCTOS. El valor
+  // 'guano' del enum tipo_venta_cuy en la base queda como vestigio
+  // inerte (Postgres no permite eliminar valores de enum) -- 0 filas
+  // históricas reales con ese valor (confirmado en vivo antes de este
+  // cambio), así que retirarlo acá no rompe ningún dato existente.
+  tipo_salida: z.enum(['carne', 'pie_cria', 'reproductor_saca', 'pelado_beneficiado']),
   cantidad: z.number().int().positive(),
   precio_unitario: z.number().nonnegative().optional().nullable(), // v4: precio por animal
   peso_total_kg: z.number().positive().optional().nullable(), // v4: referencial salvo cuando base_precio='por_kg' (v5, ver abajo)
@@ -295,6 +302,31 @@ export const CompraSchema = z.object({
   path: ['concepto'],
 });
 
+
+// ---------------------------------------------------------------------
+// v6 (2026-09-23): venta de subproductos (Guano), tabla propia
+// PECUARIO_VENTAS_SUBPRODUCTOS — migración
+// 20260923110000_pecuario_venta_subproductos_guano.sql. Deliberadamente
+// SIN los campos de VentaRegistroSchema que no aplican a un subproducto
+// (animal_id/lote_id/precio_unitario/base_precio/etc.) — spec §2.2: "sin
+// lote, sin reproductor, sin cantidad de animales, sin precio por
+// unidad-animal".
+// ---------------------------------------------------------------------
+
+export const VentaSubproductoSchema = z.object({
+  id: z.string().uuid(),
+  ID_Organizacion: IdOrganizacionSchema,
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  producto: z.enum(['guano']).default('guano'),
+  cantidad: z.number().positive(),
+  unidad: z.enum(['sacos', 'kg']),
+  precio_total: z.number().nonnegative().optional().nullable(), // opcional pero recomendado (spec §2.2)
+  galpon_id: z.string().uuid().optional().nullable(), // solo informativo, nunca poza/lote
+  comprador_nombre: z.string().max(150).optional().nullable(), // PII de un tercero: nunca a consola/log
+  device_id: z.string().min(1),
+  created_offline_at: z.string().datetime(),
+});
+
 export type PartoRegistroInput = z.infer<typeof PartoRegistroSchema>;
 export type MortalidadRegistroInput = z.infer<typeof MortalidadRegistroSchema>;
 export type PesajeLoteInput = z.infer<typeof PesajeLoteSchema>;
@@ -307,3 +339,4 @@ export type ReproductorInput = z.infer<typeof ReproductorSchema>;
 export type HistorialMachoInput = z.infer<typeof HistorialMachoSchema>;
 export type TratamientoInput = z.infer<typeof TratamientoSchema>;
 export type CompraInput = z.infer<typeof CompraSchema>;
+export type VentaSubproductoInput = z.infer<typeof VentaSubproductoSchema>;

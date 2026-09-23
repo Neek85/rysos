@@ -1012,3 +1012,52 @@ cruzado y 2 casos adicionales de la spec §6.5 (`por_kg` sin
 failed (mismos 5 preexistentes de siempre, sin relación con Pecuario).
 
 **Tarea cerrada.** Sin merge a `main` — decisión manual del usuario.
+
+---
+
+## 2026-09-23 (continuación) — Venta de subproductos (Guano): ya estaba aplicada al empezar
+
+Neyser pidió aplicar
+`supabase/migrations/20260923110000_pecuario_venta_subproductos_guano.sql`
++ correr tests. Al verificar el esquema en vivo antes de tocar nada
+(como en cada tarea de esta sesión), la tabla `PECUARIO_VENTAS_SUBPRODUCTOS`
+**ya existía** con exactamente las columnas/enums/defaults que la
+migración especifica — ya estaba aplicada cuando llegó el pedido. No
+había nada que aplicar (y tampoco habría podido hacerlo yo: sin
+`DATABASE_URL`, y §4.1.4 lo prohíbe de todos modos).
+
+**`SELECT count(*) FROM PECUARIO_VENTAS WHERE tipo_salida='guano'`**
+(pedido explícito, informativo) vía `HEAD` + `Prefer: count=exact` de
+PostgREST: **0 filas**.
+
+**`VentaRegistroSchema.tipo_salida` todavía incluía `'guano'`** en
+`lib/validations/pecuario.ts` — confirmado que sí, corregido (retirado),
+usando la confirmación de 0 filas históricas como evidencia de que no
+rompe ningún dato real. El enum de la base (`tipo_venta_cuy`) conserva
+`'guano'` como vestigio inerte (Postgres no permite eliminar valores de
+enum) — eso no cambia, solo se retiró del contrato Zod hacia adelante.
+
+**Hallazgo aparte, no bloqueante:** `specs/pecuario_venta_subproductos_guano.md`
+— referenciada por esta migración y por 2 specs más de la sesión (compras,
+venta pelado) — nunca existió en este repo (`git log --all` + búsqueda
+por nombre, vacío). La migración trae suficiente contexto en su propia
+cabecera (decisión de arquitectura, razonamiento, notas sobre el enum
+vestigial) para verificarla sin la spec, así que no bloqueó nada esta
+vez, a diferencia de tareas anteriores donde la spec faltante sí era
+necesaria.
+
+**Escribí `tests/test_pecuario_venta_subproductos_guano.py`** (17/17 en
+vivo): estáticos sobre la migración + contrato Zod (incluida la
+regresión de `VentaRegistroSchema` sin `'guano'`), aislamiento RLS
+cruzado de lectura y escritura, los 2 `CHECK` (`cantidad`/`precio_total`)
+y la confirmación de 0 filas históricas como test automatizado (no solo
+manual). Dos de mis propias aserciones fallaron en el primer intento por
+el mismo error de siempre (`assertNotIn` sobre un string que aparece
+legítimamente en comentarios explicando qué NO se toca) — corregidas para
+verificar ausencia de una (re)definición real, no ausencia del nombre en
+todo el archivo.
+
+`npm run build`/`lint` limpios. Suite completa: 635 passed, 8 skipped, 5
+failed (mismos 5 preexistentes de siempre, sin relación con Pecuario).
+
+**Tarea cerrada.** Sin merge a `main` — decisión manual del usuario.

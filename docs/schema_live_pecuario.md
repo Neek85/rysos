@@ -435,3 +435,59 @@ regresión respecto a v4; `base_precio='por_kg'` con
 aislamiento RLS cruzado revalidado con las columnas nuevas (una sesión de
 `ORG-TEST-DEMO` no ve, con `base_precio`/`precio_kg` de por medio, ninguna
 venta sembrada en `COOP-AROMAS-VALLE`).
+
+## Módulo Pecuario Cuyes — v7 (venta de subproductos/Guano, tabla propia), APLICADA (2026-09-23)
+
+`supabase/migrations/20260923110000_pecuario_venta_subproductos_guano.sql`
+(`specs/pecuario_venta_subproductos_guano.md` referenciada por 3
+archivos de esta sesión, pero **nunca existió en este repo** —
+confirmado por `git log --all`; la migración trae suficiente contexto en
+su propia cabecera). **Decisión de arquitectura:** tabla nueva
+`PECUARIO_VENTAS_SUBPRODUCTOS`, no una columna sobre `PECUARIO_VENTAS` —
+mismo criterio ya validado en `PECUARIO_COMPRAS` (el guano no es venta de
+animal).
+
+- `PECUARIO_VENTAS_SUBPRODUCTOS` — `id`, `ID_Organizacion` (NOT NULL, FK
+  a `ORGANIZACIONES."ID"`), `fecha` (date, default `CURRENT_DATE`),
+  `producto` (enum nuevo `tipo_subproducto_pecuario`: solo `'guano'` por
+  ahora, deja espacio a futuros subproductos sin tocar el flujo de
+  animales), `cantidad` (numeric, `CHECK > 0`), `unidad` (enum nuevo
+  `unidad_venta_subproducto`: `sacos`/`kg`), `precio_total` (numeric,
+  nullable — opcional pero recomendado, a diferencia del `NOT NULL` de
+  `PECUARIO_VENTAS`, `CHECK >= 0` cuando no es `NULL`), `galpon_id` (FK a
+  `PECUARIO_GALPONES.id`, solo informativo — el guano acumulado no es
+  atribuible a una poza/lote específico), `comprador_nombre` (PII, nunca
+  a consola/log). **Sin `animal_id`/`lote_id`** — no es una venta de
+  animal, no dispara `fn_dar_baja_animal_por_venta()`. **Sin trigger** —
+  `precio_total` no se recalcula (se acuerda como un solo número por el
+  lote de venta completo). RLS: mismo patrón `FOR ALL TO authenticated`
+  scoped por `ID_Organizacion`.
+- **`tipo_venta_cuy` conserva `'guano'` como valor vestigial** — Postgres
+  no permite eliminar valores de enum. Esta migración no lo reintroduce
+  en ningún lado (`PECUARIO_VENTAS_SUBPRODUCTOS` usa su propio enum). No
+  se agregó un `CHECK` que bloquee `tipo_salida='guano'` en
+  `PECUARIO_VENTAS` — decisión deliberada (spec §2.2 del 2026-09-13 ya lo
+  había retirado del formulario; agregar un `CHECK` nuevo sin verificar
+  primero datos históricos podría romper filas reales). **Verificado
+  antes de retirar `'guano'` de `VentaRegistroSchema` (contrato Zod):**
+  `SELECT count(*) FROM PECUARIO_VENTAS WHERE tipo_salida='guano'` → **0
+  filas** — confirma que no hay datos históricos reales bajo ese valor,
+  seguro retirarlo del contrato Zod hacia adelante.
+  `VentaRegistroSchema.tipo_salida` en `lib/validations/pecuario.ts`
+  (ruta real) corregido: pasa de
+  `['carne', 'pie_cria', 'reproductor_saca', 'guano', 'pelado_beneficiado']`
+  a `['carne', 'pie_cria', 'reproductor_saca', 'pelado_beneficiado']`.
+
+**Contrato Zod:** `VentaSubproductoSchema` nuevo en
+`lib/validations/pecuario.ts`, deliberadamente sin ningún campo de
+`VentaRegistroSchema` que no aplique a un subproducto
+(`animal_id`/`lote_id`/`precio_unitario`/`base_precio`/etc.).
+
+**Verificado en vivo** (`tests/test_pecuario_venta_subproductos_guano.py`,
+**17/17**): inserción válida con defaults (`producto='guano'`);
+`cantidad=0` y `precio_total` negativo rechazados por sus `CHECK`
+respectivos; aislamiento RLS cruzado de lectura y de escritura (una
+sesión de `ORG-TEST-DEMO` no ve ni puede insertar una venta de
+subproducto con `ID_Organizacion` de `COOP-AROMAS-VALLE`); 0 filas
+históricas con `tipo_salida='guano'` en `PECUARIO_VENTAS` confirmado
+también como test automatizado.
