@@ -539,6 +539,39 @@
   `main` (decisión manual pendiente del usuario, como toda esta rama de
   trabajo).
 
+- **(2026-09-23) Venta de cuy pelado (beneficiado), por kg o por animal —
+  PREPARADA y verificada contra el esquema en vivo, NO aplicada
+  todavía:** `PECUARIO_VENTAS` gana `tipo_salida='pelado_beneficiado'` +
+  `base_precio`/`precio_kg`/`peso_vivo_pre_beneficio_kg`, más
+  `rendimiento_carcasa_pct` como columna `GENERATED`
+  (`supabase/migrations/20260923090000_pecuario_venta_pelado_beneficiado.sql`,
+  ver `specs/pecuario_venta_pelado_beneficiado.md` §6.5). Extiende (no
+  reemplaza) `fn_calcular_precio_total_venta` (v4) — la rama por animal
+  queda intacta, ninguna venta ya cargada cambia de resultado. Redactada
+  por Claude (Cowork) — gate de segunda revisión (§4.1.2) cubierto por
+  autoría.
+  **Verificado en vivo (`jhtocgxlozfuzullrtol`) antes de tocar nada:**
+  `PECUARIO_VENTAS.tipo_salida` es exactamente `public.tipo_venta_cuy`
+  (enum `carne`/`pie_cria`/`reproductor_saca`/`guano`); `fn_calcular_precio_total_venta`
+  existe y funciona (insertada una venta real con `precio_total`
+  deliberadamente incorrecto, confirmado que el trigger lo recalcula);
+  ninguna columna nueva existe todavía.
+  **2 correcciones propias, ninguna cambia la lógica de negocio:** (1) la
+  migración no traía `BEGIN;`/`COMMIT;` (única de las 6 migraciones de
+  Pecuario sin el wrapper) — agregado por consistencia, sin riesgo (`ALTER
+  TYPE ADD VALUE` es transaccional desde PG12 y el valor nuevo no se usa
+  en el mismo script); (2) faltaba un `refine` en `VentaRegistroSchema`
+  — `chk_ventas_base_precio_coherente` exige `precio_kg IS NULL` cuando
+  `base_precio='por_animal'`, y nada del lado Zod lo forzaba. Agregado.
+  Tests nuevos `tests/test_pecuario_venta_pelado_beneficiado.py`: 13
+  estáticos (pasan ya) + 6 en vivo (aislamiento RLS revalidado + los 4
+  casos de la spec §6.5) listos, se auto-omiten hasta la aplicación
+  manual. `npm run build`/`lint` limpios. `python -m pytest tests/`: 612
+  passed, 14 skipped, 5 failed — mismos 5 preexistentes de siempre.
+  **Pendiente:** Neyser aplica la migración en Supabase Studio SQL
+  Editor; hecho eso, correr los 6 casos en vivo y cerrar con un commit
+  final "aplicada y verificada en vivo".
+
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

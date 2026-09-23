@@ -914,3 +914,55 @@ siempre (`test_certificaciones_normalizadas.py` x2,
 trigger, verificación en vivo + fix de flete redactado, y este cierre.
 Sin merge a `main` — decisión manual del usuario, como el resto de esta
 rama de trabajo.
+
+---
+
+## 2026-09-23 (continuación) — Venta de cuy pelado (beneficiado), preparada
+
+Mismo patrón que las 2 tareas anteriores: Neyser pegó los 3 artefactos
+de Cowork (spec, migración, `VentaRegistroSchema` actualizado) — no
+existían en el repo hasta este mensaje (verificado con `git log --all`,
+stashes y búsqueda por nombre de archivo, igual que las veces
+anteriores).
+
+**Verificado contra el esquema en vivo antes de tocar nada** (lo que
+pidió explícitamente el usuario): `PECUARIO_VENTAS.tipo_salida` es
+`public.tipo_venta_cuy` (coincide exacto con lo que asume la migración),
+`fn_calcular_precio_total_venta` existe y funciona — reconfirmado
+insertando una venta real de prueba con `precio_total` deliberadamente
+incorrecto y viendo que el trigger la recalcula a `18.00`, luego
+limpiada. Ninguna columna nueva (`base_precio`/`precio_kg`/
+`peso_vivo_pre_beneficio_kg`/`rendimiento_carcasa_pct`) existe todavía.
+
+**2 hallazgos propios, corregidos, ninguno cambia la lógica de negocio
+de Cowork:**
+
+1. La migración no traía `BEGIN;`/`COMMIT;` — única de las 6 migraciones
+   de Pecuario de esta sesión sin el wrapper (CLAUDE.md documenta que
+   todas deberían tenerlo). Agregado. Sin riesgo funcional: `ALTER TYPE
+   ... ADD VALUE IF NOT EXISTS` es transaccional desde PG12, y esta
+   migración no usa el valor nuevo (`'pelado_beneficiado'`) dentro del
+   mismo script (la restricción real de Postgres es no *usar* un enum
+   value nuevo en la misma transacción que lo agrega, no el `ALTER TYPE`
+   en sí).
+2. `VentaRegistroSchema` (`lib/validations/pecuario.ts`, ruta real —
+   `lib/validators/` sigue sin existir) le faltaba un `refine`:
+   `chk_ventas_base_precio_coherente` exige `precio_kg IS NULL` cuando
+   `base_precio='por_animal'`, pero nada del lado Zod lo forzaba — un
+   formulario podía prometer un guardado que la base terminaría
+   rechazando (exactamente el criterio de diseño que la propia migración
+   dice seguir). Agregado un tercer `.refine()` que replica esa rama del
+   `CHECK`.
+
+Ninguno de los 2 hallazgos requiere una migración de fix aparte (a
+diferencia del bug de `flete` en Compras) — son correcciones dentro del
+mismo archivo que Cowork ya redactó, no un bug descubierto en vivo tras
+aplicar. `tests/test_pecuario_venta_pelado_beneficiado.py`: 13 estáticos
+pasan, 6 en vivo (aislamiento RLS + los 4 casos de la spec §6.5) escritos
+y listos, se auto-omiten hasta la aplicación manual. `npm run build`/
+`lint` limpios. Suite completa: 612 passed, 14 skipped, 5 failed (mismos
+5 preexistentes de siempre).
+
+**No se aplicó nada contra la base real** — pendiente de que Neyser lo
+haga en Supabase Studio SQL Editor (§4.1.4, igual que toda migración de
+este repo). Commit `13bdd05` pusheado a `staging`.
