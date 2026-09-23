@@ -874,3 +874,43 @@ bueno antes de aplicarlo, además del paso manual de aplicación en sí
 de `flete` es la única pieza pendiente antes de poder decir "PECUARIO_COMPRAS
 aplicada y verificada en vivo" con los 3 casos acordados realmente
 confirmados.
+
+---
+
+## 2026-09-23 (continuación) — Fix de flete aprobado y aplicado; tarea cerrada
+
+Cowork aprobó `20260922120000_fix_pecuario_compras_flete_default.sql` y
+Neyser lo aplicó en Studio. Cowork señaló además que `CompraSchema.flete`
+en `lib/validators/pecuario.ts` necesitaba el mismo ajuste (quitarle
+`.default(0)`) — **verificado antes de tocar nada:** esa ruta sigue sin
+existir en este repo (confirmado de nuevo,
+`ls lib/validators/pecuario.ts` → no existe), y el campo real en
+`lib/validations/pecuario.ts` ya era
+`z.number().nonnegative().optional().nullable()`, **sin** `.default(0)`.
+El hallazgo real de Cowork era el comentario al lado del campo ("la base
+lo defaultea a 0"), que quedó desactualizado justo por el fix que se
+acababa de aplicar (la base ya no defaultea `flete` a nada) — corregido
+para no confundir a quien lo lea después.
+
+**Confirmado en vivo que el fix quedó aplicado:** columna `flete` sin
+`default` en el esquema OpenAPI de PostgREST (antes tenía
+`default=0`).
+
+**Los 3 tests que faltaban, ahora en verde:**
+`test_authenticated_session_can_write_own_org`,
+`test_compra_servicio_otro_no_genera_movimiento`,
+`test_cross_org_read_isolation` — los 3 pasan. Suite completa de Pecuario
+v5: `tests/test_pecuario_etapa_automatica.py` +
+`tests/test_pecuario_compras_gastos.py` → **25/25**.
+
+`npm run build`/`npm run lint`: limpios (solo cambió un comentario en
+`lib/validations/pecuario.ts`, sin impacto de tipos). `python -m pytest
+tests/`: 599 passed, 8 skipped, 5 failed — mismos 5 preexistentes de
+siempre (`test_certificaciones_normalizadas.py` x2,
+`test_e2e_etl_drive.py`, `test_multi_producto_cafe_cacao.py`,
+`test_socio_creacion_atomica.py`), ninguno relacionado con Pecuario.
+
+**Tarea cerrada.** 4 commits en `staging`: vista de etapa, Compras +
+trigger, verificación en vivo + fix de flete redactado, y este cierre.
+Sin merge a `main` — decisión manual del usuario, como el resto de esta
+rama de trabajo.

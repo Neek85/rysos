@@ -511,9 +511,33 @@
   completo, incluyendo qué test verifica el fix
   (`TestFleteDefaultFixStatic`), en `docs/schema_live_pecuario.md` (nueva
   sección "v5") y en `AI_STATE.md`.
-  **Pendiente:** Neyser revisa y aplica el fix de `flete` en Studio; hecho
-  eso, correr de nuevo los 3 casos de `PECUARIO_COMPRAS` (deberían pasar
-  completos) y cerrar con un commit final.
+  **Cierre (2026-09-23) — Cowork aprobó el fix y Neyser lo aplicó en
+  Studio; Cowork encontró además que el contrato Zod necesitaba el mismo
+  ajuste:** `CompraSchema.flete` en `lib/validations/pecuario.ts` ya
+  estaba `z.number().nonnegative().optional().nullable()` sin
+  `.default(0)` — el hallazgo real era el comentario al lado del campo
+  ("la base lo defaultea a 0"), que quedó desactualizado justo por el fix
+  que se acababa de aplicar (la base ya NO defaultea `flete`) y podía
+  confundir a cualquiera que lo leyera después. Corregido para reflejar
+  el estado real: sin default en ningún lado, `monto_total` sigue
+  cubriendo el cálculo vía `COALESCE(flete,0)`.
+  **`PECUARIO_COMPRAS`: 14/14 pasando** (confirmado en vivo que la
+  columna `flete` ya no tiene `default` — esquema OpenAPI de PostgREST) —
+  los 3 casos acordados con Neyser completos: compra de insumo calcula
+  `monto_total=costo+flete` y genera el movimiento de entrada;
+  `servicio_otro` no genera ningún movimiento; INSERT mezclando ramas
+  falla por `chk_compras_rama_por_concepto`. Más aislamiento RLS cruzado
+  de lectura y escritura.
+  **`vw_pecuario_lotes_etapa`: 10/10 pasando**, sin cambios desde la
+  verificación anterior.
+  **Total del módulo Pecuario v5: 25/25 en vivo.** `npm run build`/`npm
+  run lint` limpios tras el ajuste del comentario. `python -m pytest
+  tests/`: 599 passed, 8 skipped, 5 failed — los mismos 5 preexistentes y
+  no relacionados de siempre (drift de datos reales en
+  certificaciones/cafe-cacao/e2e-etl/socio_creacion_atomica, ninguno toca
+  Pecuario). **Tarea cerrada** — 4 commits en `staging`, sin merge a
+  `main` (decisión manual pendiente del usuario, como toda esta rama de
+  trabajo).
 
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN

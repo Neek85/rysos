@@ -321,7 +321,7 @@ exactamente a 56 días → `'engorde'`; reproductor fijado a mano a 90 días
 RLS cruzado (una sesión de `ORG-TEST-DEMO` no ve, vía la vista, ningún
 lote sembrado en `COOP-AROMAS-VALLE`).
 
-### `PECUARIO_COMPRAS` — APLICADA, con un bug de esquema descubierto en vivo (fix redactado, pendiente de aplicar)
+### `PECUARIO_COMPRAS` — APLICADA y confirmada en vivo (14/14 tests, incluido el fix de `flete`)
 
 `supabase/migrations/20260922110000_pecuario_compras_gastos.sql` — ver
 `specs/pecuario_compras_gastos.md`. Tabla nueva con dos ramas mutuamente
@@ -351,32 +351,34 @@ excluyentes según `concepto` (enum `concepto_compra`:
 - RLS: mismo patrón `FOR ALL TO authenticated`, scoped por
   `ID_Organizacion` (`auth_org_id()`).
 
-**Bug descubierto en vivo (2026-09-23), fix redactado, NO aplicado
-todavía:** la columna `flete` quedó con `DEFAULT 0` sin condicionarlo a
-la rama — cualquier `INSERT` de `concepto='servicio_otro'` que omita la
-clave `flete` (el comportamiento normal de un cliente que solo llena los
-campos de su rama, incluido `CompraSchema` vía Zod) recibe `flete=0` por
-el default de la columna, no `NULL`, violando
+**Bug descubierto en vivo (2026-09-23), corregido y aplicado:** la
+columna `flete` quedó con `DEFAULT 0` sin condicionarlo a la rama —
+cualquier `INSERT` de `concepto='servicio_otro'` que omitiera la clave
+`flete` (el comportamiento normal de un cliente que solo llena los campos
+de su rama, incluido `CompraSchema` vía Zod) recibía `flete=0` por el
+default de la columna, no `NULL`, violando
 `chk_compras_rama_por_concepto` (que exige `flete IS NULL` en esa rama) —
 confirmado en vivo con `23514` sobre un INSERT por lo demás válido.
 `supabase/migrations/20260922120000_fix_pecuario_compras_flete_default.sql`
 (`ALTER COLUMN flete DROP DEFAULT`) redactado por Claude Code CLI —
-**a diferencia de la migración original, esta NO tiene el gate de
+**a diferencia de la migración original, esta NO tenía el gate de
 segunda revisión (§4.1.2) cubierto automáticamente** (no fue redactada
-por Claude Cowork desde el principio) — pendiente de visto bueno antes
-de aplicar, además de la aplicación manual en sí (§4.1.4). Hasta que se
-aplique, `PECUARIO_COMPRAS` en vivo **no acepta ningún INSERT válido de
-`concepto='servicio_otro'`** salvo que el cliente mande `"flete": null`
-explícito.
+por Claude Cowork desde el principio) — revisada y aprobada por Cowork,
+aplicada por Neyser en Studio el 2026-09-23. Confirmado en vivo contra el
+esquema OpenAPI de PostgREST: la columna `flete` ya no tiene ningún
+`default`.
+**Ajuste relacionado encontrado por Cowork en la misma revisión:**
+`CompraSchema.flete` en `lib/validations/pecuario.ts` ya estaba
+`z.number().nonnegative().optional().nullable()` (sin `.default(0)`) —
+lo que sí quedó desactualizado fue el comentario al lado del campo ("la
+base lo defaultea a 0"), escrito antes del fix y ya falso después de
+aplicarlo. Corregido para reflejar el estado real.
 
-**Verificado en vivo** (`tests/test_pecuario_compras_gastos.py`, 11/14 —
-los 3 que fallan son consecuencia directa del bug de arriba, no de otra
-causa): compra de insumo calcula `monto_total = costo_insumo + flete` y
-genera el movimiento de entrada correspondiente; `INSERT` mezclando
-campos de ambas ramas rechazado por el `CHECK` (`23514`); aislamiento RLS
-de escritura cruzada (una sesión de `ORG-TEST-DEMO` no puede insertar una
-compra con `ID_Organizacion` de `COOP-AROMAS-VALLE`, `WITH CHECK`
-rechaza). Los 3 casos pendientes de re-verificar tras el fix: compra
-`servicio_otro` no genera movimiento, escritura autenticada en la propia
-organización, aislamiento RLS de lectura cruzada (su fila semilla es
-justamente un `servicio_otro`).
+**Verificado en vivo** (`tests/test_pecuario_compras_gastos.py`, **14/14**):
+compra de insumo calcula `monto_total = costo_insumo + flete` y genera el
+movimiento de entrada correspondiente; `servicio_otro` no genera ningún
+movimiento; `INSERT` mezclando campos de ambas ramas rechazado por el
+`CHECK` (`23514`); aislamiento RLS cruzado de lectura y de escritura (una
+sesión de `ORG-TEST-DEMO` no ve ni puede insertar una compra con
+`ID_Organizacion` de `COOP-AROMAS-VALLE`, `WITH CHECK` rechaza); escritura
+autenticada en la propia organización.

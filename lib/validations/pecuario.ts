@@ -247,7 +247,7 @@ export const CompraSchema = z.object({
   cantidad: z.number().positive().optional().nullable(),
   galpon_id: z.string().uuid().optional().nullable(),
   costo_insumo: z.number().nonnegative().optional().nullable(),
-  flete: z.number().nonnegative().optional().nullable(), // opcional; la base lo defaultea a 0
+  flete: z.number().nonnegative().optional().nullable(), // opcional -- sin default acá ni en la base (fix 20260922120000: la base tenía DEFAULT 0 sin condicionar a la rama, violaba chk_compras_rama_por_concepto en servicio_otro; monto_total ya hace COALESCE(flete,0) al calcular)
   // Rama "servicio_otro"
   categoria_gasto: z.enum(['combustible', 'mantenimiento_reparaciones', 'servicio_veterinario_tecnico', 'mano_obra', 'otro']).optional().nullable(),
   descripcion: z.string().max(500).optional().nullable(),
