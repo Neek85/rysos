@@ -1,10 +1,19 @@
 -- =====================================================================
--- RYZOS · Pecuario Cuyes · Venta de cuy pelado (beneficiado): precio por
--- kg o por animal + Rendimiento de carcasa
+-- RYZOS · Pecuario Cuyes · Venta de cuy pelado (beneficiado) — PARTE B:
+-- columnas, CHECK y trigger. Requiere que la PARTE A
+-- (20260923090000a_pecuario_venta_pelado_enum.sql) ya haya corrido y
+-- confirmado en un Run APARTE — este archivo usa el valor de enum
+-- 'pelado_beneficiado' que agrega esa parte, y Postgres no permite usar
+-- un valor de enum recién agregado en la misma transacción en que se
+-- agregó. Ver el encabezado de la parte A para el detalle completo.
 -- Fecha: 2026-09-23
 -- Redactado por: Claude (Cowork), Arquitecto Senior RYZOS.
 -- Segunda revisión de seguridad (system prompt Sección 4.1.2): cubierta
 -- en el mismo flujo, por haberse trabajado con Claude desde el principio.
+-- Partida en dos archivos el 2026-09-23 — corrección propia de Claude
+-- Cowork sobre su propia migración original de un solo archivo, tras
+-- una revisión que encontró el riesgo de "unsafe use of new value of
+-- enum type" al correr todo en un solo Run de Supabase Studio.
 --
 -- Spec de referencia: specs/pecuario_venta_pelado_beneficiado.md
 -- (decisiones confirmadas por Neyser, 2026-09-13 y Ronda 46, 2026-09-22 —
@@ -39,18 +48,6 @@
 -- Aditiva: no toca PECUARIO_REPRODUCTORES, PECUARIO_LOTES, ni el trigger
 -- de baja de población. Idempotente.
 -- =====================================================================
---
--- NOTA (agregada por Claude Code CLI, no en la redacción original de
--- Cowork): se envuelve el archivo en BEGIN;/COMMIT; -- todas las demás
--- migraciones de este repo lo hacen (ver CLAUDE.md) y esta no traía el
--- wrapper. Sin riesgo funcional acá: ALTER TYPE ... ADD VALUE IF NOT
--- EXISTS es transaccional desde PG12, y esta migración no usa el valor
--- nuevo ('pelado_beneficiado') dentro del mismo script (la restricción
--- real de Postgres es no *usar* un enum value nuevo en la misma
--- transacción que lo agrega, no el ALTER TYPE en sí).
--- =====================================================================
-
-BEGIN;
 
 DO $$
 BEGIN
@@ -60,13 +57,20 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_calcular_precio_total_venta') THEN
     RAISE EXCEPTION 'Falta fn_calcular_precio_total_venta (20260911180000). Corré primero v4.';
   END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+    WHERE t.typname = 'tipo_venta_cuy' AND e.enumlabel = 'pelado_beneficiado'
+  ) THEN
+    RAISE EXCEPTION 'Falta el valor de enum pelado_beneficiado en tipo_venta_cuy — corré primero y confirmá 20260923090000a_pecuario_venta_pelado_enum.sql en un Run aparte.';
+  END IF;
 END $$;
 
 -- ---------------------------------------------------------------------
--- 1. Enums
+-- 1. Enum nuevo (base_precio_venta se CREA en este mismo archivo, no
+--    tiene el problema de la parte A porque es un tipo nuevo, no un
+--    valor agregado a un tipo existente — un tipo recién creado sí se
+--    puede usar en la misma transacción sin restricción).
 -- ---------------------------------------------------------------------
-
-ALTER TYPE tipo_venta_cuy ADD VALUE IF NOT EXISTS 'pelado_beneficiado';
 
 DO $$ BEGIN
     CREATE TYPE base_precio_venta AS ENUM ('por_animal', 'por_kg');
@@ -146,8 +150,6 @@ $$ LANGUAGE plpgsql;
 -- El trigger trg_calcular_precio_total_venta (v4) ya apunta a esta misma
 -- función por nombre — CREATE OR REPLACE alcanza, no hace falta recrear
 -- el trigger.
-
-COMMIT;
 
 -- ---------------------------------------------------------------------
 -- Verificación rápida post-migración (ejecutar a mano en Studio):

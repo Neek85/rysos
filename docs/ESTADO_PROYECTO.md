@@ -540,37 +540,49 @@
   trabajo).
 
 - **(2026-09-23) Venta de cuy pelado (beneficiado), por kg o por animal —
-  PREPARADA y verificada contra el esquema en vivo, NO aplicada
-  todavía:** `PECUARIO_VENTAS` gana `tipo_salida='pelado_beneficiado'` +
+  APLICADA y confirmada en vivo (19/19 tests):** `PECUARIO_VENTAS` gana
+  `tipo_salida='pelado_beneficiado'` +
   `base_precio`/`precio_kg`/`peso_vivo_pre_beneficio_kg`, más
-  `rendimiento_carcasa_pct` como columna `GENERATED`
-  (`supabase/migrations/20260923090000_pecuario_venta_pelado_beneficiado.sql`,
-  ver `specs/pecuario_venta_pelado_beneficiado.md` §6.5). Extiende (no
+  `rendimiento_carcasa_pct` como columna `GENERATED`. Extiende (no
   reemplaza) `fn_calcular_precio_total_venta` (v4) — la rama por animal
   queda intacta, ninguna venta ya cargada cambia de resultado. Redactada
   por Claude (Cowork) — gate de segunda revisión (§4.1.2) cubierto por
-  autoría.
-  **Verificado en vivo (`jhtocgxlozfuzullrtol`) antes de tocar nada:**
-  `PECUARIO_VENTAS.tipo_salida` es exactamente `public.tipo_venta_cuy`
-  (enum `carne`/`pie_cria`/`reproductor_saca`/`guano`); `fn_calcular_precio_total_venta`
-  existe y funciona (insertada una venta real con `precio_total`
-  deliberadamente incorrecto, confirmado que el trigger lo recalcula);
-  ninguna columna nueva existe todavía.
-  **2 correcciones propias, ninguna cambia la lógica de negocio:** (1) la
-  migración no traía `BEGIN;`/`COMMIT;` (única de las 6 migraciones de
-  Pecuario sin el wrapper) — agregado por consistencia, sin riesgo (`ALTER
-  TYPE ADD VALUE` es transaccional desde PG12 y el valor nuevo no se usa
-  en el mismo script); (2) faltaba un `refine` en `VentaRegistroSchema`
-  — `chk_ventas_base_precio_coherente` exige `precio_kg IS NULL` cuando
-  `base_precio='por_animal'`, y nada del lado Zod lo forzaba. Agregado.
-  Tests nuevos `tests/test_pecuario_venta_pelado_beneficiado.py`: 13
-  estáticos (pasan ya) + 6 en vivo (aislamiento RLS revalidado + los 4
-  casos de la spec §6.5) listos, se auto-omiten hasta la aplicación
-  manual. `npm run build`/`lint` limpios. `python -m pytest tests/`: 612
-  passed, 14 skipped, 5 failed — mismos 5 preexistentes de siempre.
-  **Pendiente:** Neyser aplica la migración en Supabase Studio SQL
-  Editor; hecho eso, correr los 6 casos en vivo y cerrar con un commit
-  final "aplicada y verificada en vivo".
+  autoría. Ver `specs/pecuario_venta_pelado_beneficiado.md` §6.5.
+  **Partida en 2 archivos/2 Runs de Studio** (corrección de la propia
+  Cowork sobre su redacción original de un solo archivo):
+  `supabase/migrations/20260923090000a_pecuario_venta_pelado_enum.sql`
+  (solo agrega el valor de enum) y
+  `20260923090000b_pecuario_venta_pelado_beneficiado.sql` (columnas,
+  `CHECK`, trigger — exige en su propio preflight que la parte A ya
+  corrió). Motivo: Postgres no permite usar/comparar un valor de enum
+  recién agregado con `ADD VALUE` dentro de la misma transacción en que
+  se agregó, y la redacción original agregaba `'pelado_beneficiado'` Y lo
+  comparaba en el mismo archivo (dentro de
+  `chk_ventas_base_precio_coherente`) — Studio corre todo el texto pegado
+  como una transacción implícita, así que fallaba con `unsafe use of new
+  value of enum type` al pegar todo junto en un Run.
+  **Corrección a la entrada anterior de esta bitácora:** esa entrada
+  decía que agregar `BEGIN;`/`COMMIT;` no tenía riesgo funcional "porque
+  el valor nuevo no se usa en el mismo script" — **eso era incorrecto**,
+  el `CHECK` sí lo usa (`tipo_salida = 'pelado_beneficiado'`). El wrapper
+  explícito no causaba ni arreglaba ese problema en ningún sentido
+  (Studio ya trata el script pegado como una transacción, con o sin
+  `BEGIN`/`COMMIT` explícito) — el fix real, ya aplicado, es la separación
+  en 2 Runs.
+  **Verificado en vivo (`jhtocgxlozfuzullrtol`) tras la aplicación:**
+  `tipo_venta_cuy` con sus 5 valores (confirmado independientemente vía
+  el esquema OpenAPI de PostgREST, no solo por el reporte del usuario);
+  las 4 columnas nuevas presentes con los tipos/enums esperados.
+  `tests/test_pecuario_venta_pelado_beneficiado.py`: **19/19** — estáticos
+  sobre ambas partes + contrato Zod, aislamiento RLS cruzado revalidado
+  con las columnas nuevas, y los 4 casos de la spec §6.5 (por_kg calcula
+  `precio_total`/`rendimiento_carcasa_pct`; por_animal sin regresión
+  respecto a v4; `por_kg` con `tipo_salida` distinto falla el `CHECK`;
+  `por_kg` sin `precio_kg`/`peso_total_kg` falla el `CHECK`). `npm run
+  build`/`lint` limpios. `python -m pytest tests/`: 618 passed, 8
+  skipped, 5 failed — mismos 5 preexistentes de siempre, sin relación con
+  Pecuario. **Tarea cerrada** — sin merge a `main` (decisión manual del
+  usuario, como siempre).
 
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN

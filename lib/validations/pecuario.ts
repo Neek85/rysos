@@ -63,8 +63,10 @@ export const PesajeLoteSchema = z.object({
 });
 
 // v5 (2026-09-23, venta de pelado/beneficiado — ver
-// specs/pecuario_venta_pelado_beneficiado.md y la migración
-// 20260923090000_pecuario_venta_pelado_beneficiado.sql):
+// specs/pecuario_venta_pelado_beneficiado.md y las migraciones
+// 20260923090000a_pecuario_venta_pelado_enum.sql +
+// 20260923090000b_pecuario_venta_pelado_beneficiado.sql -- partida en 2
+// archivos/2 Runs de Studio, ver el encabezado de la parte A):
 // - tipo_salida gana 'pelado_beneficiado'.
 // - base_precio ('por_animal' default | 'por_kg') — solo 'por_kg' cuando
 //   tipo_salida='pelado_beneficiado'; en ese caso peso_total_kg y

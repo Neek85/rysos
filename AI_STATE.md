@@ -966,3 +966,49 @@ y listos, se auto-omiten hasta la aplicación manual. `npm run build`/
 **No se aplicó nada contra la base real** — pendiente de que Neyser lo
 haga en Supabase Studio SQL Editor (§4.1.4, igual que toda migración de
 este repo). Commit `13bdd05` pusheado a `staging`.
+
+---
+
+## 2026-09-23 (continuación) — Aplicada en 2 partes; corrección a mi propio análisis anterior
+
+Cowork encontró, al intentar aplicar la migración de un solo archivo en
+Studio, el error real `unsafe use of new value of enum type` — y la
+partió en 2 archivos/2 Runs:
+`20260923090000a_pecuario_venta_pelado_enum.sql` (solo
+`ALTER TYPE ... ADD VALUE`) y
+`20260923090000b_pecuario_venta_pelado_beneficiado.sql` (columnas,
+`CHECK`, trigger — con un preflight nuevo que exige que la parte A ya
+haya corrido). Neyser aplicó ambas, en ese orden, en Runs separados.
+
+**Mi análisis anterior sobre el `BEGIN;`/`COMMIT;` faltante estaba
+incompleto y la conclusión era incorrecta.** Dije que agregar el wrapper
+"no tenía riesgo funcional" porque "el valor nuevo no se usa en el mismo
+script" — **falso**: `chk_ventas_base_precio_coherente` compara
+`tipo_salida = 'pelado_beneficiado'` en el mismo archivo que agrega ese
+valor. No revisé el CHECK con ese criterio específico al evaluar el
+wrapper. El `BEGIN;`/`COMMIT;` que agregué no causó el problema (Studio
+ya trataba el script pegado como una transacción implícita, con o sin
+wrapper explícito) pero tampoco lo resolvía — la única solución real es
+la que aplicó Cowork: separar el `ADD VALUE` en su propia
+transacción/Run, confirmada, antes de que cualquier otro statement
+compare contra ese valor.
+
+**Verificado en vivo, independientemente del reporte del usuario:**
+`tipo_venta_cuy` con los 5 valores esperados (esquema OpenAPI de
+PostgREST) y las 4 columnas nuevas de `PECUARIO_VENTAS` presentes con
+los tipos correctos.
+
+**Test file actualizado** (`tests/test_pecuario_venta_pelado_beneficiado.py`)
+para apuntar a los 2 archivos reales en vez del archivo único que ya no
+existe, agregando además una aserción que confirma específicamente que
+la parte A no compara/usa el valor de enum en el mismo archivo (la razón
+de ser de la separación). **19/19 pasando en vivo**, incluidos los 3
+casos que pidió el usuario (`por_kg`, `por_animal`, el `INSERT` que debe
+fallar por `chk_ventas_base_precio_coherente`) más aislamiento RLS
+cruzado y 2 casos adicionales de la spec §6.5 (`por_kg` sin
+`precio_kg`/sin `peso_total_kg`, cada uno por separado).
+
+`npm run build`/`lint` limpios. Suite completa: 618 passed, 8 skipped, 5
+failed (mismos 5 preexistentes de siempre, sin relación con Pecuario).
+
+**Tarea cerrada.** Sin merge a `main` — decisión manual del usuario.

@@ -2,16 +2,27 @@
 Test de integración para la venta de cuy pelado (beneficiado) — precio por
 kg o por animal, más Rendimiento de carcasa — sobre PECUARIO_VENTAS.
 
-Ver supabase/migrations/20260923090000_pecuario_venta_pelado_beneficiado.sql
+Ver supabase/migrations/20260923090000a_pecuario_venta_pelado_enum.sql +
+supabase/migrations/20260923090000b_pecuario_venta_pelado_beneficiado.sql
 y specs/pecuario_venta_pelado_beneficiado.md §6.5.
+
+Partida en 2 archivos/2 Runs de Studio (corrección de Claude Cowork sobre
+su propia redacción original de un solo archivo): Postgres no permite
+usar (comparar/castear) un valor de enum recién agregado con
+`ALTER TYPE ... ADD VALUE` dentro de la misma transacción en que se
+agregó -- la redacción original agregaba 'pelado_beneficiado' Y lo usaba
+en el mismo archivo (dentro de chk_ventas_base_precio_coherente), lo que
+Studio ejecuta como una sola transacción implícita. La parte A agrega
+solo el valor de enum; la parte B (que exige en su propio preflight que
+la parte A ya haya corrido y confirmado) agrega columnas/CHECK/trigger.
 
 La migración NO se aplica desde este archivo ni desde ningún script de este
 repo -- ninguna migración SQL se aplica automáticamente contra la base real
 (system prompt / docs/RYZOS_ORQUESTADOR_V3.1.md §4.1.4). Este archivo
-verifica el contenido estático de la migración y del contrato Zod siempre,
-y sus casos en vivo solo cuando las columnas nuevas ya existen (aplicada a
-mano en Supabase Studio) -- `unittest.SkipTest` explícito en caso
-contrario, sin fallar la suite.
+verifica el contenido estático de ambas partes y del contrato Zod siempre,
+y sus casos en vivo solo cuando las columnas nuevas ya existen (aplicadas a
+mano en Supabase Studio, en 2 Runs separados) -- `unittest.SkipTest`
+explícito en caso contrario, sin fallar la suite.
 """
 
 import os
@@ -22,9 +33,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-MIGRATION_PATH = (
+PART_A_PATH = (
     Path(__file__).resolve().parent.parent
-    / "supabase" / "migrations" / "20260923090000_pecuario_venta_pelado_beneficiado.sql"
+    / "supabase" / "migrations" / "20260923090000a_pecuario_venta_pelado_enum.sql"
+)
+PART_B_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "supabase" / "migrations" / "20260923090000b_pecuario_venta_pelado_beneficiado.sql"
 )
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -82,22 +97,34 @@ def _migracion_aplicada():
     return res.status_code == 200
 
 
-class TestMigrationFileStatic(unittest.TestCase):
-    """No requiere Supabase Live -- verifica el contenido de la migración
-    en disco, siempre corre."""
+class TestMigrationPartAStatic(unittest.TestCase):
+    """Parte A: solo agrega el valor de enum. No requiere Supabase Live."""
 
     @classmethod
     def setUpClass(cls):
-        if not MIGRATION_PATH.exists():
-            raise AssertionError(f"No existe {MIGRATION_PATH}")
-        cls.sql = MIGRATION_PATH.read_text(encoding="utf-8")
-
-    def test_wrapped_in_transaction(self):
-        self.assertIn("BEGIN;", self.sql)
-        self.assertIn("COMMIT;", self.sql)
+        if not PART_A_PATH.exists():
+            raise AssertionError(f"No existe {PART_A_PATH}")
+        cls.sql = PART_A_PATH.read_text(encoding="utf-8")
 
     def test_enum_gana_pelado_beneficiado(self):
         self.assertIn("ALTER TYPE tipo_venta_cuy ADD VALUE IF NOT EXISTS 'pelado_beneficiado'", self.sql)
+
+    def test_no_usa_el_valor_nuevo_en_el_mismo_archivo(self):
+        # La razón de ser de la parte A: agregar el valor de enum SIN
+        # usarlo (compararlo/castearlo) en el mismo Run -- eso es lo que
+        # causaba "unsafe use of new value of enum type" en la redacción
+        # original de un solo archivo.
+        self.assertNotIn("= 'pelado_beneficiado'", self.sql)
+
+
+class TestMigrationPartBStatic(unittest.TestCase):
+    """Parte B: columnas, CHECK y trigger. No requiere Supabase Live."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not PART_B_PATH.exists():
+            raise AssertionError(f"No existe {PART_B_PATH}")
+        cls.sql = PART_B_PATH.read_text(encoding="utf-8")
 
     def test_columnas_nuevas_presentes(self):
         self.assertIn("base_precio base_precio_venta NOT NULL DEFAULT 'por_animal'", self.sql)
@@ -119,9 +146,12 @@ class TestMigrationFileStatic(unittest.TestCase):
         # animal ya cargada puede cambiar de resultado.
         self.assertIn("NEW.precio_total := ROUND(NEW.cantidad * NEW.precio_unitario, 2)", self.sql)
 
-    def test_preflight_exige_pecuario_ventas_y_trigger_v4(self):
+    def test_preflight_exige_pecuario_ventas_trigger_v4_y_parte_a(self):
         self.assertIn('to_regclass(\'public."PECUARIO_VENTAS"\')', self.sql)
         self.assertIn("fn_calcular_precio_total_venta", self.sql)
+        # Debe exigir explícitamente que la parte A ya corrió (el valor de
+        # enum ya existe) antes de intentar usarlo en el CHECK.
+        self.assertIn("e.enumlabel = 'pelado_beneficiado'", self.sql)
 
     def test_no_toca_fn_dar_baja_animal_por_venta(self):
         # El nombre aparece en un comentario explicando que NO se toca --

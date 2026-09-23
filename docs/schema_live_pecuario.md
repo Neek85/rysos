@@ -382,3 +382,56 @@ movimiento; `INSERT` mezclando campos de ambas ramas rechazado por el
 sesión de `ORG-TEST-DEMO` no ve ni puede insertar una compra con
 `ID_Organizacion` de `COOP-AROMAS-VALLE`, `WITH CHECK` rechaza); escritura
 autenticada en la propia organización.
+
+## Módulo Pecuario Cuyes — v6 (venta de cuy pelado/beneficiado), APLICADA (2026-09-23)
+
+`supabase/migrations/20260923090000a_pecuario_venta_pelado_enum.sql` +
+`20260923090000b_pecuario_venta_pelado_beneficiado.sql` — ver
+`specs/pecuario_venta_pelado_beneficiado.md` §6.5. **Partida en 2
+archivos/2 Runs de Studio** (corrección de la propia Cowork sobre su
+redacción original de un solo archivo): Postgres no permite usar/comparar
+un valor de enum recién agregado con `ADD VALUE` dentro de la misma
+transacción en que se agregó — la redacción original agregaba
+`'pelado_beneficiado'` a `tipo_venta_cuy` Y lo comparaba en el mismo
+archivo (dentro de `chk_ventas_base_precio_coherente`), lo que Studio
+ejecuta como una transacción implícita al pegar todo el texto en un
+Run, así que fallaba con `unsafe use of new value of enum type`.
+
+- **Parte A** (solo, aplicada primero, confirmada antes de la parte B):
+  `ALTER TYPE tipo_venta_cuy ADD VALUE IF NOT EXISTS 'pelado_beneficiado'`.
+  Confirmado en vivo: `tipo_venta_cuy` tiene 5 valores —
+  `carne`/`pie_cria`/`reproductor_saca`/`guano`/`pelado_beneficiado`.
+- **Parte B** (exige en su propio preflight que la parte A ya corrió):
+  agrega a `PECUARIO_VENTAS` — `base_precio` (enum nuevo
+  `base_precio_venta`: `por_animal` default | `por_kg`), `precio_kg`
+  (numeric, nullable), `peso_vivo_pre_beneficio_kg` (numeric, nullable,
+  Ronda 46 2026-09-22 — captura puntual para Rendimiento de carcasa, no
+  bloqueante), `rendimiento_carcasa_pct` (numeric, `GENERATED ALWAYS AS
+  (peso_total_kg / peso_vivo_pre_beneficio_kg * 100) STORED`, `NULL`
+  cuando falta cualquiera de los dos datos). `CHECK
+  chk_ventas_base_precio_coherente`: `por_animal` exige `precio_kg IS
+  NULL`; `por_kg` exige `tipo_salida='pelado_beneficiado'` y
+  `peso_total_kg`/`precio_kg` presentes. `fn_calcular_precio_total_venta`
+  (v4) extendida (no reemplazada): rama nueva
+  `peso_total_kg * precio_kg` evaluada primero cuando `base_precio='por_kg'`,
+  cae al comportamiento existente (`cantidad * precio_unitario`) en
+  cualquier otro caso — ninguna venta por animal ya cargada cambia de
+  resultado. No toca `fn_dar_baja_animal_por_venta` (v3).
+
+**`VentaRegistroSchema` en `lib/validations/pecuario.ts`** (ruta real —
+`lib/validators/` sigue sin existir en este repo) extendido con
+`tipo_salida='pelado_beneficiado'` + los 3 campos nuevos y 3 `.refine()`
+que replican `chk_ventas_base_precio_coherente` exactamente — el tercero
+(`por_animal` exige `precio_kg` `null`) no estaba en la redacción
+original de Cowork, se agregó al verificar contra el `CHECK` real.
+
+**Verificado en vivo** (`tests/test_pecuario_venta_pelado_beneficiado.py`,
+**19/19**): venta pelado por kg (peso 9, peso vivo 15, precio_kg 22) →
+`precio_total=198.00`, `rendimiento_carcasa_pct=60.0`; venta carne por
+animal (cantidad 12, precio_unitario 18) → `precio_total=216.00`, sin
+regresión respecto a v4; `base_precio='por_kg'` con
+`tipo_salida≠'pelado_beneficiado'` rechazado por el `CHECK`; `por_kg` sin
+`precio_kg` o sin `peso_total_kg` rechazado por el mismo `CHECK`;
+aislamiento RLS cruzado revalidado con las columnas nuevas (una sesión de
+`ORG-TEST-DEMO` no ve, con `base_precio`/`precio_kg` de por medio, ninguna
+venta sembrada en `COOP-AROMAS-VALLE`).
