@@ -220,6 +220,64 @@ export const TratamientoSchema = z.object({
   return !!data.animal_id && !data.galpon_id && !data.lote_id; // 'individual'
 }, { message: 'El campo de destino debe coincidir exactamente con el alcance seleccionado (galpón, lote o animal).', path: ['alcance'] });
 
+// ---------------------------------------------------------------------
+// Compras/gastos de la granja (2026-09-22) — ver
+// specs/pecuario_compras_gastos.md y
+// supabase/migrations/20260922110000_pecuario_compras_gastos.sql.
+// Dos ramas mutuamente excluyentes según `concepto`:
+//   - 'insumo': genera además el movimiento de 'entrada' automático en
+//     PECUARIO_INSUMOS_MOVIMIENTOS (trigger fn_compra_genera_entrada_insumo).
+//   - 'servicio_otro': gasto de la granja sin insumo de stock asociado
+//     (combustible, mantenimiento, servicio veterinario/técnico, mano de
+//     obra).
+// `monto_total` es una columna GENERATED en la base (costo_insumo + flete,
+// o monto_servicio) — nunca se envía desde el cliente, por eso no aparece
+// en este schema (mismo criterio que peso_promedio_g, ausente de
+// PesajeLoteSchema). El refine replica exactamente
+// chk_compras_rama_por_concepto de la migración, para dar feedback
+// inmediato en el formulario antes de que el INSERT llegue a la base.
+export const CompraSchema = z.object({
+  id: z.string().uuid(),
+  ID_Organizacion: IdOrganizacionSchema,
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  proveedor: z.string().max(150).optional().nullable(),
+  concepto: z.enum(['insumo', 'servicio_otro']),
+  // Rama "insumo"
+  insumo_id: z.string().uuid().optional().nullable(),
+  cantidad: z.number().positive().optional().nullable(),
+  galpon_id: z.string().uuid().optional().nullable(),
+  costo_insumo: z.number().nonnegative().optional().nullable(),
+  flete: z.number().nonnegative().optional().nullable(), // opcional; la base lo defaultea a 0
+  // Rama "servicio_otro"
+  categoria_gasto: z.enum(['combustible', 'mantenimiento_reparaciones', 'servicio_veterinario_tecnico', 'mano_obra', 'otro']).optional().nullable(),
+  descripcion: z.string().max(500).optional().nullable(),
+  monto_servicio: z.number().nonnegative().optional().nullable(),
+  // Comunes
+  comprobante: z.string().max(100).optional().nullable(),
+  device_id: z.string().min(1).optional().nullable(), // offline aún sin confirmar para esta pantalla, ver spec §5
+  created_offline_at: z.string().datetime().optional().nullable(),
+}).refine((data) => {
+  if (data.concepto === 'insumo') {
+    return (
+      !!data.insumo_id &&
+      data.cantidad != null && data.cantidad > 0 &&
+      !!data.galpon_id &&
+      data.costo_insumo != null && data.costo_insumo >= 0 &&
+      data.categoria_gasto == null && data.descripcion == null && data.monto_servicio == null
+    );
+  }
+  // 'servicio_otro'
+  return (
+    !!data.categoria_gasto && !!data.descripcion &&
+    data.monto_servicio != null && data.monto_servicio >= 0 &&
+    data.insumo_id == null && data.cantidad == null && data.galpon_id == null &&
+    data.costo_insumo == null && data.flete == null
+  );
+}, {
+  message: 'Los campos deben coincidir exactamente con el concepto seleccionado (insumo o servicio_otro), sin mezclar campos de ambas ramas — mismo criterio que chk_compras_rama_por_concepto en la base.',
+  path: ['concepto'],
+});
+
 export type PartoRegistroInput = z.infer<typeof PartoRegistroSchema>;
 export type MortalidadRegistroInput = z.infer<typeof MortalidadRegistroSchema>;
 export type PesajeLoteInput = z.infer<typeof PesajeLoteSchema>;
@@ -231,3 +289,4 @@ export type MovimientoInsumoInput = z.infer<typeof MovimientoInsumoSchema>;
 export type ReproductorInput = z.infer<typeof ReproductorSchema>;
 export type HistorialMachoInput = z.infer<typeof HistorialMachoSchema>;
 export type TratamientoInput = z.infer<typeof TratamientoSchema>;
+export type CompraInput = z.infer<typeof CompraSchema>;

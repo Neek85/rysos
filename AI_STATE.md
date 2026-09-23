@@ -716,3 +716,94 @@ merge del usuario, mismo criterio que el resto de cambios de este tipo
 (Sección 4.1 del protocolo Multi-IA, revisión ya cubierta por tratarse
 de Claude/Cowork de punta a punta, pero el merge a producción sigue
 siendo un paso manual aparte).
+
+---
+
+## 2026-09-22 — PECUARIO_COMPRAS (compras/gastos): BLOQUEADA antes de tocar la base
+
+Tarea recibida: aplicar en staging `PECUARIO_COMPRAS` (costo unitario/flete
+de insumos + gastos generales de la granja), correr el test de aislamiento
+RLS cruzado, commitear y pushear a `staging`.
+
+**No se aplicó nada y no se escribió ninguna migración.** El prompt daba por
+existentes cuatro artefactos que no existen en ninguna parte. Verificado
+antes de tocar nada (mismo patrón de fallo que la v2 el 2026-09-11 — ver
+`docs/schema_live_pecuario.md` §v2):
+
+1. `specs/pecuario_compras_gastos.md` — **no existe**. Ni en el working
+   tree, ni en el historial de git (`git ls-files | grep -iE 'compra|gasto'`
+   → vacío), ni en los 2 stashes. El paso 1 pedía "revisarlo".
+2. `supabase/migrations/20260922110000_pecuario_compras_gastos.sql` — **no
+   existe**. El paso 3 decía "cópiala a tu clon real y aplícala": no hay
+   nada que copiar. Presumiblemente quedó en una sesión de Claude Cowork
+   que nunca commiteó al repo.
+3. `lib/validators/pecuario.ts` ("`CompraSchema` ... ya agregado") — la ruta
+   es **`lib/validations/pecuario.ts`** (no `validators/`), y **no contiene
+   `CompraSchema`**. Los 11 schemas que sí tiene llegan hasta
+   `TratamientoSchema` (v3/v4); no hay nada de compras ni gastos.
+4. `PECUARIO_COMPRAS` **no existe en vivo tampoco** — a diferencia de la v2,
+   acá el usuario no la había aplicado por su cuenta en Supabase Studio.
+   Confirmado contra el esquema OpenAPI de PostgREST en vivo
+   (`jhtocgxlozfuzullrtol`): los 15 objetos `PECUARIO_*` + 3 vistas
+   presentes son exactamente los de v1-v4, sin ninguna tabla de
+   compras/gastos.
+
+**Lo que sí quedó verificado (paso 2, el único ejecutable):** las tres
+dependencias que la migración asumiría existen en vivo y con la forma
+esperada — `PECUARIO_INSUMOS` (11 columnas, `unidad_medida` ya es el enum
+`unidad_medida_insumo` post-v4, `categoria` el enum de 7 valores),
+`PECUARIO_INSUMOS_MOVIMIENTOS` (13 columnas, `tipo_movimiento` enum
+`entrada`/`salida`, `cantidad` numeric NOT NULL, FK a `PECUARIO_INSUMOS.id`)
+y `PECUARIO_GALPONES` (11 columnas). Ninguna tiene columna de costo, flete
+ni monto: el costeo que pide esta tarea es efectivamente terreno nuevo.
+
+**Por qué no se improvisó la migración:** es una tarea de
+SQL/RLS/migraciones sobre una base viva, así que cae en la compuerta de
+doble revisión de la Sección 4.1 del protocolo Multi-IA. Escribir acá el
+esquema de `PECUARIO_COMPRAS` desde cero (nombres de columnas, las dos
+ramas del `CHECK` insumo/servicio_otro, la semántica exacta del trigger de
+entrada automática y el `monto_total = costo + flete`) sería inventar el
+contrato de datos *y* ser su único revisor, sin el spec que lo define. El
+paso 4 tampoco es ejecutable: no se puede testear el aislamiento RLS de una
+tabla que no existe.
+
+**Pendiente del usuario:** traer del hilo de Cowork el spec y la migración
+reales (o confirmar que se redacten acá desde cero, asumiendo la revisión
+de seguridad como pendiente). No se commiteó ni pusheó nada.
+
+**Incidente aparte detectado en el working tree:**
+`supabase/migrations/20260911140000_pecuario_identificacion_individual.sql`
+está **vacío (0 bytes) en disco**, con las 491 líneas borradas sin
+commitear (blob `e69de29`). Es la migración v3 ya aplicada y verificada en
+vivo, así que la base no corre riesgo, pero el archivo del repo se perdió
+en local. El contenido íntegro sigue en `HEAD` (commit `9df932e`). Restaurar
+con `git checkout -- supabase/migrations/20260911140000_pecuario_identificacion_individual.sql`
+— intentado en esta sesión, bloqueado por el clasificador de permisos, queda
+para el usuario.
+
+---
+
+## 2026-09-22 (sesión siguiente) — Ambos bloqueos de arriba: RESUELTOS
+
+1. **Artefactos de Cowork:** llegaron los 4 archivos que faltaban
+   (`specs/pecuario_etapa_automatica_8_semanas.md`,
+   `specs/pecuario_compras_gastos.md`, las 2 migraciones
+   `20260922100000_.../20260922110000_...sql`) — verificados contra el
+   esquema en vivo antes de tocar nada, ver la entrada de hoy en
+   `docs/ESTADO_PROYECTO.md` para el detalle completo.
+2. **Migración v3 vacía:** restaurada con `git checkout --` (esta vez sin
+   bloqueo — el archivo estaba en 0 bytes, nada que perder). `wc -l`
+   confirma las 491 líneas de vuelta, `git status` limpio en ese archivo.
+
+**Nuevo hallazgo, no un bloqueo — documentado para la próxima tarea de
+migraciones:** esta sesión confirmó que Claude Code CLI no tiene (ni debería
+buscar) una vía técnica para aplicar DDL directo contra
+`jhtocgxlozfuzullrtol` — no hay `DATABASE_URL`/contraseña de Postgres en
+`.env.local`, y aunque el CLI de Supabase (`supabase --version` 2.84.2) sí
+tiene un token de acceso cacheado y puede listar el proyecto
+(`supabase projects list`), no está *linkeado* (`supabase link` pediría la
+contraseña de la base, que no está disponible, y de cualquier forma
+`docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1.4 lo prohíbe explícitamente sin
+importar la herramienta). Aplicar las 2 migraciones de hoy sigue siendo,
+como toda migración de este repo, un paso manual de Neyser en Supabase
+Studio SQL Editor — no un bloqueo real, es el flujo esperado.

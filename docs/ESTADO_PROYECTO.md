@@ -434,6 +434,66 @@
   para aplicación manual posterior en Supabase Studio, como toda migración
   de este repo.
 
+- **(2026-09-22) Pecuario — 2 migraciones nuevas PREPARADAS y verificadas
+  contra el esquema en vivo, NO aplicadas todavía:** vista
+  `vw_pecuario_lotes_etapa` (corte automático Recría→Engorde a 8 semanas,
+  `20260922100000_pecuario_vista_etapa_automatica.sql`, ver
+  `specs/pecuario_etapa_automatica_8_semanas.md`) y tabla `PECUARIO_COMPRAS`
+  + trigger `fn_compra_genera_entrada_insumo`
+  (`20260922110000_pecuario_compras_gastos.sql`, ver
+  `specs/pecuario_compras_gastos.md`). Ambas redactadas por Claude (Cowork)
+  desde el principio — gate de segunda revisión (§4.1.2) cubierto por
+  autoría 100% Claude (Cowork), mismo criterio que las entradas anteriores.
+  **Verificado en vivo (`jhtocgxlozfuzullrtol`) antes de tocar nada:**
+  `PECUARIO_LOTES.etapa`/`fecha_destete`/`estado` y el enum
+  `etapa_productiva` (4 valores) coinciden exactamente con lo que asume la
+  vista; `PECUARIO_INSUMOS`/`PECUARIO_INSUMOS_MOVIMIENTOS`/`PECUARIO_GALPONES`
+  y `ORGANIZACIONES."ID"` coinciden con lo que asume la migración de
+  Compras; ni `vw_pecuario_lotes_etapa` ni `PECUARIO_COMPRAS` existen
+  todavía en la instancia real (confirmado contra el esquema OpenAPI de
+  PostgREST) — nada de esto se aplicó por error en una sesión anterior.
+  **Por qué queda en "preparado" y no en "aplicado":**
+  `docs/RYZOS_ORQUESTADOR_V3.1.md` §4.1.4 — "ninguna migración SQL se
+  aplica automáticamente contra la base real, sin importar qué herramienta
+  la redactó" — es una regla explícita, reforzada además por la propia
+  cabecera de `specs/pecuario_etapa_automatica_8_semanas.md` ("aplicación
+  manual pendiente del usuario"). Esta sesión tampoco tiene una vía técnica
+  para aplicar DDL directo (sin `DATABASE_URL`/contraseña de Postgres; el
+  CLI de Supabase está autenticado pero no *linkeado* a ningún proyecto) —
+  aplicar queda, como siempre, en manos de Neyser vía Supabase Studio SQL
+  Editor.
+  **Sí completado en esta sesión:** `CompraSchema` agregado en
+  `lib/validations/pecuario.ts` (ruta real — `lib/validators/` no existe
+  en este repo, el prompt original tenía la ruta vieja/incorrecta),
+  replicando exactamente el CHECK `chk_compras_rama_por_concepto` (XOR por
+  `concepto`) y sin incluir `monto_total` (columna `GENERATED`, nunca se
+  envía desde el cliente). `npm run build`/`npm run lint` limpios, mismas
+  rutas y warnings preexistentes, nada nuevo introducido por el schema.
+  Tests nuevos `tests/test_pecuario_etapa_automatica.py` y
+  `tests/test_pecuario_compras_gastos.py`: 13 aserciones estáticas
+  (contenido de la migración + contrato Zod) pasan ya; las clases en vivo
+  (aislamiento RLS cruzado + los 4 casos de cálculo de etapa + los 3 casos
+  acordados de Compras) están escritas y se auto-omiten limpio
+  (`unittest.SkipTest`, no fallo) hasta que la migración correspondiente
+  exista en la instancia real — listas para correr en el momento en que
+  se aplique. `python -m pytest tests/`: 587 passed, 19 skipped, 5 failed
+  — los 5 fallos son preexistentes y no relacionados
+  (`test_certificaciones_normalizadas.py` x2, `test_e2e_etl_drive.py`,
+  `test_multi_producto_cafe_cacao.py`, `test_socio_creacion_atomica.py` —
+  contra datos reales que cambian con el tiempo / drift ya documentado en
+  entradas anteriores, ninguno toca Pecuario).
+  **Pendiente (bloqueado en el usuario, no en Claude Code):** Neyser aplica
+  las 2 migraciones en Supabase Studio SQL Editor, en el orden de sus
+  nombres de archivo. Hecho eso, se corren los 2 archivos de test en vivo
+  (deberían pasar completos) y se cierra la tarea con un commit que sí
+  diga "aplicada y verificada en vivo" — no antes. `docs/schema_live_pecuario.md`
+  se actualiza en ese mismo paso, no en este (documenta esquema real, no
+  trabajo pendiente).
+  **No se tocó** `docs/schema_live_pecuario.md` en este commit a
+  propósito — ese archivo documenta el esquema realmente aplicado, no
+  migraciones redactadas y pendientes; agregar ahí "PECUARIO_COMPRAS
+  (pendiente)" habría sido inconsistente con cómo se documentaron v1-v4.
+
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
