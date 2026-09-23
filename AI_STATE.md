@@ -807,3 +807,70 @@ contraseña de la base, que no está disponible, y de cualquier forma
 importar la herramienta). Aplicar las 2 migraciones de hoy sigue siendo,
 como toda migración de este repo, un paso manual de Neyser en Supabase
 Studio SQL Editor — no un bloqueo real, es el flujo esperado.
+
+---
+
+## 2026-09-23 — Tests en vivo corridos tras la aplicación manual: 1 bug de test, 1 bug real de migración
+
+Neyser aplicó ambas migraciones en Studio. Corrida
+`tests/test_pecuario_etapa_automatica.py` +
+`tests/test_pecuario_compras_gastos.py` en vivo contra
+`jhtocgxlozfuzullrtol`.
+
+**`vw_pecuario_lotes_etapa`: 10/10 pasando**, sin cambios a la migración.
+
+**`PECUARIO_COMPRAS`: 11/14 pasando en el primer intento.** Diagnóstico
+de los 3 fallos (no reintentado a ciegas — causa raíz identificada antes
+de tocar nada):
+
+1. `test_recria_antes_de_las_8_semanas` (etapa) fallaba `15 != 16` en
+   `dias_para_engorde`. **Causa: bug del test, no de la vista.** La
+   máquina que corre pytest está en UTC-5; al momento de la corrida eran
+   ~21:00 del 22/09 en hora local pero ya 02:00 del 23/09 en UTC.
+   `_crear_lote()` calculaba `fecha_destete` con `date.today()` (fecha
+   local), pero Postgres evalúa `CURRENT_DATE` en UTC — confirmado
+   comparando `created_at` de una fila recién insertada (`...+00`) contra
+   `date -u` de la máquina. La vista está bien; el test comparaba contra
+   un "hoy" equivocado. **Fix:** `datetime.now(timezone.utc).date()` en
+   vez de `date.today()`. Sin esto, cualquier test de fecha corrido cerca
+   de medianoche UTC en una máquina con offset negativo puede fallar por
+   la misma razón — vale la pena recordarlo para el próximo módulo con
+   lógica de fechas.
+
+2. `test_compra_servicio_otro_no_genera_movimiento`,
+   `test_authenticated_session_can_write_own_org`,
+   `test_cross_org_read_isolation` (los 3 fallan por la misma causa) —
+   **bug real de la migración `20260922110000_pecuario_compras_gastos.sql`.**
+   `flete NUMERIC(10,2) DEFAULT 0` no está condicionado a la rama
+   `concepto`. `chk_compras_rama_por_concepto` exige `flete IS NULL`
+   cuando `concepto='servicio_otro'`, pero un `INSERT` que simplemente
+   omite la clave `"flete"` en el JSON (exactamente lo que hace
+   `CompraSchema` vía Zod, donde `flete` es `.optional().nullable()` sin
+   default) recibe `flete=0` por el `DEFAULT` de la columna, no `NULL` —
+   PostgREST/Postgres no tienen forma de distinguir "omitido, use el
+   default" de "esta rama no usa este campo" a nivel de columna. Error
+   confirmado en vivo: `23514 chk_compras_rama_por_concepto` sobre un
+   INSERT de `servicio_otro` por lo demás perfectamente válido — el caso
+   acordado explícitamente con el usuario ("servicio_otro no genera
+   ningún movimiento") ni siquiera se podía insertar para probarlo.
+   **Fix redactado (NO aplicado):**
+   `supabase/migrations/20260922120000_fix_pecuario_compras_flete_default.sql`
+   — `ALTER TABLE "PECUARIO_COMPRAS" ALTER COLUMN flete DROP DEFAULT`. No
+   requiere backfill (las filas `insumo` con `flete=0` explícito siguen
+   siendo válidas; `monto_total` ya hace `COALESCE(flete,0)` al calcular,
+   así que un `flete` `NULL` sigue sumando 0 correctamente). Test estático
+   nuevo `TestFleteDefaultFixStatic` en
+   `tests/test_pecuario_compras_gastos.py` verifica que el fix exista y
+   haga el `DROP DEFAULT` correcto.
+
+**Diferencia importante con la migración original:** ese fix lo redactó
+Claude Code CLI, no Claude (Cowork) — el gate de segunda revisión
+(§4.1.2) NO queda cubierto automáticamente por autoría como en las
+entradas anteriores. Pendiente de que Neyser (o Cowork) le dé el visto
+bueno antes de aplicarlo, además del paso manual de aplicación en sí
+(§4.1.4) — mismo criterio que cualquier SQL nuevo de esta herramienta.
+
+**No se commiteó todavía nada de esta sesión de verificación.** El fix
+de `flete` es la única pieza pendiente antes de poder decir "PECUARIO_COMPRAS
+aplicada y verificada en vivo" con los 3 casos acordados realmente
+confirmados.

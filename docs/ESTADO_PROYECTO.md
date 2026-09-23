@@ -482,17 +482,38 @@
   `test_multi_producto_cafe_cacao.py`, `test_socio_creacion_atomica.py` —
   contra datos reales que cambian con el tiempo / drift ya documentado en
   entradas anteriores, ninguno toca Pecuario).
-  **Pendiente (bloqueado en el usuario, no en Claude Code):** Neyser aplica
-  las 2 migraciones en Supabase Studio SQL Editor, en el orden de sus
-  nombres de archivo. Hecho eso, se corren los 2 archivos de test en vivo
-  (deberían pasar completos) y se cierra la tarea con un commit que sí
-  diga "aplicada y verificada en vivo" — no antes. `docs/schema_live_pecuario.md`
-  se actualiza en ese mismo paso, no en este (documenta esquema real, no
-  trabajo pendiente).
-  **No se tocó** `docs/schema_live_pecuario.md` en este commit a
-  propósito — ese archivo documenta el esquema realmente aplicado, no
-  migraciones redactadas y pendientes; agregar ahí "PECUARIO_COMPRAS
-  (pendiente)" habría sido inconsistente con cómo se documentaron v1-v4.
+  **Actualización (2026-09-23) — Neyser aplicó ambas migraciones en
+  Supabase Studio; corridos los tests en vivo:**
+  `vw_pecuario_lotes_etapa` — **10/10 pasando**, incluidos los 4 casos de
+  cálculo de la spec §7 y el aislamiento RLS cruzado. En el camino se
+  encontró y corrigió un bug del propio test (no de la migración): usaba
+  `date.today()` de la máquina local en vez de la fecha UTC, y cerca de
+  medianoche UTC eso corría el cálculo de `dias_para_engorde` un día
+  entero — corregido a `datetime.now(timezone.utc).date()`.
+  `PECUARIO_COMPRAS` — **11/14 pasando**; los 3 que fallan revelaron un
+  bug real de la migración, no del test: la columna `flete NUMERIC(10,2)
+  DEFAULT 0` no estaba condicionada a la rama `insumo` — cualquier
+  `INSERT` de `concepto='servicio_otro'` que omitiera la clave `flete`
+  (el comportamiento normal de un cliente/Zod con `flete` opcional)
+  recibía `flete=0` por el default de la columna en vez de `NULL`,
+  violando `chk_compras_rama_por_concepto` (`23514`). Bloqueaba
+  exactamente uno de los 3 casos acordados explícitamente por el usuario
+  ("servicio_otro no genera ningún movimiento" no se podía ni insertar) +
+  2 tests derivados del mismo insert. Fix redactado:
+  `supabase/migrations/20260922120000_fix_pecuario_compras_flete_default.sql`
+  (`ALTER COLUMN flete DROP DEFAULT` — no requiere backfill, `monto_total`
+  ya hace `COALESCE(flete,0)`). **Esta migración de fix, a diferencia de
+  la original, NO fue redactada por Claude Cowork** — la escribió Claude
+  Code CLI tras diagnosticar la causa raíz en vivo, así que el gate de
+  segunda revisión (§4.1.2) no queda cubierto automáticamente por
+  autoría; necesita el mismo visto bueno que cualquier SQL nuevo antes de
+  aplicarse, además del paso manual de aplicación (§4.1.4). Detalle
+  completo, incluyendo qué test verifica el fix
+  (`TestFleteDefaultFixStatic`), en `docs/schema_live_pecuario.md` (nueva
+  sección "v5") y en `AI_STATE.md`.
+  **Pendiente:** Neyser revisa y aplica el fix de `flete` en Studio; hecho
+  eso, correr de nuevo los 3 casos de `PECUARIO_COMPRAS` (deberían pasar
+  completos) y cerrar con un commit final.
 
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN

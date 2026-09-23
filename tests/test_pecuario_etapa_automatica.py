@@ -16,7 +16,7 @@ solo cuando la vista ya existe (aplicada a mano en Supabase Studio) --
 import os
 import time
 import unittest
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -135,7 +135,13 @@ class TestVistaEtapaLive(unittest.TestCase):
             httpx.delete(f"{SUPABASE_URL}/rest/v1/{table}", headers=_service_headers(), params={field: f"eq.{value}"}, timeout=30)
 
     def _crear_lote(self, org, dias_desde_destete, etapa="recria", estado="activo"):
-        fecha_destete = (date.today() - timedelta(days=dias_desde_destete)).isoformat()
+        # UTC, no la fecha local de la máquina que corre el test -- Postgres
+        # evalúa CURRENT_DATE en UTC (confirmado en vivo), y cerca de la
+        # medianoche UTC una fecha local (ej. UTC-5) puede ir un día
+        # "atrás" de la fecha real de la base, corriendo el cálculo de
+        # dias_para_engorde un día entero.
+        hoy_utc = datetime.now(timezone.utc).date()
+        fecha_destete = (hoy_utc - timedelta(days=dias_desde_destete)).isoformat()
         res = httpx.post(
             f"{SUPABASE_URL}/rest/v1/PECUARIO_LOTES",
             headers={**_service_headers(), "Content-Type": "application/json", "Prefer": "return=representation"},

@@ -26,6 +26,10 @@ MIGRATION_PATH = (
     Path(__file__).resolve().parent.parent
     / "supabase" / "migrations" / "20260922110000_pecuario_compras_gastos.sql"
 )
+FLETE_FIX_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "supabase" / "migrations" / "20260922120000_fix_pecuario_compras_flete_default.sql"
+)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
@@ -112,6 +116,24 @@ class TestMigrationFileStatic(unittest.TestCase):
     def test_preflight_exige_dependencias_v2(self):
         self.assertIn('to_regclass(\'public."PECUARIO_INSUMOS"\')', self.sql)
         self.assertIn('to_regclass(\'public."PECUARIO_GALPONES"\')', self.sql)
+
+
+class TestFleteDefaultFixStatic(unittest.TestCase):
+    """Fix descubierto en vivo (2026-09-23): flete NUMERIC(10,2) DEFAULT 0
+    conflictaba con chk_compras_rama_por_concepto para concepto=
+    'servicio_otro' (que exige flete IS NULL) -- cualquier INSERT que
+    omitiera la clave "flete" recibía 0 por el DEFAULT de la columna, no
+    NULL, y violaba el CHECK. Ver
+    20260922120000_fix_pecuario_compras_flete_default.sql."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not FLETE_FIX_PATH.exists():
+            raise AssertionError(f"No existe {FLETE_FIX_PATH}")
+        cls.sql = FLETE_FIX_PATH.read_text(encoding="utf-8")
+
+    def test_drops_default_on_flete(self):
+        self.assertIn('ALTER TABLE public."PECUARIO_COMPRAS" ALTER COLUMN flete DROP DEFAULT', self.sql)
 
 
 class TestCompraSchemaContract(unittest.TestCase):
