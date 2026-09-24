@@ -134,6 +134,7 @@ class TestMigrationFileStatic(unittest.TestCase):
             "chk_traslados_alcance_solo_lote",
             "chk_traslados_parcial_requiere_datos",
             "chk_traslados_origen_destino_distintos",
+            "chk_traslados_lote_nuevo_solo_parcial",
         ):
             with self.subTest(chk=chk):
                 self.assertIn(chk, self.sql)
@@ -345,6 +346,22 @@ class TestTrasladoInternoLive(unittest.TestCase):
         lote_id = self._crear_lote(jaula)
 
         res = self._insertar_traslado(tipo_origen="lote", lote_id=lote_id, destino_jaula_id=jaula, alcance="completo")
+        self.assertEqual(res.status_code, 400, res.text)
+
+    def test_completo_con_lote_nuevo_id_falla_check(self):
+        # chk_traslados_lote_nuevo_solo_parcial: lote_nuevo_id solo puede
+        # venir lleno cuando alcance='parcial' -- un traslado completo que
+        # lo mande (con un lote real, para no fallar por FK primero) debe
+        # ser rechazado por este CHECK específico.
+        origen = self._crear_jaula()
+        destino = self._crear_jaula()
+        lote_id = self._crear_lote(origen)
+        otro_lote_real = self._crear_lote(self._crear_jaula())  # solo para tener un UUID de lote real que pase la FK
+
+        res = self._insertar_traslado(
+            tipo_origen="lote", lote_id=lote_id, destino_jaula_id=destino, alcance="completo",
+            lote_nuevo_id=otro_lote_real,
+        )
         self.assertEqual(res.status_code, 400, res.text)
 
     def test_origen_jaula_id_calculado_ignora_lo_que_manda_el_cliente(self):

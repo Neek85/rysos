@@ -763,10 +763,38 @@
   latente que no había fallado todavía) para que corte en la siguiente
   definición de schema real, no en un `export type` compartido que crece
   con cada tarea nueva. `python -m pytest tests/` completo, después del
-  fix: **687 passed, 16 skipped, 5 failed** — mismos 5 preexistentes de
+  fix: 687 passed, 16 skipped, 5 failed — mismos 5 preexistentes de
   siempre, sin relación con Pecuario. `npm run build`/`lint` limpios.
+
+- **(2026-09-24, continuación) `chk_traslados_lote_nuevo_solo_parcial`
+  agregado — incidente aparte: el archivo de la migración se
+  sobreescribió en disco con texto de instrucciones, no SQL.** Antes de
+  tocar nada, `20260924100000_pecuario_traslado_interno.sql` en disco no
+  contenía SQL — contenía el texto de la propia tarea (33 líneas). El
+  archivo real seguía intacto en el commit `e710636`; señalado
+  explícitamente y restaurado con `git checkout --` sobre ese archivo
+  puntual antes de aplicar nada nuevo. Sobre la base restaurada: `CHECK
+  chk_traslados_lote_nuevo_solo_parcial` (`lote_nuevo_id IS NULL OR
+  alcance = 'parcial'`) agregado después de
+  `chk_traslados_origen_destino_distintos`, cerrando el gap que la
+  entrada anterior había señalado solo como comentario. Nota
+  "OBSERVACIÓN PARA LA REVISIÓN MANUAL" retirada del encabezado (ya
+  resuelta); el resto de las notas quedaron intactas.
+  Test nuevo `test_completo_con_lote_nuevo_id_falla_check` — 9 casos en
+  vivo ahora (los 8 anteriores + este), todos siguen auto-omitiéndose
+  hasta la aplicación manual (la migración sigue sin aplicarse, por
+  instrucción explícita).
+  **`specs/pecuario_traslado_interno.md` sigue sin existir** — reconfirmado
+  antes de intentar actualizar su header; no se fabricó el archivo.
+  `pytest tests/ -v` (sin `python -m`) falla la colección con 3 errores
+  de import (`ModuleNotFoundError: No module named 'scripts'` en los 3
+  archivos `test_e2e_*`) — problema preexistente de cómo esa invocación
+  resuelve `sys.path`, no causado por esta tarea; `python -m pytest
+  tests/ -v` (el comando documentado en `CLAUDE.md`) corre limpio: 687
+  passed, 17 skipped, 5 failed — mismos 5 preexistentes de siempre. `npm
+  run build`/`lint` limpios.
   **Pendiente:** Neyser revisa y aplica la migración en Supabase Studio;
-  hecho eso, correr los 8 casos en vivo, actualizar el header de la spec
+  hecho eso, correr los 9 casos en vivo, actualizar el header de la spec
   (una vez que exista) y cerrar con un commit final "aplicada y
   verificada en vivo".
 

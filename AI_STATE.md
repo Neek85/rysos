@@ -1244,3 +1244,49 @@ relación con Pecuario.
 **Tarea cerrada** (en el sentido de "lista para revisión y aplicación
 manual", no "aplicada y verificada en vivo" -- eso queda pendiente,
 igual que el header de la spec). Sin merge a `main`.
+
+---
+
+## 2026-09-24 (continuación) — CHECK chk_traslados_lote_nuevo_solo_parcial agregado; incidente: el archivo de la migración se sobreescribió en disco con texto de instrucciones
+
+**Antes de tocar nada:** el pedido llegó con
+`supabase/migrations/20260924100000_pecuario_traslado_interno.sql`
+cambiado en disco -- pero el contenido nuevo no era SQL, era el propio
+texto de instrucciones de la tarea (33 líneas, en español, sin ningún
+`CREATE`/`ALTER`). El archivo real (commit `e710636`) seguía intacto en
+git. Señalado explícitamente antes de actuar (no se asumió que el
+"cambio" era intencional ni se sobreescribió en silencio) y restaurado
+con `git checkout --` sobre ese archivo puntual -- nada que perder,
+la versión en disco era la corrupta, no la del commit.
+
+Sobre esa base restaurada: agregado `chk_traslados_lote_nuevo_solo_parcial`
+(`lote_nuevo_id IS NULL OR alcance = 'parcial'`) justo después de
+`chk_traslados_origen_destino_distintos`, tal cual se pidió. Borrada la
+nota "OBSERVACIÓN PARA LA REVISIÓN MANUAL" del encabezado (el gap que
+describía ya está cerrado) -- el resto de las notas (BEGIN/COMMIT,
+hallazgo de esquema poza=jaula, etc.) quedaron intactas.
+
+Test nuevo `test_completo_con_lote_nuevo_id_falla_check` en
+`tests/test_pecuario_traslado_interno.py` -- inserta un traslado
+`alcance='completo'` mandando explícitamente `lote_nuevo_id` con el
+UUID de otro lote real (creado solo para eso, así no falla primero por
+la FK) -- espera `400` por el CHECK nuevo. También se agregó
+`chk_traslados_lote_nuevo_solo_parcial` a la lista de la aserción
+estática existente (`test_checks_de_consistencia_presentes`).
+
+`pytest tests/test_pecuario_traslado_interno.py -v`: 11 passed, 9
+skipped (los 9 en vivo siguen sin correr de verdad -- la migración
+todavía no está aplicada, consistente con que esta tarea tampoco la
+aplicó).
+
+**Nota de invocación, no relacionada con Traslado:** `pytest tests/ -v`
+(sin `python -m`) falla la *colección* completa con `3 errors` --
+`ModuleNotFoundError: No module named 'scripts'` en
+`test_e2e_etl_drive.py`/`test_e2e_org_guardrail.py`/`test_e2e_teardown.py`,
+que hacen `from scripts.xxx import ...`. Es un problema de cómo esta
+versión de `pytest` resuelve `sys.path` cuando se invoca como binario en
+vez de `python -m pytest` (que sí agrega el cwd) -- preexistente, no
+causado por esta tarea. `python -m pytest tests/ -v` (el comando
+documentado en `CLAUDE.md`) corre limpio, sin ese error de colección.
+
+`npm run build`/`lint` limpios.

@@ -77,19 +77,6 @@
 -- (20260923090000a/b) -- un tipo recién creado sí puede usarse en la
 -- misma transacción que lo crea.
 --
--- OBSERVACIÓN PARA LA REVISIÓN MANUAL (Claude Code CLI, no cambia nada
--- de lo redactado por Cowork -- columnas/constraints/nombres intactos,
--- solo se señala para que Neyser lo vea antes de aplicar): ningún CHECK
--- de esta tabla exige lote_nuevo_id IS NULL cuando alcance='completo'
--- (o cuando tipo_origen='reproductor' sí lo exige, vía
--- chk_traslados_alcance_solo_lote, pero el caso 'lote'+'completo' queda
--- sin ese mismo cierre). El trigger nunca lo escribe en esas ramas, así
--- que en la práctica queda NULL de todos modos -- pero un INSERT que
--- mande explícitamente un lote_nuevo_id ajeno junto con alcance=
--- 'completo' no lo rechazaría a nivel de base. No se agregó un CHECK
--- nuevo para cerrar esto (habría sido cambiar el contenido pedido
--- textualmente) -- queda para que se decida en la revisión.
---
 -- Aditiva. Idempotente.
 -- =====================================================================
 
@@ -226,6 +213,12 @@ EXCEPTION WHEN duplicate_object THEN null; END $$;
 DO $$ BEGIN
     ALTER TABLE public."PECUARIO_TRASLADOS" ADD CONSTRAINT chk_traslados_origen_destino_distintos CHECK (
         origen_jaula_id IS DISTINCT FROM destino_jaula_id
+    );
+EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+DO $$ BEGIN
+    ALTER TABLE public."PECUARIO_TRASLADOS" ADD CONSTRAINT chk_traslados_lote_nuevo_solo_parcial CHECK (
+        lote_nuevo_id IS NULL OR alcance = 'parcial'
     );
 EXCEPTION WHEN duplicate_object THEN null; END $$;
 
