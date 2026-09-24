@@ -1667,3 +1667,64 @@ resuelto -- fuera del alcance de esta decisión puntual.
 estaba escrito para el comportamiento correcto (post-hotfix); sus 6
 fallos actuales deben pasar a PASSED una vez aplicado el hotfix, sin
 tocar el archivo de test.
+
+---
+
+## Segundo bug confirmado en Empadre, tras aplicar el hotfix de Config (2026-09-26)
+
+Neyser aplicó `20260926100000_pecuario_empadre_fix_config_cast.sql` en
+Studio. Re-corrida `pytest tests/test_pecuario_empadre_asignacion_macho.py -v -rs`:
+**22/24 passed** (el cast resolvió los 6 fallos anteriores + 4 nuevos
+que antes ni se alcanzaban a probar), pero aparecen **2 fallos nuevos**,
+mismo patrón que el bug de Config -- otro defecto real de la migración
+ya aplicada, no un bug de test:
+
+`PECUARIO_RETIROS_MACHO_PENDIENTES` tiene
+`CHECK chk_retiros_macho_resuelta_coherente
+((NOT resuelta AND resuelta_en IS NULL) OR (resuelta AND resuelta_en IS NOT NULL))`
+-- pero **nada en la migración pone `resuelta_en` cuando `resuelta`
+pasa a `true`**. `trg_resolver_retiro_macho_pendiente` es `AFTER
+UPDATE` (corre después de que el `CHECK` ya se evaluó sobre la fila
+nueva) y de todos modos nunca toca `NEW.resuelta_en` en su cuerpo -- no
+hay ningún otro trigger `BEFORE UPDATE` en esta tabla. Resultado: **todo
+intento real de "Marcar hecho" (`UPDATE resuelta=true` sin mandar
+`resuelta_en` a mano) falla con
+`23514: violates check constraint "chk_retiros_macho_resuelta_coherente"`.**
+No hay precedente de este patrón (`resuelta`/`resuelta_en`) en ningún
+otro archivo de este repo -- es la primera vez que aparece, así que no
+hay una convención ya probada a copiar.
+
+Confirmado con un `UPDATE` real (service role, PATCH `{"resuelta":
+true}`, sin `resuelta_en`) -- mismo resultado en 2 tests distintos
+(`test_marcar_pendiente_resuelto_cierra_historial_y_limpia_jaula_actual`,
+`test_resolver_pendiente_viejo_no_toca_jaula_si_macho_ya_fue_reasignado`).
+
+**No se corrigió nada todavía** -- mismo criterio que el bug de Config:
+es una decisión de esquema/trigger sobre una migración ya aplicada, se
+documenta y se pregunta antes de tocar nada, en vez de reintentar a
+ciegas. Opción recomendada (mismo criterio "nunca confiar en el
+cliente para un campo calculado" que ya usa el resto de este esquema,
+ej. `cantidad_incluida` en Destete): un trigger `BEFORE UPDATE` nuevo
+que setee `NEW.resuelta_en := now()` cuando
+`NEW.resuelta AND NOT OLD.resuelta` (mismo `WHEN` que ya usa el
+trigger `AFTER UPDATE` existente).
+
+`tests/test_pecuario_empadre_asignacion_macho.py` no se modificó --
+sigue escrito para el comportamiento correcto (con `resuelta_en`
+puesto automáticamente); no manda `resuelta_en` a mano a propósito,
+mismo criterio "nunca confiar en el cliente" que el resto de la suite.
+
+## Decisión de Neyser + hotfix #2 creado (2026-09-26)
+
+Neyser eligió el trigger BEFORE UPDATE (recomendado). Creado
+`supabase/migrations/20260926110000_pecuario_empadre_fix_resuelta_en.sql`
+-- `trg_retiro_macho_resuelta_en` (BEFORE UPDATE, `WHEN (NEW.resuelta
+IS DISTINCT FROM OLD.resuelta)`): pone `resuelta_en := now()` al pasar
+a `true`, lo limpia a `NULL` al volver a `false` (simétrico, aunque hoy
+no hay ningún flujo real que revierta `resuelta`). No toca
+20260926090000/20260926100000. NO se aplicó desde acá -- pendiente de
+que Neyser lo aplique a mano en Studio.
+
+`tests/test_pecuario_empadre_asignacion_macho.py` no se modificó -- ya
+estaba escrito para el comportamiento correcto, sus 2 fallos actuales
+deben pasar a PASSED una vez aplicado este segundo hotfix.

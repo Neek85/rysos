@@ -882,7 +882,31 @@ escribirlo que las 3 organizaciones reales existentes hoy tienen
 `Config IS NULL` — el cast es seguro ahora; si en el futuro alguna
 organización tiene un `Config` que no sea JSON válido, ese insert
 fallaría — riesgo aceptado explícitamente al elegir la opción mínima
-sobre corregir el tipo de columna de raíz. **Pendiente de aplicación
-manual en Supabase Studio (Neyser)** — una vez aplicado, corresponde
-re-correr `tests/test_pecuario_empadre_asignacion_macho.py -v -rs`
-contra la base real y actualizar este estado a `APLICADA` de verdad.
+sobre corregir el tipo de columna de raíz. Aplicado por Neyser en
+Studio — re-corrida `tests/test_pecuario_empadre_asignacion_macho.py -v -rs`:
+**22/24 passed** (resolvió los 6 fallos originales), pero surgieron
+**2 fallos nuevos**, mismo patrón — otro defecto real en la migración
+ya aplicada, no un bug de test.
+
+**Segundo bug confirmado:** `CHECK chk_retiros_macho_resuelta_coherente`
+exige `resuelta_en IS NOT NULL` cuando `resuelta = true`, pero nada en
+`20260926090000` pone ese valor —
+`trg_resolver_retiro_macho_pendiente` es `AFTER UPDATE` (corre después
+de que el `CHECK` ya evaluó la fila) y nunca toca `resuelta_en`. Todo
+`UPDATE ... SET resuelta = true` real (sin que el cliente calcule esa
+fecha a mano) viola el `CHECK` y falla con `23514` — "Marcar hecho"
+estaba roto en producción. Confirmado con un `UPDATE` real. Detalle
+completo en `AI_STATE.md`.
+
+**Decisión de Neyser (2026-09-26):** trigger `BEFORE UPDATE` nuevo,
+mismo criterio "nunca confiar en el cliente para un campo calculado".
+Creado
+`supabase/migrations/20260926110000_pecuario_empadre_fix_resuelta_en.sql`
+— `trg_retiro_macho_resuelta_en` (`WHEN (NEW.resuelta IS DISTINCT FROM
+OLD.resuelta)`): pone `resuelta_en := now()` al pasar a `true`, lo
+limpia a `NULL` al volver a `false`. No toca los 2 archivos anteriores.
+**Pendiente de aplicación manual en Supabase Studio (Neyser)** — una
+vez aplicado, corresponde re-correr
+`tests/test_pecuario_empadre_asignacion_macho.py -v -rs` contra la
+base real y solo entonces marcar este módulo `APLICADA` de verdad
+(24/24).
