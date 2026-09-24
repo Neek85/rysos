@@ -1535,3 +1535,35 @@ tracebacks completos ya entregados al usuario en el chat:
   una `PADRON_PARCELAS` real tiene `id_producto_predominante = NULL` en
   vez de CAFE -- backfill de esa migración vieja incompleto para al
   menos 1 fila real.
+
+---
+
+## Regresión de Población — resuelta (2026-09-25)
+
+Confirmado por grep (`lib/`, `app/`, `components/`, `scripts/`, todo
+`.js`/`.jsx`/`.ts`/`.tsx`): cero ocurrencias de `parto_origen_id` fuera
+de `supabase/migrations/*.sql`, `tests/*.py` y docs/specs. Ningún Server
+Action real lo setea nunca -- esperable, no existía ninguna pantalla de
+Destete real hasta v12. Con esto confirmado, se reescribieron los 3
+tests de `test_pecuario_poblacion_vistas.py` que fallaban (ver entrada
+anterior) para armar su escenario vía recolección + conformación real
+(mismos helpers que `test_pecuario_destete_recoleccion.py`, replicados
+fielmente como métodos nuevos en la clase de test) en vez de setear
+`parto_origen_id` directo en el insert del lote. No se tocó el esquema
+-- `parto_origen_id` sigue existiendo, columna legacy inofensiva.
+
+Un detalle de diseño que cambió la forma del test (no el resultado
+esperado): con v12, "parcial" ya no existe a nivel de
+`vw_pecuario_lactancia_restante` -- un parto se recolecta completo o
+nada (`trg_recoleccion_partos_validar`), así que desaparece de esa
+vista apenas se recolecta, sin importar cuánto se conforme después. La
+partialidad real ahora vive en
+`vw_pecuario_recolecciones_destete.cantidad_pendiente` -- el test de
+"destete parcial" se reescribió para verificar eso en vez de una
+`cantidad_restante` intermedia en la vista de lactancia (que ya no
+existe en el nuevo modelo).
+
+`pytest tests/test_pecuario_poblacion_vistas.py -v -rs`: **20/20
+passed**, 3 subtests passed, ninguno SKIPPED. `docs/schema_live_pecuario.md`
+v11 actualizado con una nota explicando el reemplazo. Ítem 6 (Destete)
+de la ronda queda cerrado de punta a punta, sin deuda pendiente.

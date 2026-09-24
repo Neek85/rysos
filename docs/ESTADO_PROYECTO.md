@@ -918,8 +918,23 @@
   entorno local con `.env.local` completo.
   `npm run lint` limpio (solo warnings preexistentes, sin relación).
   `docs/schema_live_pecuario.md` v12 actualizado a `APLICADA`.
-  **Tarea cerrada de verdad** — "aplicada y verificada en vivo", sin
-  merge a `main`.
+
+  Esa misma corrida completa reveló 7 fallos nuevos (antes SKIPPED, sin
+  credenciales): 4 sin relación con Pecuario (dejados para triar
+  aparte, ver `AI_STATE.md`) y **3 en `test_pecuario_poblacion_vistas.py`,
+  regresión real causada por el reemplazo de `vw_pecuario_lactancia_restante`
+  en v12** (ya no calcula desde `PECUARIO_LOTES.parto_origen_id`).
+  Confirmado por grep en todo el repo (`lib/`, `app/`, `components/`,
+  `scripts/`) que ningún Server Action real usa `parto_origen_id`
+  directo -- no hay regresión de producto, solo de esos 3 tests, que se
+  reescribieron para armar su escenario vía recolección + conformación
+  real (mismos helpers que `test_pecuario_destete_recoleccion.py`).
+  `pytest tests/test_pecuario_poblacion_vistas.py -v -rs`: **20/20**,
+  ninguno SKIPPED. `docs/schema_live_pecuario.md` v11 anotado con el
+  reemplazo. `parto_origen_id` no se tocó en el esquema (legacy
+  inofensiva).
+  **Tarea cerrada de verdad, sin deuda pendiente** — "aplicada y
+  verificada en vivo", sin merge a `main`.
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

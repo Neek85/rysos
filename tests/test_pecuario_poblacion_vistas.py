@@ -96,6 +96,18 @@ def _migracion_aplicada():
             )
             if res.status_code != 200:
                 return False
+        # vw_pecuario_lactancia_restante fue REEMPLAZADA por
+        # 20260925090000_pecuario_destete_recoleccion.sql (v12) -- 3 de los
+        # tests de este archivo ejercitan el invariante de población a
+        # través del flujo real de recolección/conformación (no vía
+        # parto_origen_id directo, ver docs/schema_live_pecuario.md v11),
+        # así que también dependen de que v12 ya esté aplicada.
+        res = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/PECUARIO_RECOLECCIONES_DESTETE",
+            headers=_service_headers(), params={"select": "*", "limit": 1}, timeout=15,
+        )
+        if res.status_code != 200:
+            return False
     except Exception:
         return False
     return True
@@ -265,6 +277,62 @@ class TestPoblacionVistasLive(unittest.TestCase):
         self._cleanup.append(("PECUARIO_MORTALIDAD", "id", mort_id))
         return mort_id
 
+    # ---- Recolección + conformación real (mismo flujo que
+    #      tests/test_pecuario_destete_recoleccion.py, replicado fielmente
+    #      -- confirmado por grep que ningún Server Action real usa
+    #      parto_origen_id directo, así que estos 3 tests deben pasar por
+    #      el flujo real en vez de setearlo a mano). ----
+
+    def _crear_recoleccion(self, org=ORG_A):
+        res = httpx.post(
+            f"{SUPABASE_URL}/rest/v1/PECUARIO_RECOLECCIONES_DESTETE",
+            headers={**_service_headers(), "Content-Type": "application/json", "Prefer": "return=representation"},
+            json={"ID_Organizacion": org},
+            timeout=30,
+        )
+        res.raise_for_status()
+        recoleccion_id = res.json()[0]["id"]
+        self._cleanup.append(("PECUARIO_RECOLECCIONES_DESTETE", "id", recoleccion_id))
+        return recoleccion_id
+
+    def _recolectar_parto(self, recoleccion_id, parto_id, org=ORG_A):
+        res = httpx.post(
+            f"{SUPABASE_URL}/rest/v1/PECUARIO_RECOLECCION_PARTOS",
+            headers={**_service_headers(), "Content-Type": "application/json", "Prefer": "return=representation"},
+            json={"ID_Organizacion": org, "recoleccion_id": recoleccion_id, "parto_id": parto_id},
+            timeout=30,
+        )
+        res.raise_for_status()
+        recoleccion_parto_id = res.json()[0]["id"]
+        self._cleanup.append(("PECUARIO_RECOLECCION_PARTOS", "id", recoleccion_parto_id))
+        return recoleccion_parto_id
+
+    def _conformar_lote_destete(self, recoleccion_id, poza_id, sexo, cantidad, org=ORG_A):
+        res = httpx.post(
+            f"{SUPABASE_URL}/rest/v1/PECUARIO_LOTES",
+            headers={**_service_headers(), "Content-Type": "application/json", "Prefer": "return=representation"},
+            json={
+                "ID_Organizacion": org, "codigo_lote": f"TEST-POBLACION-DESTETE-{self.suffix}-{len(self._cleanup)}",
+                "recoleccion_origen_id": recoleccion_id, "poza_actual_id": poza_id,
+                "sexo": sexo, "cantidad_inicial": cantidad, "cantidad_actual": cantidad,
+            },
+            timeout=30,
+        )
+        res.raise_for_status()
+        lote_id = res.json()[0]["id"]
+        self._cleanup.append(("PECUARIO_LOTES", "id", lote_id))
+        return lote_id
+
+    def _get_recoleccion_estado(self, recoleccion_id):
+        res = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/vw_pecuario_recolecciones_destete", headers=_service_headers(),
+            params={"id": f"eq.{recoleccion_id}"}, timeout=30,
+        )
+        res.raise_for_status()
+        rows = res.json()
+        self.assertEqual(len(rows), 1)
+        return rows[0]
+
     def _get_lactancia_por_parto(self, parto_id):
         res = httpx.get(
             f"{SUPABASE_URL}/rest/v1/vw_pecuario_lactancia_restante", headers=_service_headers(),
@@ -305,34 +373,63 @@ class TestPoblacionVistasLive(unittest.TestCase):
         self.assertEqual(rows[0]["n_vivos"], 10)
 
     def test_destete_parcial_baja_cantidad_restante_sin_hacer_desaparecer_el_parto(self):
+        # Reescrito 2026-09-25 (v12, 20260925090000_pecuario_destete_recoleccion.sql):
+        # el corte real de "ya no está en lactancia" es la RECOLECCIÓN, no
+        # la conformación del lote -- confirmado por grep que ningún
+        # Server Action real setea parto_origen_id directo (única vía que
+        # este test probaba antes). Con el nuevo flujo, "parcial" ya no
+        # existe a nivel de vw_pecuario_lactancia_restante (se recolecta
+        # completo o nada, ver trg_recoleccion_partos_validar) -- el parto
+        # desaparece de esa vista apenas se recolecta, sin importar cuánto
+        # se conforme después. Lo "parcial" real ahora vive en
+        # vw_pecuario_recolecciones_destete.cantidad_pendiente, que es lo
+        # que este test verifica.
         jaula_origen = self._crear_jaula()
         jaula_destino = self._crear_jaula()
         parto_id = self._crear_parto(jaula_origen, n_vivos=10)
-        self._crear_lote(jaula_destino, cantidad=4, parto_origen_id=parto_id)
+        recoleccion_id = self._crear_recoleccion()
+        self._recolectar_parto(recoleccion_id, parto_id)
 
-        rows = self._get_lactancia_por_parto(parto_id)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["cantidad_restante"], 6)  # 10 - 4
+        self.assertEqual(
+            self._get_lactancia_por_parto(parto_id), [],
+            "El parto ya no debe aparecer en vw_pecuario_lactancia_restante apenas se recolecta, antes de conformar ningún lote.",
+        )
+
+        self._conformar_lote_destete(recoleccion_id, jaula_destino, sexo="macho", cantidad=4)
+
+        estado = self._get_recoleccion_estado(recoleccion_id)
+        self.assertEqual(estado["cantidad_pendiente"], 6)  # 10 - 4
+        self.assertEqual(estado["estado"], "abierta", "Un lote parcial no debe cerrar la recolección -- todavía queda remanente.")
 
     def test_destete_completo_hace_desaparecer_el_parto_de_la_vista(self):
+        # Reescrito 2026-09-25 (v12) -- ver nota del test anterior.
         jaula_origen = self._crear_jaula()
         jaula_destino = self._crear_jaula()
         parto_id = self._crear_parto(jaula_origen, n_vivos=10)
-        self._crear_lote(jaula_destino, cantidad=4, parto_origen_id=parto_id)
-        self._crear_lote(jaula_destino, cantidad=6, parto_origen_id=parto_id)  # 4 + 6 = 10, destete completo
+        recoleccion_id = self._crear_recoleccion()
+        self._recolectar_parto(recoleccion_id, parto_id)
+        self._conformar_lote_destete(recoleccion_id, jaula_destino, sexo="hembra", cantidad=10)  # completo
 
         rows = self._get_lactancia_por_parto(parto_id)
         self.assertEqual(rows, [], "Un parto completamente destetado no debe aparecer en vw_pecuario_lactancia_restante.")
 
+        estado = self._get_recoleccion_estado(recoleccion_id)
+        self.assertEqual(estado["estado"], "cerrada", "Sin remanente pendiente, la recolección debe quedar cerrada (calculado, sin ningún UPDATE manual).")
+
     # ---- Invariante de población: destete no cambia el total ----
 
     def test_invariante_total_poblacion_no_cambia_con_destete_completo(self):
+        # Reescrito 2026-09-25 (v12) -- ver nota de test_destete_parcial_*
+        # arriba. El lote real ahora se crea vía recolección +
+        # conformación, no seteando parto_origen_id directo.
         jaula = self._crear_jaula()
         parto_id = self._crear_parto(jaula, n_vivos=8)
 
         antes = self._get_resumen_org()
-        # cantidad_actual/cantidad_inicial = 8, etapa/fecha_destete default -> recria, hoy
-        self._crear_lote(jaula, cantidad=8, parto_origen_id=parto_id)
+        recoleccion_id = self._crear_recoleccion()
+        self._recolectar_parto(recoleccion_id, parto_id)
+        # sexo/fecha_destete default -> recria, hoy (mismo criterio que la versión anterior de este test)
+        self._conformar_lote_destete(recoleccion_id, jaula, sexo="macho", cantidad=8)
         despues = self._get_resumen_org()
 
         self.assertEqual(despues["total_poblacion"], antes["total_poblacion"], "El destete completo no debe cambiar el total de población, solo la categoría.")

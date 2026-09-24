@@ -724,6 +724,25 @@ sentidos; mortalidad de lactancia se descuenta en el resumen (org) pero
 NO en la ocupación de esa poza (asimetría documentada a propósito);
 aislamiento RLS cruzado en las 3 vistas.
 
+**Nota (2026-09-25, tras v12):** `vw_pecuario_lactancia_restante` fue
+**reemplazada** por `20260925090000_pecuario_destete_recoleccion.sql`
+(v12, abajo) — ya no calcula `cantidad_destetada` desde
+`PECUARIO_LOTES.parto_origen_id`, sino desde
+`PECUARIO_RECOLECCION_PARTOS` (el corte real de "ya no está en
+lactancia" es la recolección, no la conformación del lote). Confirmado
+por grep (`lib/`, `app/`, `components/`, `scripts/`) que ningún Server
+Action real seteaba `parto_origen_id` directo — no existía ninguna
+pantalla de Destete real hasta v12, así que no hay regresión de
+producto, solo de los 3 tests que probaban ese invariante por esa vía.
+Esos 3 tests (`test_destete_parcial_baja_cantidad_restante_sin_hacer_desaparecer_el_parto`,
+`test_destete_completo_hace_desaparecer_el_parto_de_la_vista`,
+`test_invariante_total_poblacion_no_cambia_con_destete_completo`) se
+reescribieron para armar su escenario con una recolección +
+conformación de lote **real** (mismos helpers que
+`tests/test_pecuario_destete_recoleccion.py`), no seteando
+`parto_origen_id` a mano. `parto_origen_id` sigue existiendo en el
+esquema — columna legacy inofensiva, no se dropeó.
+
 ## Módulo Pecuario Cuyes — v12 (Destete: recolección semanal + conformación de lotes por sexo), APLICADA (2026-09-25)
 
 `supabase/migrations/20260925090000_pecuario_destete_recoleccion.sql`
