@@ -149,8 +149,13 @@ class TestZodContract(unittest.TestCase):
         self.assertIn("export type VentaSubproductoInput", self.ts)
 
     def test_venta_subproducto_no_tiene_campos_de_venta_animal(self):
+        # Acota al cuerpo de ESTE schema (hasta la siguiente definición de
+        # schema, no hasta un type export lejano en el bloque de cola) --
+        # ese bloque de cola crece con cada schema nuevo y cualquiera que
+        # declare lote_id/animal_id (ej. TrasladoRegistroSchema, 2026-09-24)
+        # queda entre ambos puntos sin ser el que se quiere probar acá.
         start = self.ts.index("export const VentaSubproductoSchema")
-        end = self.ts.index("export type PartoRegistroInput")
+        end = self.ts.index("export const MortalidadFotoSchema")
         body = self.ts[start:end]
         for campo in ("animal_id", "lote_id", "precio_unitario", "base_precio", "precio_kg"):
             with self.subTest(campo=campo):

@@ -395,8 +395,70 @@ export const SanidadRegistroSchema = z.object({
   created_offline_at: z.string().datetime(),
 });
 
+// ---------------------------------------------------------------------
+// Traslado interno entre pozas/jaulas (Pecuario Cuyes) — 2026-09-24.
+// "poza" y "jaula" son la misma tabla en el esquema real (PECUARIO_JAULAS)
+// — por eso un solo campo destino_jaula_id, sea el traslado de un lote o
+// de un reproductor.
+//
+// origen_jaula_id y lote_nuevo_id NO están en este schema a propósito —
+// los calcula el trigger trg_procesar_traslado del lado del servidor
+// (origen real del lote/animal, y el id del lote nuevo cuando
+// alcance='parcial'); el cliente nunca los manda, así que no hay nada
+// que validar de ellos acá.
+//
+// Las reglas cruzadas (tipo_origen <-> lote_id/animal_id, alcance solo
+// para lote, cantidad+codigo_lote_nuevo obligatorios solo si
+// alcance='parcial') sí se replican acá con .refine(), a diferencia de
+// la guarda de Sanidad — acá todos los campos necesarios están en el
+// mismo formulario/objeto de entrada, no hace falta consultar el
+// catálogo de otra tabla como pasaba con actividad_id -> alcance.
+// ---------------------------------------------------------------------
+
+export const TrasladoRegistroSchema = z.object({
+  id: z.string().uuid(),
+  ID_Organizacion: IdOrganizacionSchema,
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  tipo_origen: z.enum(['lote', 'reproductor']),
+  lote_id: z.string().uuid().optional().nullable(),
+  animal_id: z.string().uuid().optional().nullable(),
+  destino_jaula_id: z.string().uuid(),
+  alcance: z.enum(['completo', 'parcial']).optional().nullable(),
+  cantidad: z.number().int().positive().optional().nullable(),
+  codigo_lote_nuevo: z.string().min(1).max(50).optional().nullable(),
+  motivo_traslado: z.enum(['enfermedad_aislamiento', 'recomposicion_poza', 'sobrepoblacion', 'otro']),
+  observaciones: z.string().optional().nullable(),
+  device_id: z.string().min(1),
+  created_offline_at: z.string().datetime(),
+})
+  .refine(
+    (data) => data.tipo_origen !== 'lote' || (data.lote_id != null && data.animal_id == null),
+    { message: 'Traslado de lote requiere lote_id y no debe traer animal_id', path: ['lote_id'] }
+  )
+  .refine(
+    (data) => data.tipo_origen !== 'reproductor' || (data.animal_id != null && data.lote_id == null),
+    { message: 'Traslado de reproductor requiere animal_id y no debe traer lote_id', path: ['animal_id'] }
+  )
+  .refine(
+    (data) => data.tipo_origen !== 'lote' || data.alcance != null,
+    { message: 'Traslado de lote requiere indicar alcance (completo/parcial)', path: ['alcance'] }
+  )
+  .refine(
+    (data) => data.tipo_origen !== 'reproductor' || (data.alcance == null && data.cantidad == null && data.codigo_lote_nuevo == null),
+    { message: 'Traslado de reproductor no debe traer alcance/cantidad/codigo_lote_nuevo', path: ['alcance'] }
+  )
+  .refine(
+    (data) => data.alcance !== 'parcial' || (data.cantidad != null && data.cantidad > 0 && !!data.codigo_lote_nuevo),
+    { message: 'Traslado parcial requiere cantidad > 0 y código del lote nuevo', path: ['cantidad'] }
+  )
+  .refine(
+    (data) => data.alcance !== 'completo' || (data.cantidad == null && data.codigo_lote_nuevo == null),
+    { message: 'Traslado completo no debe traer cantidad ni código de lote nuevo', path: ['cantidad'] }
+  );
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
+export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;
 export type MortalidadFotoInput = z.infer<typeof MortalidadFotoSchema>;
 export type PartoRegistroInput = z.infer<typeof PartoRegistroSchema>;
 export type MortalidadRegistroInput = z.infer<typeof MortalidadRegistroSchema>;

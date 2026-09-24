@@ -700,6 +700,76 @@
   preexistentes de siempre, sin relación con Pecuario. **Tarea cerrada**
   — sin merge a `main`.
 
+- **(2026-09-24) Traslado interno entre pozas/jaulas — PREPARADA y
+  verificada contra el esquema en vivo, NO aplicada todavía (a
+  propósito, por instrucción explícita del usuario):**
+  `PECUARIO_TRASLADOS` (registro/auditoría) + trigger
+  `trg_procesar_traslado` (`BEFORE INSERT`) que aplica el efecto real en
+  la misma transacción — traslado completo de un lote (actualiza
+  `poza_actual_id`, sin crear filas), traslado parcial con split (crea un
+  lote nuevo en la poza destino, descuenta `cantidad_actual` del lote
+  origen, fija `lote_nuevo_id`), o traslado de un reproductor
+  identificado (actualiza `jaula_actual_id`). Redactada por Claude
+  (Cowork) — gate de segunda revisión (§4.1.2) cubierto por autoría. Ver
+  `supabase/migrations/20260924100000_pecuario_traslado_interno.sql`.
+  **Hallazgo de esquema confirmado en vivo antes de escribir nada**
+  (pedido explícito del usuario): `PECUARIO_LOTES.poza_actual_id` y
+  `PECUARIO_REPRODUCTORES.jaula_actual_id` son ambas FK a
+  `PECUARIO_JAULAS(id)` — "poza" y "jaula" son la misma tabla — ya
+  documentado en `docs/schema_live_pecuario.md`, coincide exacto con el
+  esquema OpenAPI de PostgREST. `PECUARIO_TRASLADOS` no existe todavía en
+  la instancia real.
+  **2 hallazgos propios, sin cambiar ninguna columna/constraint
+  redactada:** (1) faltaba el wrapper `BEGIN;`/`COMMIT;` — agregado por
+  consistencia, sin riesgo (los 3 enums son `CREATE TYPE` nuevos, no
+  `ALTER TYPE ADD VALUE`, así que no aplica la restricción que forzó
+  partir en 2 archivos la migración de venta pelado); (2) ningún `CHECK`
+  exige `lote_nuevo_id IS NULL` cuando `alcance='completo'` (sí lo exige
+  para `tipo_origen='reproductor'`, pero no para ese caso de `lote`) —
+  señalado como comentario en la migración para la revisión manual, sin
+  agregar un `CHECK` nuevo (habría sido cambiar contenido pedido
+  textualmente).
+  **`specs/pecuario_traslado_interno.md` no existe en este repo**
+  (verificado con `git log --all` + búsqueda exhaustiva) — el prompt
+  daba por hecho que ya tenía un §7 actualizado. No bloqueó la tarea
+  porque la migración/Zod se entregaron completos y literales en el
+  prompt, pero el paso 7 (actualizar el header "Estado" de esa spec)
+  queda sin hacer — no se fabricó un archivo nuevo.
+  `TrasladoRegistroSchema` nuevo en `lib/validations/pecuario.ts` (ruta
+  real). Tests nuevos `tests/test_pecuario_traslado_interno.py`, usando
+  la organización real `GRANJA-VALENCIA` (pedido explícito) para los
+  casos de negocio — confirmado antes de escribir el archivo que esa
+  organización no tenía ninguna fila real en
+  `PECUARIO_JAULAS`/`PECUARIO_LOTES`/`PECUARIO_REPRODUCTORES` (0 filas en
+  las 3), así que todas las filas de los tests son descartables con
+  prefijo `TEST-`, nunca sobre datos preexistentes. 11 estáticos/Zod
+  pasan ya; 8 en vivo (completo, parcial con split, cantidad excedida,
+  destino de otra organización, origen=destino, traslado de reproductor,
+  `origen_jaula_id` ignorando lo que manda el cliente, aislamiento RLS
+  cruzado contra `GRANJA-VALENCIA`) escritos y listos, se auto-omiten
+  hasta la aplicación manual.
+  **Regresión propia detectada y corregida antes de commitear:** insertar
+  `TrasladoRegistroSchema` entre las dos secciones de Sanidad rompió 2
+  subtests de `tests/test_pecuario_venta_subproductos_guano.py`
+  (`test_venta_subproducto_no_tiene_campos_de_venta_animal`, campos
+  `animal_id`/`lote_id`) — ese test acota su verificación desde
+  `VentaSubproductoSchema` hasta un `export type` lejano en el bloque de
+  cola de tipos, así que cualquier schema nuevo insertado en el medio (el
+  mío fue el primero en declarar `lote_id`/`animal_id`) queda adentro del
+  slice sin ser lo que se quiere probar. Reordenado
+  `TrasladoRegistroSchema` a su propia sección (antes del bloque de cola,
+  como el resto de los schemas) y corregido el límite del slice de ese
+  test (y del mismo patrón en `test_pecuario_compras_gastos.py`, hallazgo
+  latente que no había fallado todavía) para que corte en la siguiente
+  definición de schema real, no en un `export type` compartido que crece
+  con cada tarea nueva. `python -m pytest tests/` completo, después del
+  fix: **687 passed, 16 skipped, 5 failed** — mismos 5 preexistentes de
+  siempre, sin relación con Pecuario. `npm run build`/`lint` limpios.
+  **Pendiente:** Neyser revisa y aplica la migración en Supabase Studio;
+  hecho eso, correr los 8 casos en vivo, actualizar el header de la spec
+  (una vez que exista) y cerrar con un commit final "aplicada y
+  verificada en vivo".
+
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

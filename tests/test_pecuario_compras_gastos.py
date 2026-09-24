@@ -163,8 +163,15 @@ class TestCompraSchemaContract(unittest.TestCase):
     def test_monto_total_no_se_envia_desde_cliente(self):
         # monto_total es GENERATED en la base -- nunca debe ser un campo
         # escribible del schema (evita mandarlo "desincronizado" del cálculo real).
+        # Acota al cuerpo de ESTE schema (hasta la siguiente definición de
+        # schema, no hasta su propio type export en el bloque de cola) --
+        # ese bloque crece con cada schema nuevo, y cualquier otro definido
+        # entre CompraSchema y su type export (varios ya, a partir de
+        # 2026-09-23) quedaría dentro del slice sin ser lo que se prueba
+        # acá (mismo hallazgo que rompió test_pecuario_venta_subproductos_guano.py
+        # con TrasladoRegistroSchema).
         schema_start = self.ts.index("export const CompraSchema")
-        schema_end = self.ts.index("export type CompraInput")
+        schema_end = self.ts.index("export const VentaSubproductoSchema")
         schema_body = self.ts[schema_start:schema_end]
         self.assertNotIn("monto_total:", schema_body)
 

@@ -1170,3 +1170,77 @@ sentencia real (`DROP TABLE public."..."`), no la mención.
 failed (mismos 5 preexistentes de siempre, sin relación con Pecuario).
 
 **Tarea cerrada.** Sin merge a `main` — decisión manual del usuario.
+
+---
+
+## 2026-09-24 — Traslado interno entre pozas/jaulas: preparada, y una regresión propia detectada + corregida antes de commitear
+
+`specs/pecuario_traslado_interno.md` no existe en este repo (el prompt
+decía que ya tenía un §7 actualizado) — verificado con `git log --all` +
+búsqueda exhaustiva, mismo hallazgo recurrente de esta sesión. No
+bloqueó nada porque el prompt entregó la migración y el Zod completos,
+literales, para copiar tal cual (con la instrucción explícita de no
+cambiar nombres de columnas/constraints). El paso 7 (actualizar el
+header "Estado" de esa spec) queda pendiente -- no se fabricó un archivo
+nuevo para poder tacharlo.
+
+**Verificado antes de escribir nada:** `PECUARIO_LOTES.poza_actual_id` y
+`PECUARIO_REPRODUCTORES.jaula_actual_id` son ambas FK a
+`PECUARIO_JAULAS(id)` (confirmado contra el esquema OpenAPI de
+PostgREST, coincide con `docs/schema_live_pecuario.md`) -- el hallazgo
+de esquema que sustenta todo el diseño. `PECUARIO_TRASLADOS` no existe
+todavía en la instancia real.
+
+**2 observaciones propias sobre la migración, sin tocar ningún
+nombre/constraint redactado:** (1) le agregué `BEGIN;`/`COMMIT;` (no lo
+traía) -- sin riesgo, los 3 enums son `CREATE TYPE` nuevos, no `ALTER
+TYPE ADD VALUE`; (2) señalé en un comentario, para la revisión manual,
+que ningún `CHECK` exige `lote_nuevo_id IS NULL` cuando `alcance=
+'completo'` (sí lo exige para `tipo_origen='reproductor'`) -- no agregué
+un `CHECK` nuevo, habría sido cambiar contenido pedido textualmente.
+
+**GRANJA-VALENCIA** (pedida explícitamente para los tests) es una
+organización real (`es_organizacion_prueba=false`) con **0 filas** hoy
+en `PECUARIO_JAULAS`/`PECUARIO_LOTES`/`PECUARIO_REPRODUCTORES` -- no hay
+"datos reales" preexistentes para usar. Usé esa organización de todos
+modos para las filas de los tests (todas con prefijo `TEST-`, creadas y
+borradas dentro de cada test, nunca sobre una fila preexistente), y
+`ORG-TEST-DEMO` (con su cuenta admin ya usada en el resto de la suite)
+como "otra organización" para el aislamiento RLS cruzado.
+
+**Regresión propia, detectada antes de commitear, no después:** al
+escribir `TrasladoRegistroSchema` lo inserté (primer intento) entre
+`SanidadRegistroSchema` y el bloque de cola de `export type` -- eso rompió
+2 subtests de `tests/test_pecuario_venta_subproductos_guano.py`
+(`test_venta_subproducto_no_tiene_campos_de_venta_animal`, campos
+`animal_id`/`lote_id`) porque ese test acota su verificación desde
+`VentaSubproductoSchema` hasta un `export type` lejano en el bloque de
+cola -- cualquier schema nuevo insertado en el medio queda dentro del
+slice. Confirmado corriendo la suite completa (no solo el archivo nuevo)
+antes de asumir que todo estaba bien -- así se encontró. Fix real: (1)
+reordené `TrasladoRegistroSchema` a su propia sección, antes del bloque
+de cola, como todos los demás schemas; (2) corregí el límite del slice
+de ese test (y del mismo patrón, todavía no roto, en
+`test_pecuario_compras_gastos.py::test_monto_total_no_se_envia_desde_cliente`)
+para que corte en la siguiente definición de schema real
+(`export const ...`), no en un `export type` compartido que crece con
+cada tarea nueva -- la misma fragilidad habría vuelto a romperse con la
+próxima adición a `lib/validations/pecuario.ts`, con cualquier campo
+`lote_id`/`animal_id`/`monto_total`, sin relación con lo que se está
+tocando en ese momento.
+
+`tests/test_pecuario_traslado_interno.py`: 11 estáticos/Zod pasan ya; 8
+en vivo (completo, parcial con split, cantidad excedida, destino de otra
+organización, origen=destino, traslado de reproductor,
+`origen_jaula_id` ignorando lo que manda el cliente, aislamiento RLS
+cruzado contra `GRANJA-VALENCIA`) escritos y listos, se auto-omiten
+limpio hasta la aplicación manual -- consistente con el paso 8 del
+prompt (no aplicar, eso queda para Neyser después de revisarla).
+
+`npm run build`/`lint` limpios. Suite completa después del fix: 687
+passed, 16 skipped, 5 failed -- mismos 5 preexistentes de siempre, sin
+relación con Pecuario.
+
+**Tarea cerrada** (en el sentido de "lista para revisión y aplicación
+manual", no "aplicada y verificada en vivo" -- eso queda pendiente,
+igual que el header de la spec). Sin merge a `main`.
