@@ -871,6 +871,18 @@ Ninguno es un bug de test.
 **No se tocó la migración ni el esquema** (instrucción explícita: "no
 la reescribas"; cambiar un tipo de columna o un trigger ya aplicados es
 una decisión que excede lo que se resuelve sin confirmación explícita).
-**Pendiente de decisión:** cast puntual en el trigger vs. corregir el
-tipo real de la columna — cualquiera de las dos vía una migración
-nueva de hotfix, aplicada a mano en Studio.
+
+**Decisión de Neyser (2026-09-26):** cast puntual y mínimo en el
+trigger, no un `ALTER` de la columna. Creado
+`supabase/migrations/20260926100000_pecuario_empadre_fix_config_cast.sql`
+(`CREATE OR REPLACE FUNCTION public.trg_historial_macho_validar()`,
+mismo cuerpo, único cambio: `("Config")::jsonb->'pecuario'->>'sistema_cria'`
+en vez de `"Config"->'pecuario'->>'sistema_cria'`). Confirmado antes de
+escribirlo que las 3 organizaciones reales existentes hoy tienen
+`Config IS NULL` — el cast es seguro ahora; si en el futuro alguna
+organización tiene un `Config` que no sea JSON válido, ese insert
+fallaría — riesgo aceptado explícitamente al elegir la opción mínima
+sobre corregir el tipo de columna de raíz. **Pendiente de aplicación
+manual en Supabase Studio (Neyser)** — una vez aplicado, corresponde
+re-correr `tests/test_pecuario_empadre_asignacion_macho.py -v -rs`
+contra la base real y actualizar este estado a `APLICADA` de verdad.

@@ -1644,3 +1644,26 @@ columna (`ALTER COLUMN "Config" TYPE jsonb USING "Config"::jsonb`, más
 invasivo, arregla también a `qcActions.js` de raíz)? Cualquiera de las
 dos requiere una migración nueva aplicada a mano en Studio -- no se
 puede resolver solo reescribiendo el archivo ya aplicado.
+
+---
+
+## Decisión de Neyser + hotfix creado (2026-09-26)
+
+Neyser eligió la opción mínima entre las 2 planteadas: cast puntual en
+el trigger, no corregir el tipo de columna de `ORGANIZACIONES."Config"`
+a nivel de esquema. Creado
+`supabase/migrations/20260926100000_pecuario_empadre_fix_config_cast.sql`
+(`CREATE OR REPLACE FUNCTION public.trg_historial_macho_validar()`,
+único cambio real: `("Config")::jsonb->'pecuario'->>'sistema_cria'` en
+vez de `"Config"->'pecuario'->>'sistema_cria'`). Confirmado por lectura
+(`supabase db query --linked`, ADR-042) que las 3 organizaciones reales
+tienen `Config IS NULL` hoy -- el cast es seguro ahora mismo. NO se
+aplicó desde acá -- pendiente de que Neyser lo aplique a mano en
+Studio. El hallazgo más amplio (¿`Config` debió ser `jsonb` desde su
+creación? ¿afecta a `lib/actions/qcActions.js`?) queda señalado, no
+resuelto -- fuera del alcance de esta decisión puntual.
+
+`tests/test_pecuario_empadre_asignacion_macho.py` no se modificó -- ya
+estaba escrito para el comportamiento correcto (post-hotfix); sus 6
+fallos actuales deben pasar a PASSED una vez aplicado el hotfix, sin
+tocar el archivo de test.
