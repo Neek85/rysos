@@ -875,6 +875,41 @@
   **Tarea cerrada** para ambos módulos, sin merge a `main`.
 
 
+- **(2026-09-25) Destete: recolección semanal + conformación de lotes por
+  sexo — código listo, migración NO aplicada todavía (pendiente Neyser en
+  Studio).** Reemplaza el estado en memoria del navegador del simulador
+  (`poolDestete`/`lotesDesteteFormados`) con 2 tablas persistentes
+  (`PECUARIO_RECOLECCIONES_DESTETE`, `PECUARIO_RECOLECCION_PARTOS`) + una
+  columna nueva en `PECUARIO_LOTES` (`recoleccion_origen_id`) + 2 triggers
+  server-side (`cantidad_incluida`/límite de remanente nunca confían en el
+  cliente) + `vw_pecuario_lactancia_restante` **reemplazada** (mismo
+  nombre/columna, ahora corta en la recolección en vez de en la
+  conformación del lote — hallazgo propio de Cowork, documentado en la
+  cabecera de la migración) + `vw_pecuario_recolecciones_destete` nueva.
+  `specs/pecuario_destete_recoleccion_semanal.md` creado (autorizado
+  explícitamente por el prompt) con nota de transparencia: solo tiene §10
+  (Backend), las secciones §1–§9 del simulador nunca se entregaron y no
+  se inventaron.
+  `tests/test_pecuario_destete_recoleccion.py`: **15/15 estático + Zod**,
+  **11 SKIPPED en vivo** (migración no aplicada, comportamiento esperado
+  en primera pasada). Un detalle documentado en el propio test: los 2
+  casos pedidos "recolectar el mismo parto 2 veces falla (UNIQUE global)"
+  y "parto sin lactancia pendiente falla (mensaje del trigger)" colapsan
+  en el mismo test/mecanismo — el propio trigger ya bloquea el 2do intento
+  antes de llegar a violar el `UNIQUE` (recolección completa o nada), así
+  que el `UNIQUE` queda como defensa en profundidad para una carrera
+  concurrente, no observable en un test secuencial.
+  `npm run lint` limpio (solo warnings preexistentes, sin relación).
+  `python -m pytest tests/ -v`: 606 passed, 148 skipped, 51 subtests
+  passed, **1 failed** —
+  `test_socio_creacion_atomica.py::TestMigrationFileStatic::test_no_grant_statement`,
+  confirmado preexistente (migración y test sin ningún cambio en esta
+  sesión, commit `1f936f9`), sin relación con Pecuario/Destete.
+  **Pendiente:** Neyser aplica la migración a mano en Supabase Studio;
+  hecho eso, correr `pytest tests/test_pecuario_destete_recoleccion.py -v`
+  contra la base real, pegar la salida literal, y solo entonces marcar
+  `docs/schema_live_pecuario.md` v12 como `APLICADA`.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

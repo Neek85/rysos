@@ -723,3 +723,68 @@ enfermo cuenta, vendido no; `sobre_capacidad` correcto en ambos
 sentidos; mortalidad de lactancia se descuenta en el resumen (org) pero
 NO en la ocupación de esa poza (asimetría documentada a propósito);
 aislamiento RLS cruzado en las 3 vistas.
+
+## Módulo Pecuario Cuyes — v12 (Destete: recolección semanal + conformación de lotes por sexo), CÓDIGO LISTO — pendiente de aplicación manual en Studio (2026-09-25)
+
+`supabase/migrations/20260925090000_pecuario_destete_recoleccion.sql`
+(`specs/pecuario_destete_recoleccion_semanal.md` §10 — el resto del
+documento, §1–§9, no existía en el repo y no fue reconstruido, ver nota
+de transparencia al inicio de ese archivo). Reemplaza el estado en
+memoria del navegador del simulador (`poolDestete`/
+`lotesDesteteFormados`) con dos fases persistentes:
+
+- `PECUARIO_RECOLECCIONES_DESTETE` — fila ancla por ronda de
+  recolección (fecha, organización), inmutable tras crearse.
+- `PECUARIO_RECOLECCION_PARTOS` — qué partos entraron en cada
+  recolección y cuánto de cada uno; `cantidad_incluida` siempre
+  calculada por `trg_recoleccion_partos_validar` desde
+  `vw_pecuario_lactancia_restante` en el momento del insert (nunca
+  confía en lo que manda el cliente); `UNIQUE(parto_id)` **global**, no
+  por recolección — un parto se recolecta completo o nada.
+- `PECUARIO_LOTES.recoleccion_origen_id` (columna nueva, nullable) — el
+  lote real que arma el Paso 2. `trg_conformar_lote_destete`
+  (`BEFORE INSERT` en `PECUARIO_LOTES`, no-op cuando
+  `recoleccion_origen_id IS NULL`, así que no interfiere con Traslado ni
+  con altas manuales) valida organización de la recolección y de la
+  poza destino, y que `cantidad_inicial` no supere el remanente real
+  (`recolectado - ya asignado en otros lotes de esa recolección`).
+  `CHECK chk_lotes_destete_sexo_definido` exige `sexo IN ('macho',
+  'hembra')` cuando `recoleccion_origen_id IS NOT NULL` (sin 'mixto').
+- `vw_pecuario_lactancia_restante` — **reemplazada** (`CREATE OR
+  REPLACE`, mismo nombre de vista y de columna `cantidad_destetada` por
+  compatibilidad con `vw_pecuario_ocupacion_poza`/
+  `vw_pecuario_poblacion_resumen`, que ya dependían de ella desde v11):
+  ahora suma desde `PECUARIO_RECOLECCION_PARTOS` en vez de
+  `PECUARIO_LOTES.parto_origen_id` — el corte real de "ya no está en
+  lactancia" es la **recolección** (Paso 1), no la conformación del
+  lote (Paso 2, que puede pasar días después y agrupa varios partos sin
+  atribución individual). `parto_origen_id` sigue existiendo en el
+  esquema; el flujo de Destete simplemente no lo usa.
+- `vw_pecuario_recolecciones_destete` (nueva) — recolectada, asignada,
+  pendiente y `estado` (`'abierta'`/`'cerrada'`, 100% calculado, nunca
+  un `UPDATE`) por recolección.
+
+Zod: `RecoleccionDestemteSchema`/`ConformarLoteDestemteSchema`
+(`lib/validations/pecuario.ts`). `cantidad_inicial ≤ remanente` no se
+valida en Zod a propósito — vive solo en `trg_conformar_lote_destete`
+(fuente de verdad única).
+
+**Escrito y verificado en estático** (`tests/test_pecuario_destete_recoleccion.py`,
+**15/15** estático+contrato Zod, **11 SKIPPED** en vivo — migración
+todavía no aplicada). Cubre: recolección calcula `cantidad_incluida`
+por trigger ignorando lo que manda el cliente; recolectar el mismo
+parto dos veces falla (el trigger bloquea antes de llegar a violar el
+`UNIQUE` — ver nota en el propio test); conformar lote baja
+`cantidad_pendiente`/sube `cantidad_asignada`; `cantidad_inicial` mayor
+al remanente rechazada; `sexo='mixto'` con `recoleccion_origen_id`
+rechazado por el `CHECK`; dos lotes consecutivos agotan el remanente y
+cierran la recolección sin `UPDATE` manual; un parto recolectado (sin
+lote conformado todavía) ya no aparece en `vw_pecuario_lactancia_restante`;
+aislamiento RLS cruzado de lectura/escritura; `PECUARIO_LOTES` con
+`recoleccion_origen_id`/`poza_actual_id` de otra organización
+rechazado.
+
+**Pendiente:** aplicación manual en Supabase Studio (Neyser). Una vez
+aplicada, re-correr `pytest tests/test_pecuario_destete_recoleccion.py -v`
+contra la base real y pegar la salida literal antes de marcar este
+módulo `APLICADA`.

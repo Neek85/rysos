@@ -1416,3 +1416,50 @@ reconfirmados sin existir -- no se fabricaron.
 
 **Tarea cerrada de verdad para ambos módulos** -- "aplicada y verificada
 en vivo", no solo "lista para revisión". Sin merge a `main`.
+
+---
+
+## Destete (recolección semanal + conformación de lotes por sexo) — código listo, migración NO aplicada (2026-09-25)
+
+Tarea nueva: `20260925090000_pecuario_destete_recoleccion.sql` (contenido
+exacto dado por el prompt, escrito verbatim, sin reescribir/"mejorar" por
+instrucción explícita), `specs/pecuario_destete_recoleccion_semanal.md`
+(nuevo, autorizado explícitamente a crear por el prompt -- solo tiene §10
+Backend, con nota de transparencia sobre las §1-§9 nunca entregadas),
+`RecoleccionDestemteSchema`/`ConformarLoteDestemteSchema` en
+`lib/validations/pecuario.ts` (insertados antes del bloque plano de
+`export type` final, aplicando la lección del bug de Guano de esta misma
+ronda), `tests/test_pecuario_destete_recoleccion.py` nuevo.
+
+**Hallazgo propio, documentado en el test:** de los 2 casos pedidos por
+separado ("recolectar el mismo parto 2 veces falla -- UNIQUE global" y
+"parto sin lactancia pendiente falla -- mensaje del trigger"), en un test
+secuencial (no concurrente) son la MISMA observación: tras la primera
+recolección completa, ese parto ya no aparece en
+`vw_pecuario_lactancia_restante` (se recolecta completo o nada, nunca
+parcial), así que el 2do intento siempre dispara el guard propio del
+trigger (`400`, antes de llegar a violar el `UNIQUE`). El `UNIQUE` queda
+como defensa en profundidad para una carrera concurrente real, no
+observable sin 2 transacciones corriendo en simultáneo -- no es un bug,
+es una limitación honesta de lo que un test secuencial puede probar.
+
+**Resultado:** `tests/test_pecuario_destete_recoleccion.py`: **15/15
+estático + contrato Zod**, **11 SKIPPED en vivo** (comportamiento
+esperado, migración todavía no aplicada). `npm run lint`: limpio, solo
+warnings preexistentes sin relación. `npm run build`: limpio.
+
+**`python -m pytest tests/ -v` completo: 606 passed, 148 skipped, 51
+subtests passed, 1 failed** --
+`test_socio_creacion_atomica.py::TestMigrationFileStatic::test_no_grant_statement`,
+confirmado preexistente y sin relación: ni esa migración
+(`fn_crear_socio_con_certificaciones`, commit `1f936f9`) ni ese test se
+tocaron en esta sesión (`git status --porcelain -uall` no los lista como
+modificados). No se investiga ni se corrige acá -- fuera del alcance de
+esta tarea (Destete/Pecuario).
+
+**Pendiente:** NO se aplicó la migración contra Supabase (ni acá ni con
+ningún script) -- eso lo hace Neyser a mano en Studio. Una vez que lo
+confirme, corresponde correr
+`pytest tests/test_pecuario_destete_recoleccion.py -v` contra la base
+real, pegar la salida literal, y solo entonces marcar
+`docs/schema_live_pecuario.md` v12 como `APLICADA`. Sin merge a `main`.

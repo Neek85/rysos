@@ -456,6 +456,56 @@ export const TrasladoRegistroSchema = z.object({
     { message: 'Traslado completo no debe traer cantidad ni código de lote nuevo', path: ['cantidad'] }
   );
 
+// ---------------------------------------------------------------------
+// Destete: recolección semanal + conformación de lotes por sexo
+// (Pecuario Cuyes) — 2026-09-25. Ver
+// specs/pecuario_destete_recoleccion_semanal.md §10 y
+// 20260925090000_pecuario_destete_recoleccion.sql.
+//
+// Dos fases persistentes: RecoleccionDestemteSchema valida el Paso 1
+// (recolectar uno o más partos completos, sin sexar); el trigger
+// trg_recoleccion_partos_validar es quien inserta la fila real por cada
+// parto_id en PECUARIO_RECOLECCION_PARTOS con cantidad_incluida
+// calculada del lado del servidor -- este schema solo valida la
+// intención del Server Action (fecha + la lista de partos_ids
+// elegidos), no una fila 1:1 de la tabla.
+//
+// ConformarLoteDestemteSchema valida el Paso 2 (repetible): un lote
+// real, sexado, con recoleccion_origen_id apuntando a la recolección de
+// origen. cantidad_inicial ≤ remanente disponible NO se valida acá a
+// propósito -- depende de una consulta en vivo a la recolección (cuánto
+// ya se asignó en otros lotes conformados antes), ese chequeo vive solo
+// en trg_conformar_lote_destete (fuente de verdad única), mismo
+// criterio que ya usa la guarda de Sanidad en este archivo (galpon_id
+// según alcance de la actividad).
+// ---------------------------------------------------------------------
+
+export const RecoleccionDestemteSchema = z.object({
+  id: z.string().uuid(),
+  ID_Organizacion: IdOrganizacionSchema,
+  fecha_destete: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  partos_ids: z.array(z.string().uuid()).min(1, 'Seleccioná al menos un parto para recolectar'),
+  device_id: z.string().min(1),
+  created_offline_at: z.string().datetime(),
+});
+
+export const ConformarLoteDestemteSchema = z.object({
+  id: z.string().uuid(),
+  ID_Organizacion: IdOrganizacionSchema,
+  recoleccion_origen_id: z.string().uuid(),
+  codigo_lote: z.string().min(1).max(50),
+  poza_actual_id: z.string().uuid(),
+  sexo: z.enum(['macho', 'hembra']),
+  cantidad_inicial: z.number().int().positive(),
+  fecha_destete: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  device_id: z.string().min(1),
+  created_offline_at: z.string().datetime(),
+  pesaje: z.object({
+    animales_muestreados: z.number().int().positive(),
+    peso_total_muestra_g: z.number().positive(),
+  }).optional().nullable(),
+});
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;
@@ -473,3 +523,5 @@ export type HistorialMachoInput = z.infer<typeof HistorialMachoSchema>;
 export type TratamientoInput = z.infer<typeof TratamientoSchema>;
 export type CompraInput = z.infer<typeof CompraSchema>;
 export type VentaSubproductoInput = z.infer<typeof VentaSubproductoSchema>;
+export type RecoleccionDestemteInput = z.infer<typeof RecoleccionDestemteSchema>;
+export type ConformarLoteDestemteInput = z.infer<typeof ConformarLoteDestemteSchema>;
