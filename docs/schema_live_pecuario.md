@@ -819,3 +819,58 @@ Secrets reales) este archivo es un no-op seguro. Efecto colateral
 esperado: los tests en vivo de **todo** el repo (no solo Destete) ahora
 corren de verdad en cualquier entorno local con `.env.local` completo,
 en vez de skippear silenciosamente.
+
+## Módulo Pecuario Cuyes — v13 (Empadre: "Asignar macho a jaula" + retiro pendiente), APLICADA pero ROTA — hotfix pendiente (2026-09-26)
+
+`supabase/migrations/20260926090000_pecuario_empadre_asignacion_macho.sql`
+(`specs/pecuario_sistema_empadre.md` referenciada, no existe en este
+repo — no se fabrica, por instrucción explícita de esta tarea).
+`PECUARIO_RETIROS_MACHO_PENDIENTES` (nueva) + 2 triggers nuevos sobre
+`PECUARIO_HISTORIAL_MACHOS` (ya existente, v3): `trg_historial_macho_validar`
+(BEFORE INSERT: aislamiento multi-tenant, `macho_id` debe ser sexo
+macho, `fecha_salida` obligatoria si `Config->pecuario->sistema_cria`
+= `'controlado'`) y `trg_historial_macho_efectos` (AFTER INSERT: cierra
+la asignación previa del mismo macho en otra jaula, sincroniza
+`PECUARIO_REPRODUCTORES.jaula_actual_id`, crea el pendiente si
+`fecha_salida IS NOT NULL`) + `trg_resolver_retiro_macho_pendiente`
+(AFTER UPDATE en el pendiente, `resuelta` false→true: cierra el
+historial y limpia `jaula_actual_id` solo si el macho no fue reasignado
+mientras tanto) + `vw_pecuario_retiros_macho_pendientes` (reemplaza
+`RETIROS_MACHO_PENDIENTES`, estado en memoria del simulador). No hay
+contrato Zod nuevo — reutiliza `HistorialMachoSchema` (v3) sin cambios.
+
+**Ya está APLICADA en producción** — confirmado por `supabase db query
+--linked` (lectura, ADR-042): la tabla, la vista y los 3 triggers ya
+existen en `pg_trigger`/PostgREST, sin que esta tarea la aplicara.
+
+**BUG CRÍTICO CONFIRMADO, sin corregir todavía:**
+`trg_historial_macho_validar` usa `"Config"->'pecuario'->>'sistema_cria'`
+sobre `ORGANIZACIONES."Config"` — esa columna es **`text`, no
+`jsonb`** (confirmado por `information_schema.columns` y
+`pg_attribute`/`pg_type`). El operador `->` no existe para `text` →
+`ERROR 42883` en **todo** insert a `PECUARIO_HISTORIAL_MACHOS` que
+llegue hasta esa línea (confirmado con un insert real vía service role,
+org/sexo/jaula correctos). **"Asignar macho a jaula" está roto en
+producción para todas las organizaciones ahora mismo**, en cualquier
+modo (continuo o controlado) — solo los inserts que ya fallan antes
+(sexo≠macho, jaula de otra organización) siguen funcionando
+correctamente. Detalle completo, incluyendo una pista independiente de
+que `Config` puede haber sido `text` por error desde su creación
+(`lib/actions/qcActions.js` ya asume forma de objeto sin que nadie lo
+haya notado, porque JS no revienta con optional chaining sobre un
+string), en `AI_STATE.md`.
+
+**Verificado en vivo** (`tests/test_pecuario_empadre_asignacion_macho.py`):
+14 estático+contrato Zod passed, **4/10 en vivo passed** (los 2 casos
+de validación que fallan antes de llegar a la línea rota — sexo
+hembra, jaula de otra organización — más los 2 estático/contrato ya
+contados), **6/10 en vivo failed** — los 6 que necesitan un insert
+exitoso, todos por el mismo `operator does not exist: text -> unknown`.
+Ninguno es un bug de test.
+
+**No se tocó la migración ni el esquema** (instrucción explícita: "no
+la reescribas"; cambiar un tipo de columna o un trigger ya aplicados es
+una decisión que excede lo que se resuelve sin confirmación explícita).
+**Pendiente de decisión:** cast puntual en el trigger vs. corregir el
+tipo real de la columna — cualquiera de las dos vía una migración
+nueva de hotfix, aplicada a mano en Studio.

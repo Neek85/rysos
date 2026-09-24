@@ -1567,3 +1567,80 @@ existe en el nuevo modelo).
 passed**, 3 subtests passed, ninguno SKIPPED. `docs/schema_live_pecuario.md`
 v11 actualizado con una nota explicando el reemplazo. Ítem 6 (Destete)
 de la ronda queda cerrado de punta a punta, sin deuda pendiente.
+
+---
+
+## BLOQUEANTE CRÍTICO — Empadre (20260926090000) ya está APLICADA en producción y rompe TODO insert real (2026-09-26)
+
+**Hallazgo #1, antes de tocar nada:** al verificar el esquema en vivo
+(paso 2 de la tarea), `PECUARIO_RETIROS_MACHO_PENDIENTES` y
+`vw_pecuario_retiros_macho_pendientes` ya devuelven `200` por
+PostgREST, y los 3 triggers nuevos
+(`trg_historial_macho_validar`/`trg_historial_macho_efectos`/
+`trg_resolver_retiro_macho_pendiente`) ya existen en `pg_trigger`
+(confirmado por `supabase db query --linked`, lectura, ADR-042). La
+migración **ya fue aplicada** contra la base real -- el mismo patrón
+sorpresa de Traslado/Población en esta misma ronda (Neyser la aplicó
+antes de que yo empezara a trabajar, o en algún punto que no está en mi
+historial de esta conversación). El archivo de migración en el repo ya
+coincidía carácter por carácter con el diseño del prompt (con una única
+línea "Spec de referencia:" de más en la cabecera, inofensiva) -- no
+hubo ningún borrador propio para descartar.
+
+**Hallazgo #2, CRÍTICO -- confirmado con una prueba real, no
+especulación:** `trg_historial_macho_validar` usa
+`"Config"->'pecuario'->>'sistema_cria'` sobre
+`ORGANIZACIONES."Config"`. Confirmado dos veces por catálogo
+(`information_schema.columns` y `pg_attribute`/`pg_type`, lectura
+ADR-042): **esa columna es `text`, no `jsonb`/`json`.** El operador
+`->` no existe para `text` -- Postgres tira
+`ERROR 42883: operator does not exist: text -> unknown` en TODO insert
+a `PECUARIO_HISTORIAL_MACHOS` que llegue hasta esa línea (confirmado
+con un insert real, service role, org/sexo/jaula correctos: PostgREST
+devuelve HTTP 404 con `"code":"42883"`).
+
+**Alcance real: "Asignar macho a jaula" está roto en producción, para
+TODAS las organizaciones, ahora mismo.** Solo los inserts que fallan
+ANTES de llegar a esa línea (sexo≠macho, jaula de otra organización)
+siguen devolviendo el error correcto -- cualquier insert legítimo
+(misma organización, macho real, jaula real) revienta siempre, sin
+excepción, sea modo continuo o controlado.
+
+**Pista independiente de que esto es un defecto de esquema preexistente,
+no algo nuevo de esta migración:** `lib/actions/qcActions.js`
+(`resolveRadioContextoM`, línea ~115) ya lee
+`data?.Config?.gis?.radio_contexto_vecinos_m` desde JS asumiendo que
+`Config` llega como objeto -- con `Config` como `text`, PostgREST lo
+devuelve como string plano, y ese optional-chaining en JS simplemente
+cae en `undefined` en silencio (nunca truena, porque JS no valida tipos
+en runtime) -- por eso nadie lo notó antes: es la primera vez que algo
+intenta usar `Config` con el operador `->` real de SQL en vez de
+asumirlo en JS. Puede ser que `Config` **siempre debió ser `jsonb`** y
+quedó mal tipada desde su creación original (fuera del alcance de esta
+tarea rastrear cuándo).
+
+**NO se corrigió nada** -- ni la migración (instrucción explícita del
+prompt: "no la reescribas"), ni un cast puntual en el trigger, ni el
+tipo de columna. Cambiar el tipo de una columna ya en producción, o
+reescribir un trigger ya aplicado, es una decisión de esquema que
+excede lo que se puede resolver sin visto bueno explícito -- documentado
+acá en vez de seguir reintentando, tal como pide el propio prompt
+("si tras 2 intentos... detenete y documentá").
+
+`tests/test_pecuario_empadre_asignacion_macho.py`: 18 passed (14
+estático+Zod, 4 en vivo -- los 2 casos de validación que SÍ fallan
+antes de tocar Config, y los 2 estáticos/contrato), **6 failed en vivo**
+-- los 6 que necesitan un insert exitoso para poder verificar cualquier
+otra cosa, todos por el mismo `operator does not exist: text -> unknown`.
+Ninguno es un bug de test -- los 6 fallan exactamente donde debían,
+exponiendo el defecto real.
+
+**Pendiente de decisión antes de seguir:** ¿se corrige con un cast
+puntual en el trigger (`("Config")::jsonb->'pecuario'->>'sistema_cria'`,
+mínimo, pero solo funciona si todo valor real de `Config` ya es JSON
+válido -- hoy es `NULL` en las organizaciones reales, así que es seguro
+por ahora) vía una migración nueva de hotfix, o se corrige el tipo de
+columna (`ALTER COLUMN "Config" TYPE jsonb USING "Config"::jsonb`, más
+invasivo, arregla también a `qcActions.js` de raíz)? Cualquiera de las
+dos requiere una migración nueva aplicada a mano en Studio -- no se
+puede resolver solo reescribiendo el archivo ya aplicado.
