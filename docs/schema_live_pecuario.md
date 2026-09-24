@@ -905,8 +905,32 @@ Creado
 — `trg_retiro_macho_resuelta_en` (`WHEN (NEW.resuelta IS DISTINCT FROM
 OLD.resuelta)`): pone `resuelta_en := now()` al pasar a `true`, lo
 limpia a `NULL` al volver a `false`. No toca los 2 archivos anteriores.
-**Pendiente de aplicación manual en Supabase Studio (Neyser)** — una
-vez aplicado, corresponde re-correr
+Aplicado por Neyser en Studio — re-corrida: **23/24 passed**, pero
+apareció un **tercer bug**, más grave que los 2 anteriores porque es
+silencioso (no truena, `200 OK`, pero no hace nada de verdad).
+
+**Tercer bug confirmado** (con una prueba manual completa, no solo el
+test): `trg_resolver_retiro_macho_pendiente` decide con
+`IF v_fecha_salida_actual IS NULL THEN` si cerrar el historial de
+verdad. Pero un `PECUARIO_RETIROS_MACHO_PENDIENTES` solo se crea
+cuando `fecha_salida IS NOT NULL` al insertar — así que para cualquier
+fila con pendiente, esa condición nunca puede ser verdadera: es código
+muerto. "Marcar hecho" devuelve `200 OK` pero ni cierra
+`PECUARIO_HISTORIAL_MACHOS.fecha_salida` a `CURRENT_DATE` ni limpia
+`PECUARIO_REPRODUCTORES.jaula_actual_id` — el macho queda registrado
+en esa jaula para siempre, sin ningún error visible. La señal real
+para "nadie lo reasignó todavía" no es "`fecha_salida IS NULL`" (nunca
+aplica), sino comparar contra `fecha_retiro_planificada` (la copia
+guardada al crear el pendiente). Detalle completo en `AI_STATE.md`.
+
+**Decisión de Neyser (2026-09-26):** cambiar solo la condición.
+Creado
+`supabase/migrations/20260926120000_pecuario_empadre_fix_condicion_resolver.sql`
+— `CREATE OR REPLACE FUNCTION trg_resolver_retiro_macho_pendiente()`,
+único cambio: `IF v_fecha_salida_actual = NEW.fecha_retiro_planificada`
+en vez de `IS NULL`. Mismo cuerpo de ambas ramas. No toca los 3
+archivos anteriores. **Pendiente de aplicación manual en Supabase
+Studio (Neyser)** — una vez aplicado, corresponde re-correr
 `tests/test_pecuario_empadre_asignacion_macho.py -v -rs` contra la
 base real y solo entonces marcar este módulo `APLICADA` de verdad
 (24/24).

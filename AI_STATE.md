@@ -1728,3 +1728,68 @@ que Neyser lo aplique a mano en Studio.
 `tests/test_pecuario_empadre_asignacion_macho.py` no se modificó -- ya
 estaba escrito para el comportamiento correcto, sus 2 fallos actuales
 deben pasar a PASSED una vez aplicado este segundo hotfix.
+
+---
+
+## Tercer bug confirmado en Empadre, tras aplicar el hotfix #2 de resuelta_en (2026-09-26)
+
+Neyser aplicó `20260926110000_pecuario_empadre_fix_resuelta_en.sql`.
+Re-corrida: **23/24 passed** (resolvió el bug de `resuelta_en`), pero
+queda **1 fallo**, un tercer defecto real y confirmado con una prueba
+manual completa (no solo el test):
+
+`trg_resolver_retiro_macho_pendiente` decide si cerrar de verdad el
+historial con `IF v_fecha_salida_actual IS NULL THEN ...`. Pero un
+`PECUARIO_RETIROS_MACHO_PENDIENTES` **solo se crea** cuando
+`NEW.fecha_salida IS NOT NULL` al insertar (`trg_historial_macho_efectos`,
+punto (c)) -- así que para CUALQUIER fila que tenga un pendiente
+asociado, `fecha_salida` **nunca puede ser NULL** en el momento de
+resolver (empezó con un valor y nada la vuelve a poner en NULL). El
+`IF` es código muerto para el caso que se supone debe manejar: siempre
+toma la rama implícita de "no hacer nada" -- ni cierra
+`PECUARIO_HISTORIAL_MACHOS.fecha_salida` a `CURRENT_DATE`, ni limpia
+`PECUARIO_REPRODUCTORES.jaula_actual_id`. Confirmado con una prueba
+manual completa (insert con `fecha_salida='2026-12-31'` → resolver
+pendiente → `PATCH` devuelve `200` pero **ambos** campos quedan
+exactamente igual que antes -- "Marcar hecho" parece funcionar (200 OK)
+pero no hace nada de verdad, el macho queda registrado en esa jaula
+para siempre).
+
+**Causa raíz exacta:** la intención real de ese `IF` era distinguir
+"todavía activo, nadie lo reasignó" de "ya reasignado antes de resolver
+el pendiente" -- pero la única señal disponible para eso NO es
+"`fecha_salida IS NULL`" (que nunca aplica acá), sino comparar
+`fecha_salida` actual contra `fecha_retiro_planificada` (la copia que
+`PECUARIO_RETIROS_MACHO_PENDIENTES` guarda al crearse el pendiente):
+si siguen siendo iguales, nadie lo tocó desde entonces → cerrar de
+verdad ahora; si ya son distintas, es porque
+`trg_historial_macho_efectos` punto (a) ya la sobrescribió al
+reasignar el macho a otra jaula → no tocar nada, solo resolver el
+pendiente (que es justamente el comportamiento correcto que SÍ
+funciona hoy, por casualidad, en el otro test que pasa
+-- `test_resolver_pendiente_viejo_no_toca_jaula_si_macho_ya_fue_reasignado`
+-- porque en ese caso el `IF` también es falso, y "no hacer nada" da la
+casualidad de ser lo correcto ahí; pero es el MISMO código el que falla
+en el caso "todavía activo").
+
+**No se corrigió nada todavía** -- mismo criterio que los 2 bugs
+anteriores. Fix propuesto: `CREATE OR REPLACE FUNCTION
+trg_resolver_retiro_macho_pendiente()` cambiando la condición a
+`IF v_fecha_salida_actual = NEW.fecha_retiro_planificada THEN` (en vez
+de `IS NULL`) -- mismo cuerpo del `IF`/`ELSE` ya escrito, solo cambia
+la condición.
+
+## Decisión de Neyser + hotfix #3 creado (2026-09-26)
+
+Neyser eligió la opción recomendada. Creado
+`supabase/migrations/20260926120000_pecuario_empadre_fix_condicion_resolver.sql`
+-- `CREATE OR REPLACE FUNCTION trg_resolver_retiro_macho_pendiente()`,
+único cambio: `IF v_fecha_salida_actual = NEW.fecha_retiro_planificada`
+en vez de `IF v_fecha_salida_actual IS NULL`. Mismo cuerpo de ambas
+ramas. No toca 20260926090000/20260926100000/20260926110000. NO se
+aplicó desde acá -- pendiente de que Neyser lo aplique a mano en
+Studio.
+
+`tests/test_pecuario_empadre_asignacion_macho.py` no se modificó -- su
+único fallo restante debe pasar a PASSED (24/24) una vez aplicado este
+tercer hotfix.
