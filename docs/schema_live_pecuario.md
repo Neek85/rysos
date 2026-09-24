@@ -577,3 +577,78 @@ lectura cruzada de un objeto sembrado en `COOP-AROMAS-VALLE` → `400`
 (RLS hace el objeto indistinguible de "no existe" para quien no tiene
 acceso); subida y lectura de la propia organización, ambas exitosas
 (`200`, bytes idénticos a los subidos).
+
+## Módulo Pecuario Cuyes — v9 (catálogo de actividades de Sanidad configurable), APLICADA (2026-09-23)
+
+`supabase/migrations/20260923130000_pecuario_sanidad_actividades_configurables.sql`
+(`specs/pecuario_sanidad_actividades_configurables.md` referenciada, pero
+nunca existió en este repo — mismo hallazgo que Guano/Mortalidad-fotos).
+**Decisión de arquitectura:** dos tablas, catálogo + transaccional, mismo
+patrón ya usado en Compras/Insumos.
+
+- `PECUARIO_ACTIVIDADES_SANIDAD` (catálogo por organización) —
+  columnas reales confirmadas en vivo: `id` (uuid pk), `ID_Organizacion`
+  (text NOT NULL, FK), `nombre` (varchar NOT NULL), `alcance` (enum nuevo
+  `alcance_actividad_sanidad`: `granja`/`galpon`, NOT NULL),
+  `frecuencia_dias` (integer NOT NULL, `CHECK > 0`), `activo` (boolean
+  NOT NULL default `true` — desactivar sin perder historial, nunca
+  borrado físico), `created_at`.
+- `PECUARIO_SANIDAD_REGISTROS` (transaccional, un registro por ejecución
+  de actividad) — `id`, `ID_Organizacion` (NOT NULL, FK), `actividad_id`
+  (uuid NOT NULL, FK a `PECUARIO_ACTIVIDADES_SANIDAD.id`, `ON DELETE
+  RESTRICT`), `galpon_id` (uuid, FK a `PECUARIO_GALPONES.id`, `ON DELETE
+  SET NULL` — obligatorio o prohibido según el `alcance` de la actividad,
+  ver trigger abajo), `fecha` (date NOT NULL, default `CURRENT_DATE`),
+  `producto_usado`/`responsable` (varchar), `observaciones` (text —
+  `responsable` es PII interna, nunca expuesta en `/trace/[lot_hash]`),
+  campos offline, `created_at`.
+- **Trigger `trg_validar_sanidad_registro_galpon`** (`BEFORE INSERT OR
+  UPDATE`): corrige en la base un bug real ya visto en el mockup
+  (`guardarActividadSanidad()` dejaba pasar `galpon_id` ausente/sobrante
+  según el alcance, produciendo registros corruptos) — rechaza
+  `alcance='galpon'` sin `galpon_id`, y rechaza `alcance='granja'` con
+  `galpon_id` presente. Probado en ambos sentidos en vivo.
+- RLS: mismo patrón `FOR ALL TO authenticated` en las 2 tablas, scoped
+  por `ID_Organizacion` (`auth_org_id()`). **Nota explícita de la
+  migración:** la restricción real "solo admin puede crear/editar
+  actividades del catálogo" (spec §4) no está en esta política — la web
+  no tiene sesión de Supabase Auth real hoy (llave `anon`), así que esa
+  restricción debe vivir en la Server Action correspondiente hasta que
+  exista login real en la web; se aplicará de lleno vía RLS por rol en
+  las apps móviles nuevas.
+
+**Reemplaza conceptualmente, sin `DROP`, a la v2 (2026-09-11):**
+`PECUARIO_CONTROL_SANITARIO` (desinfección, alcance `granja`) y
+`PECUARIO_LIMPIEZA_GALPON` (limpieza por galpón, alcance `galpon`)
+quedan marcadas `SUPERADA` vía `COMMENT ON TABLE` — no usar para
+escritura nueva, no eliminadas (`DROP TABLE` exige confirmación
+explícita fuera del flujo autónomo, §5). Verificado antes de migrar
+(CLI, 2026-09-23): **0 filas reales para `GRANJA-VALENCIA`** en ambas
+tablas (`Content-Range: */0`, `ID` de organización confirmado contra
+`ORGANIZACIONES`, sin otro candidato con "VALENCIA"/"GRANJA" en el
+nombre) — no requirió backfill hacia las tablas nuevas. Las vistas
+`vw_pecuario_desinfeccion_estado`/`vw_pecuario_limpieza_galpon_estado`
+(v2) también quedan marcadas `SUPERADA` vía `COMMENT ON VIEW` — grep
+exhaustivo en `app/`/`components/`/`lib/` confirmó **cero referencias**
+a ninguna de las dos, el frontend web no las consume.
+
+**Contrato Zod:** `SanidadActividadSchema`/`SanidadRegistroSchema`
+nuevos en `lib/validations/pecuario.ts` (ruta real). La guarda cruzada
+`galpon_id` según `alcance` **no se replica en Zod** — requiere
+consultar el catálogo (`actividad_id → alcance`), algo que Zod no
+resuelve sin una llamada async; esa regla vive solo en el trigger de la
+base como fuente de verdad única (el formulario debe repetirla en JS
+para feedback inmediato, pero eso es lógica de UI, no del contrato).
+
+**Verificado en vivo** (`tests/test_pecuario_sanidad_actividades.py`,
+**22/22**, incluido el test de aislamiento RLS cruzado dedicado que
+exige el system prompt para toda tarea que toque RLS — mismo patrón que
+`tests/test_pecuario_mortalidad_fotos.py`): `frecuencia_dias=0` rechazado
+por el `CHECK`; registro `alcance='granja'` con `galpon_id` rechazado por
+el trigger; registro `alcance='galpon'` sin `galpon_id` rechazado por el
+mismo trigger; ambos casos válidos (granja sin galpón, galpón con
+galpón) insertan correctamente; aislamiento RLS cruzado de lectura y de
+escritura en **ambas** tablas (una sesión de `ORG-TEST-DEMO` no ve ni
+puede insertar actividades/registros con `ID_Organizacion` de
+`COOP-AROMAS-VALLE`); escritura autenticada en la propia organización,
+en ambas tablas.

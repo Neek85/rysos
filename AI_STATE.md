@@ -1128,3 +1128,45 @@ posicionales a `assertEqual` (solo acepta hasta 3) — corregidos.
 failed (mismos 5 preexistentes de siempre, sin relación con Pecuario).
 
 **Tarea cerrada.** Sin merge a `main` — decisión manual del usuario.
+
+---
+
+## 2026-09-23 (continuación) — ADR-042 comiteado; Sanidad configurable aplicada y verificada (22/22), con el test RLS dedicado que faltaba
+
+Cowork redactó `docs/adr/ADR-042-supabase-db-query-linked-alcance-lectura.md`
+tras la confrontación de la entrada anterior — texto revisado, coincide
+con lo que confirmé en su momento (3 usos de `db query --linked` en
+Guano/Mortalidad-fotos, los 3 `SELECT`; token en Windows Credential
+Manager, no en un archivo del repo). No requirió correcciones.
+
+Antes de este mensaje, Neyser había pedido 3 cosas de solo lectura sobre
+Sanidad (columnas de `PECUARIO_CONTROL_SANITARIO`/`PECUARIO_LIMPIEZA_GALPON`,
+conteo real para `GRANJA-VALENCIA`, grep de las 2 vistas) — 0 filas en
+ambas tablas, 0 referencias en `app/`/`components/`/`lib/`. Con esa
+verificación ya hecha, Cowork redactó la migración de Sanidad + el Zod,
+y quedaron sin commitear (confirmado con `git status` antes de tocar
+nada: `supabase/migrations/20260923130000_...sql` sin trackear,
+`lib/validations/pecuario.ts` modificado, `ADR-042...md` sin trackear).
+
+**La migración ya estaba aplicada en vivo** (mismo patrón que Guano/
+Mortalidad-fotos) — confirmado columna por columna contra el esquema
+OpenAPI de PostgREST antes de escribir el test.
+
+**Faltaba el test dedicado de aislamiento RLS cruzado que pidió
+explícitamente el usuario** (mismo patrón que
+`tests/test_pecuario_mortalidad_fotos.py`) — escrito ahora:
+`tests/test_pecuario_sanidad_actividades.py`, 22/22 en vivo. Cubre
+aislamiento RLS cruzado de lectura y escritura en **ambas** tablas
+(`PECUARIO_ACTIVIDADES_SANIDAD`/`PECUARIO_SANIDAD_REGISTROS`), los 2
+sentidos de la guarda del trigger (`alcance='galpon'` sin `galpon_id`;
+`alcance='granja'` con `galpon_id`), el `CHECK` de `frecuencia_dias > 0`,
+y los 2 casos válidos. 1 bug propio en el primer intento, mismo patrón
+recurrente de esta sesión: `assertNotIn("DROP TABLE", self.sql.upper())`
+fallaba porque la cabecera de la migración menciona "DROP TABLE" en
+prosa (explicando por qué no se usa) — corregido para buscar la
+sentencia real (`DROP TABLE public."..."`), no la mención.
+
+`npm run build`/`lint` limpios. Suite completa: 676 passed, 8 skipped, 5
+failed (mismos 5 preexistentes de siempre, sin relación con Pecuario).
+
+**Tarea cerrada.** Sin merge a `main` — decisión manual del usuario.

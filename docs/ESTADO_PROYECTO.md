@@ -653,6 +653,53 @@
   skipped, 5 failed — mismos 5 preexistentes de siempre, sin relación con
   Pecuario. **Tarea cerrada** — sin merge a `main`.
 
+- **(2026-09-23) ADR-042 (alcance de `supabase db query --linked`) —
+  documentación de una contradicción real, sin cambios de código.**
+  Redactado por Claude (Cowork) tras confrontar a Claude Code CLI con la
+  contradicción entre su framing del 2026-09-22/23 ("sin vía técnica para
+  aplicar DDL", "capacidad recién descubierta") y el historial real del
+  propio `AI_STATE.md` (2026-09-03d/h/j — ADR-032/033/034 — y la nota
+  permanente `2026-09-03e`), que muestra `supabase db query --linked -f
+  <archivo>` usado para aplicar DDL real contra producción desde esa
+  fecha, como práctica recomendada, no como excepción puntual.
+  **Decisión:** lectura libre (`SELECT` inline vía `db query --linked`,
+  sin `-f`) queda permitida sin aprobación previa, igual que cualquier
+  otra consulta de solo lectura ya permitida vía PostgREST/Storage API;
+  escritura (con o sin `-f <archivo>`) sigue exigiendo, sin excepción,
+  paso manual del usuario (§4.1.4) — y además declaración previa
+  explícita si alguna IA/herramienta la estuviera considerando. No se
+  reescribe `AI_STATE.md`/ADRs viejos — quedan como registro real de lo
+  que pasó. Ver `docs/adr/ADR-042-supabase-db-query-linked-alcance-lectura.md`
+  para el texto completo.
+
+- **(2026-09-23) Catálogo de actividades de Sanidad configurable —
+  APLICADA y confirmada en vivo (22/22 tests, incluido el test de
+  aislamiento RLS cruzado dedicado que exige el system prompt):**
+  `PECUARIO_ACTIVIDADES_SANIDAD` (catálogo por organización: nombre,
+  alcance `granja`/`galpon`, `frecuencia_dias`, `activo` boolean — sin
+  borrado físico) + `PECUARIO_SANIDAD_REGISTROS` (transaccional, FK a la
+  actividad), con trigger `trg_validar_sanidad_registro_galpon` que
+  corrige en la base un bug real ya visto en el mockup (`galpon_id`
+  ausente/sobrante según el alcance). Redactada por Claude (Cowork) —
+  gate de segunda revisión (§4.1.2) cubierto por autoría. Ver
+  `supabase/migrations/20260923130000_pecuario_sanidad_actividades_configurables.sql`.
+  **Reemplaza conceptualmente** a `PECUARIO_CONTROL_SANITARIO`/
+  `PECUARIO_LIMPIEZA_GALPON` (v2, 2026-09-11) — verificado antes de migrar
+  (CLI): 0 filas reales para `GRANJA-VALENCIA` en ambas (sin necesidad de
+  backfill) y ningún archivo de `app/`/`components/`/`lib/` referencia
+  `vw_pecuario_desinfeccion_estado`/`vw_pecuario_limpieza_galpon_estado`
+  (el frontend web no las consume). Las tablas/vistas viejas **no se
+  eliminan** — quedan marcadas `SUPERADA` vía `COMMENT ON` (`DROP TABLE`
+  exige confirmación explícita fuera del flujo autónomo, §5).
+  Tests nuevos `tests/test_pecuario_sanidad_actividades.py`: 22/22 — 8
+  estáticos + 2 de contrato Zod + 12 en vivo, incluido el aislamiento RLS
+  cruzado de **ambas** tablas (lectura y escritura) que pedía
+  explícitamente el usuario, más los 2 sentidos de la guarda del trigger
+  y el `CHECK` de frecuencia positiva. `npm run build`/`lint` limpios.
+  `python -m pytest tests/`: 676 passed, 8 skipped, 5 failed — mismos 5
+  preexistentes de siempre, sin relación con Pecuario. **Tarea cerrada**
+  — sin merge a `main`.
+
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

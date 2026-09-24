@@ -350,6 +350,53 @@ export const MortalidadFotoSchema = z.object({
   created_offline_at: z.string().datetime(),
 });
 
+
+// ---------------------------------------------------------------------
+// v8 (2026-09-23): catálogo de actividades de Sanidad configurable por
+// organización — PECUARIO_ACTIVIDADES_SANIDAD (catálogo) +
+// PECUARIO_SANIDAD_REGISTROS (transaccional) — migración
+// 20260923130000_pecuario_sanidad_actividades_configurables.sql.
+// Reemplaza conceptualmente a los schemas de v2 que validan
+// PECUARIO_CONTROL_SANITARIO/PECUARIO_LIMPIEZA_GALPON — esas tablas no se
+// eliminaron (solo quedaron marcadas SUPERADA vía COMMENT ON), pero no
+// deben usarse para código nuevo: cualquier pantalla nueva de Sanidad
+// valida contra SanidadRegistroSchema.
+//
+// La validación cruzada "galpon_id obligatorio si la actividad es de
+// alcance 'galpon', prohibido si es 'granja'" (spec §9, bug real ya visto
+// en el mockup) NO se replica acá — requiere consultar el catálogo
+// (actividad_id -> alcance), algo que Zod no resuelve sin una llamada
+// async al backend. Esa guarda vive en la base de datos
+// (trg_validar_sanidad_registro_galpon, BEFORE INSERT/UPDATE) como fuente
+// de verdad única; el formulario debe repetir la misma regla en JS (ya
+// conoce el alcance de la actividad seleccionada) para dar feedback
+// inmediato, pero eso es lógica de UI, no de este contrato.
+// ---------------------------------------------------------------------
+
+export const SanidadActividadSchema = z.object({
+  id: z.string().uuid(),
+  ID_Organizacion: IdOrganizacionSchema,
+  nombre: z.string().min(1, 'El nombre de la actividad es requerido').max(100),
+  alcance: z.enum(['granja', 'galpon']),
+  frecuencia_dias: z.number().int().positive({ message: 'La frecuencia debe ser mayor a 0 días' }),
+  activo: z.boolean().default(true),
+});
+
+export const SanidadRegistroSchema = z.object({
+  id: z.string().uuid(),
+  ID_Organizacion: IdOrganizacionSchema,
+  actividad_id: z.string().uuid(),
+  galpon_id: z.string().uuid().optional().nullable(),
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  producto_usado: z.string().max(150).optional().nullable(),
+  responsable: z.string().max(150).optional().nullable(),
+  observaciones: z.string().optional().nullable(),
+  device_id: z.string().min(1),
+  created_offline_at: z.string().datetime(),
+});
+
+export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
+export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type MortalidadFotoInput = z.infer<typeof MortalidadFotoSchema>;
 export type PartoRegistroInput = z.infer<typeof PartoRegistroSchema>;
 export type MortalidadRegistroInput = z.infer<typeof MortalidadRegistroSchema>;
