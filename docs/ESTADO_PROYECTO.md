@@ -798,6 +798,55 @@
   (una vez que exista) y cerrar con un commit final "aplicada y
   verificada en vivo".
 
+- **(2026-09-24) Ficha de poza y cálculo real de Población total —
+  PREPARADA y verificada contra el esquema en vivo, NO aplicada todavía
+  (por instrucción explícita del usuario):** 3 vistas de solo lectura —
+  `vw_pecuario_lactancia_restante` (reemplaza el `CAMADAS_LACTANCIA`
+  cargado a mano del simulador, calculado en vivo desde
+  `PECUARIO_PARTOS`/`PECUARIO_LOTES.parto_origen_id`),
+  `vw_pecuario_ocupacion_poza` (ficha de poza: lotes, reproductores por
+  sexo, lactancia, total y `sobre_capacidad`) y
+  `vw_pecuario_poblacion_resumen` (los 4 números del Dashboard +
+  total general, por organización). Sin tablas/triggers/RLS de escritura
+  nuevos — sin contrato Zod (no hay ningún `INSERT`/`UPDATE` nuevo que
+  validar). Redactada por Claude (Cowork) — gate de segunda revisión
+  (§4.1.2) cubierto por autoría. Ver
+  `supabase/migrations/20260924110000_pecuario_poblacion_vistas.sql`.
+  **2 hallazgos de esquema confirmados en vivo antes de escribir nada**
+  (pedido explícito): `PECUARIO_LOTES.parto_origen_id` ya es FK real a
+  `PECUARIO_PARTOS` desde la v1 (contradice lo que la spec original
+  describía como "hueco de fondo"); `vw_pecuario_lotes_etapa` ya existe
+  con `etapa_calculada` — ambos confirmados contra el esquema OpenAPI de
+  PostgREST y ya documentados en `docs/schema_live_pecuario.md`. Ninguna
+  de las 3 vistas nuevas existe todavía en la instancia real.
+  **1 observación propia, sin cambiar contenido redactado:** agregado
+  `BEGIN;`/`COMMIT;` (no lo traía) — sin riesgo, la migración es
+  puramente `CREATE OR REPLACE VIEW`, sin ningún `CREATE TYPE`.
+  **`specs/pecuario_ficha_poza_y_calculo_poblacion.md` no existe en este
+  repo** (verificado con `git log --all` + búsqueda exhaustiva) — mismo
+  hallazgo recurrente de toda la sesión. No bloqueó la tarea porque la
+  migración se entregó completa y literal, pero el paso de actualizar el
+  header "Estado" de esa spec queda sin hacer — no se fabricó un archivo
+  nuevo.
+  Tests nuevos `tests/test_pecuario_poblacion_vistas.py`, usando
+  `GRANJA-VALENCIA` (mismo criterio que Traslado) para los casos de
+  negocio y `ORG-TEST-DEMO` para el aislamiento cruzado — 9
+  estáticos pasan ya (3 bugs propios del mismo patrón recurrente de esta
+  sesión, corregidos: `assertNotIn` demasiado amplios sobre menciones
+  legítimas en comentarios, y un conteo mal asumido); 11 en vivo (parto
+  nuevo, destete parcial, destete completo, invariante de
+  `total_poblacion` sin cambio con el destete, `etapa_calculada` vs.
+  columna cruda, reproductor enfermo/vendido, `sobre_capacidad`,
+  asimetría de mortalidad entre resumen y ocupación, aislamiento cruzado
+  en las 3 vistas) escritos y listos, se auto-omiten hasta la aplicación
+  manual. `npm run build`/`lint` limpios. `python -m pytest tests/`: 696
+  passed, 28 skipped, 5 failed — mismos 5 preexistentes de siempre, sin
+  relación con Pecuario.
+  **Pendiente:** Neyser revisa y aplica la migración en Supabase Studio;
+  hecho eso, correr los 11 casos en vivo, actualizar el header de la
+  spec (una vez que exista) y cerrar con un commit final "aplicada y
+  verificada en vivo".
+
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

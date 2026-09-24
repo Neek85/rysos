@@ -1290,3 +1290,73 @@ causado por esta tarea. `python -m pytest tests/ -v` (el comando
 documentado en `CLAUDE.md`) corre limpio, sin ese error de colección.
 
 `npm run build`/`lint` limpios.
+
+---
+
+## 2026-09-24 — Ficha de poza / cálculo de población: 3 vistas de solo lectura, y 3 bugs propios de nuevo, mismo patrón recurrente
+
+`specs/pecuario_ficha_poza_y_calculo_poblacion.md` no existe en este
+repo (verificado con `git log --all` + búsqueda exhaustiva, ninguna
+coincidencia) -- mismo hallazgo recurrente de toda la sesión. No
+bloqueó nada porque el prompt entregó la migración completa y literal;
+el paso de actualizar el header "Estado" de esa spec queda pendiente,
+no se fabricó el archivo.
+
+**Verificado antes de escribir nada** (pedido explícito): confirmado
+contra el esquema OpenAPI de PostgREST que `PECUARIO_LOTES.parto_origen_id`
+ya es FK real a `PECUARIO_PARTOS.id` desde la v1 -- contradice lo que la
+spec original (según el prompt) describía como "hueco de fondo" sin
+resolver; y que `vw_pecuario_lotes_etapa` ya existe con
+`etapa_calculada`. Ambos ya documentados en `docs/schema_live_pecuario.md`.
+Ninguna de las 3 vistas nuevas (`vw_pecuario_lactancia_restante`,
+`vw_pecuario_ocupacion_poza`, `vw_pecuario_poblacion_resumen`) existe
+todavía en la instancia real.
+
+**1 observación propia sobre la migración, sin tocar contenido
+redactado:** agregué `BEGIN;`/`COMMIT;` (no lo traía) -- sin ningún
+riesgo esta vez, la migración es puramente `CREATE OR REPLACE VIEW`, ni
+siquiera tiene un `CREATE TYPE` que pudiera generar el problema de
+"unsafe use of new value of enum type" visto en venta pelado.
+
+**3 bugs propios en el primer intento de `tests/test_pecuario_poblacion_vistas.py`,
+mismo patrón recurrente de toda la sesión** (`assertNotIn`/conteos
+demasiado amplios sobre menciones legítimas en comentarios, en vez de
+acotar a la sentencia SQL real):
+1. `test_filtro_organizacion_escrito_a_mano_en_las_3` esperaba 3
+   ocurrencias de `"auth_org_id()"`, encontró 4 -- el mensaje de
+   `RAISE EXCEPTION` del preflight también menciona
+   `public.auth_org_id()` en texto. Corregido para contar el patrón
+   real del filtro `WHERE` (`= public.auth_org_id() OR auth.role() =
+   'service_role'`), no el nombre de la función a secas.
+2. `test_no_reproduce_camadas_lactancia_calcula_desde_partos` esperaba
+   que `"CAMADAS_LACTANCIA"` no apareciera en ningún lado -- pero
+   aparece legítimamente en los comentarios explicando qué reemplaza
+   esta vista. Corregido para buscar una referencia real (`FROM`/`JOIN`
+   a esa tabla), no la mención.
+3. `test_reproductor_enfermo_cuenta_vendido_muerto_no` asumía que las
+   3 vistas filtraban `estado IN ('activo', 'enfermo')` -- en realidad
+   solo 2 lo hacen (`vw_pecuario_lactancia_restante` no toca
+   `PECUARIO_REPRODUCTORES` en absoluto). Conteo mal asumido al
+   escribir el test, no un hallazgo sobre la migración -- corregido a 2.
+
+`tests/test_pecuario_poblacion_vistas.py` (usando `GRANJA-VALENCIA`
+para los casos de negocio, `ORG-TEST-DEMO` para el aislamiento cruzado,
+mismo criterio que `tests/test_pecuario_traslado_interno.py`): 9
+estáticos pasan ya; 11 en vivo (parto nuevo con `cantidad_restante`
+completa, destete parcial, destete completo hace desaparecer el parto,
+invariante de `total_poblacion` idéntico antes/después de un destete
+completo, `etapa_calculada` -- no la columna cruda -- decide
+recría/engorde, reproductor enfermo cuenta y vendido no, `sobre_capacidad`
+en ambos sentidos, mortalidad de lactancia se descuenta en el resumen
+pero no en la ocupación por poza, aislamiento cruzado en las 3 vistas)
+escritos y listos, se auto-omiten limpio hasta la aplicación manual --
+consistente con el paso 7 del prompt (no aplicar, eso queda para Neyser
+después de revisarla).
+
+`npm run build`/`lint` limpios. `python -m pytest tests/ -v`: 696
+passed, 28 skipped, 5 failed -- mismos 5 preexistentes de siempre, sin
+relación con Pecuario.
+
+**Tarea cerrada** (en el sentido de "lista para revisión y aplicación
+manual", no "aplicada y verificada en vivo" -- eso queda pendiente,
+igual que el header de la spec). Sin merge a `main`.
