@@ -1360,3 +1360,59 @@ relación con Pecuario.
 **Tarea cerrada** (en el sentido de "lista para revisión y aplicación
 manual", no "aplicada y verificada en vivo" -- eso queda pendiente,
 igual que el header de la spec). Sin merge a `main`.
+
+---
+
+## 2026-09-24 (continuación) — Neyser aplicó Traslado y Población; 20/20 cada una, con 2 bugs propios más en Traslado
+
+Al pedido de correr `pytest tests/test_pecuario_traslado_interno.py -v`
+y `pytest tests/test_pecuario_poblacion_vistas.py -v`, ambas migraciones
+resultaron **ya aplicadas** (no lo estaban en el cierre anterior de
+ninguna de las 2 tareas) -- el usuario las aplicó en Studio entre
+tareas.
+
+**`test_pecuario_poblacion_vistas.py`: 20/20 a la primera**, sin ningún
+cambio necesario.
+
+**`test_pecuario_traslado_interno.py`: 2 bugs propios encontrados y
+corregidos, ninguno en la migración:**
+1. `_crear_lote()` usaba el mismo `codigo_lote` fijo
+   (`f"TEST-TRASLADO-{self.suffix}"`) en cada llamada, sin el
+   diferenciador (`len(self._cleanup)`) que sí tienen
+   `_crear_jaula`/`_crear_reproductor` -- `test_completo_con_lote_nuevo_id_falla_check`
+   crea 2 lotes en el mismo test y chocó con `409 Conflict` real (no un
+   fallo del `CHECK`, un duplicado de `codigo_lote`). Corregido
+   agregando el mismo diferenciador.
+2. Ese fix rompió a su vez `test_traslado_completo_cambia_poza_sin_crear_fila_nueva`,
+   que verificaba "no se creó ningún lote nuevo" buscando por el
+   `codigo_lote` exacto viejo (ya no coincide con el nuevo formato) --
+   corregido para verificar contando lotes en `poza_actual_id=destino`
+   en vez de por código, más robusto de cualquier forma.
+
+Tras los 2 fixes: **20/20 en ambos archivos**, comportamiento real
+confirmado (no solo "no falla" -- el trigger de Traslado mueve/parte
+lotes de verdad, las 3 vistas de Población calculan de verdad contra
+datos reales de `GRANJA-VALENCIA`).
+
+**`python -m pytest tests/` completo: 7 failed** -- 2 de ellos
+(`test_pecuario_ventas_insumos_v4.py::TestV4Live::test_categoria_insumo_ya_no_acepta_cama`
+y `test_trigger_recalcula_precio_total_desde_precio_unitario`) NUEVOS
+respecto al baseline de 5, pero **no son una regresión real**: la
+corrida completa tardó 12m42s (vs. ~7-8min habitual) y esos 2 tests
+dependen de `generate_link` de Supabase Auth -- exactamente el mismo
+patrón de rate-limit transitorio en corridas largas ya documentado en
+este mismo archivo para este mismo módulo (ver entrada de v4,
+2026-09-11: "2 de pecuario resultaron ser rate-limit transitorio... —
+confirmado pasando 2/2 en aislamiento"). Confirmado de nuevo acá:
+`pytest tests/test_pecuario_ventas_insumos_v4.py -v` en aislamiento →
+**12/12 passed**, sin tocar nada. Los 5 fallos restantes son los
+preexistentes de siempre.
+
+`specs/pecuario_traslado_interno.md`/`specs/pecuario_ficha_poza_y_calculo_poblacion.md`
+reconfirmados sin existir -- no se fabricaron.
+
+`docs/schema_live_pecuario.md` actualizado con las secciones v10
+(Traslado)/v11 (Población), ambas `APLICADA`.
+
+**Tarea cerrada de verdad para ambos módulos** -- "aplicada y verificada
+en vivo", no solo "lista para revisión". Sin merge a `main`.

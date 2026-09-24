@@ -847,6 +847,33 @@
   spec (una vez que exista) y cerrar con un commit final "aplicada y
   verificada en vivo".
 
+- **(2026-09-24, cierre) Traslado interno y Población real — Neyser
+  aplicó ambas migraciones en Studio; APLICADAS y confirmadas en vivo
+  (20/20 tests cada una).** Al recorrer los tests de ambas por pedido
+  del usuario, se encontraron y corrigieron 2 bugs propios en
+  `tests/test_pecuario_traslado_interno.py` (no en las migraciones): el
+  helper `_crear_lote()` reutilizaba el mismo `codigo_lote` en llamadas
+  repetidas dentro de un mismo test (`409 Conflict` real al correr
+  `test_completo_con_lote_nuevo_id_falla_check`, que crea 2 lotes) —
+  corregido agregándole el mismo diferenciador por llamada que ya usan
+  `_crear_jaula`/`_crear_reproductor`; eso a su vez rompió la
+  verificación de `test_traslado_completo_cambia_poza_sin_crear_fila_nueva`
+  (buscaba por el `codigo_lote` viejo, ya inexistente) — corregida para
+  verificar por `poza_actual_id` en vez de por código. `tests/test_pecuario_poblacion_vistas.py`
+  no necesitó ningún cambio, sus 20 tests pasaron limpios a la primera
+  contra las vistas ya aplicadas.
+  `python -m pytest tests/`: 7 failed en la corrida larga completa —
+  2 de ellos (`test_pecuario_ventas_insumos_v4.py::TestV4Live`) resultaron
+  ser el mismo rate-limit transitorio de `generate_link` de Supabase
+  Auth ya documentado en este archivo para corridas largas — confirmado
+  pasando 12/12 en aislamiento inmediatamente después. Los 5 restantes
+  son los preexistentes de siempre, sin relación con Pecuario.
+  `docs/schema_live_pecuario.md` actualizado con las secciones v10/v11
+  (ambas ya `APLICADA`).
+  **`specs/pecuario_traslado_interno.md`/`specs/pecuario_ficha_poza_y_calculo_poblacion.md`
+  siguen sin existir en este repo** — reconfirmado, no se fabricaron.
+  **Tarea cerrada** para ambos módulos, sin merge a `main`.
+
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

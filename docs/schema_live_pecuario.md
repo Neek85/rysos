@@ -652,3 +652,74 @@ escritura en **ambas** tablas (una sesión de `ORG-TEST-DEMO` no ve ni
 puede insertar actividades/registros con `ID_Organizacion` de
 `COOP-AROMAS-VALLE`); escritura autenticada en la propia organización,
 en ambas tablas.
+
+## Módulo Pecuario Cuyes — v10 (traslado interno entre pozas/jaulas), APLICADA (2026-09-24)
+
+`supabase/migrations/20260924100000_pecuario_traslado_interno.sql`
+(`specs/pecuario_traslado_interno.md` referenciada, pero nunca existió
+en este repo). `PECUARIO_TRASLADOS` (registro/auditoría) + trigger
+`trg_procesar_traslado` (`BEFORE INSERT`) que aplica el efecto real en
+la misma transacción: traslado completo de un lote (actualiza
+`poza_actual_id`, sin crear filas), traslado parcial con split (crea un
+lote nuevo en la poza destino con la cantidad trasladada, descuenta
+`cantidad_actual` del lote origen, fija `lote_nuevo_id`), o traslado de
+un reproductor identificado (actualiza `jaula_actual_id`). Un solo par
+`origen_jaula_id`/`destino_jaula_id` para ambos casos — "poza" y "jaula"
+son la misma tabla (`PECUARIO_JAULAS`). `origen_jaula_id` lo calcula
+siempre el trigger a partir del estado real, nunca confía en lo que
+mande el cliente. `CHECK chk_traslados_lote_nuevo_solo_parcial`
+(`lote_nuevo_id IS NULL OR alcance = 'parcial'`) agregado en una tarea
+de seguimiento, cerrando un gap señalado en la primera versión. RLS:
+mismo patrón `FOR ALL TO authenticated` scoped por `ID_Organizacion`.
+
+**Verificado en vivo** (`tests/test_pecuario_traslado_interno.py`,
+**20/20**): traslado completo mueve el lote sin crear fila nueva;
+traslado parcial crea el lote nuevo con la cantidad exacta y descuenta
+el origen; cantidad mayor a la disponible rechazada; `lote_nuevo_id`
+enviado junto con `alcance='completo'` rechazado por el `CHECK` nuevo;
+`destino_jaula_id` de otra organización rechazado; origen=destino
+rechazado (`CHECK`); `origen_jaula_id` calculado por el trigger,
+ignorando lo que manda el cliente; traslado de reproductor actualiza
+`jaula_actual_id`; aislamiento RLS cruzado (`ORG-TEST-DEMO` no ve
+traslados de `GRANJA-VALENCIA`).
+
+## Módulo Pecuario Cuyes — v11 (población real por poza/organización), APLICADA (2026-09-24)
+
+`supabase/migrations/20260924110000_pecuario_poblacion_vistas.sql`
+(`specs/pecuario_ficha_poza_y_calculo_poblacion.md` referenciada, pero
+nunca existió en este repo). 3 vistas de solo lectura — sin tablas,
+triggers ni RLS de escritura nuevos:
+
+- `vw_pecuario_lactancia_restante` — reemplaza el `CAMADAS_LACTANCIA`
+  cargado a mano del simulador; calculado en vivo desde
+  `PECUARIO_PARTOS`/`PECUARIO_LOTES.parto_origen_id`
+  (`cantidad_restante = n_vivos - SUM(cantidad_inicial de los lotes de
+  ese parto)`). No descuenta mortalidad de lactancia (`PECUARIO_MORTALIDAD`
+  no referencia `parto_id`, solo `poza_id` — no atribuible con certeza
+  entre partos concurrentes de la misma poza). Un parto totalmente
+  destetado desaparece de la vista.
+- `vw_pecuario_ocupacion_poza` — ficha de poza: lotes, reproductores
+  activos/enfermos por sexo, lactancia en curso, total, y
+  `sobre_capacidad` (total > `capacidad_max`).
+- `vw_pecuario_poblacion_resumen` — una fila por organización con los 4
+  números del Dashboard (Lactancia/Recría/Engorde/Reproductores) + el
+  total general. Recría/Engorde vienen de
+  `vw_pecuario_lotes_etapa.etapa_calculada`, no de la columna cruda. Acá
+  sí se descuenta mortalidad de lactancia (a nivel organización, sin
+  atribuir a poza/parto puntual).
+
+Reproductores con `estado='enfermo'` cuentan como presentes; solo
+`vendido`/`muerto` se excluyen.
+
+**Verificado en vivo** (`tests/test_pecuario_poblacion_vistas.py`,
+**20/20**): parto nuevo aparece con `cantidad_restante = n_vivos`;
+destete parcial baja `cantidad_restante` sin sacar el parto de la
+vista; destete completo sí lo saca; `total_poblacion` en el resumen
+queda **exactamente igual** antes y después de un destete completo
+(solo cambia lactancia→recría); un lote con `etapa='recria'` cruda pero
+`fecha_destete` de hace más de 56 días cuenta en `total_engorde`, no en
+`total_recria` (confirma que se usa `etapa_calculada`); reproductor
+enfermo cuenta, vendido no; `sobre_capacidad` correcto en ambos
+sentidos; mortalidad de lactancia se descuenta en el resumen (org) pero
+NO en la ocupación de esa poza (asimetría documentada a propósito);
+aislamiento RLS cruzado en las 3 vistas.

@@ -221,11 +221,15 @@ class TestTrasladoInternoLive(unittest.TestCase):
         return jaula_id
 
     def _crear_lote(self, poza_id, cantidad_actual=20, org=ORG_A):
+        # codigo_lote necesita un diferenciador por llamada (mismo criterio
+        # que _crear_jaula/_crear_reproductor) -- sin esto, un test que crea
+        # 2 lotes en la misma corrida choca por codigo_lote duplicado (visto
+        # en vivo: 409 Conflict en test_completo_con_lote_nuevo_id_falla_check).
         res = httpx.post(
             f"{SUPABASE_URL}/rest/v1/PECUARIO_LOTES",
             headers={**_service_headers(), "Content-Type": "application/json", "Prefer": "return=representation"},
             json={
-                "ID_Organizacion": org, "codigo_lote": f"TEST-TRASLADO-{self.suffix}",
+                "ID_Organizacion": org, "codigo_lote": f"TEST-TRASLADO-{self.suffix}-{len(self._cleanup)}",
                 "poza_actual_id": poza_id, "cantidad_inicial": cantidad_actual, "cantidad_actual": cantidad_actual,
             },
             timeout=30,
@@ -282,13 +286,17 @@ class TestTrasladoInternoLive(unittest.TestCase):
         lote = self._get_lote(lote_id)
         self.assertEqual(lote["poza_actual_id"], destino)
 
-        # No debe existir ningún otro lote además del original.
-        otros = httpx.get(
+        # No debe existir ningún otro lote además del original -- se
+        # confirma contando cuántos lotes quedaron en la poza destino
+        # (debe ser exactamente 1: el mismo lote_id, movido, no uno nuevo).
+        en_destino = httpx.get(
             f"{SUPABASE_URL}/rest/v1/PECUARIO_LOTES", headers=_service_headers(),
-            params={"codigo_lote": f"eq.TEST-TRASLADO-{self.suffix}"}, timeout=30,
+            params={"poza_actual_id": f"eq.{destino}"}, timeout=30,
         )
-        otros.raise_for_status()
-        self.assertEqual(len(otros.json()), 1, "Un traslado completo no debe crear ninguna fila nueva en PECUARIO_LOTES.")
+        en_destino.raise_for_status()
+        rows = en_destino.json()
+        self.assertEqual(len(rows), 1, "Un traslado completo no debe crear ninguna fila nueva en PECUARIO_LOTES.")
+        self.assertEqual(rows[0]["id"], lote_id)
 
     # ---- Traslado de lote, parcial (split) ----
 
