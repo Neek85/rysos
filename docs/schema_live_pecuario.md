@@ -724,7 +724,7 @@ sentidos; mortalidad de lactancia se descuenta en el resumen (org) pero
 NO en la ocupación de esa poza (asimetría documentada a propósito);
 aislamiento RLS cruzado en las 3 vistas.
 
-## Módulo Pecuario Cuyes — v12 (Destete: recolección semanal + conformación de lotes por sexo), CÓDIGO LISTO — pendiente de aplicación manual en Studio (2026-09-25)
+## Módulo Pecuario Cuyes — v12 (Destete: recolección semanal + conformación de lotes por sexo), APLICADA (2026-09-25)
 
 `supabase/migrations/20260925090000_pecuario_destete_recoleccion.sql`
 (`specs/pecuario_destete_recoleccion_semanal.md` §10 — el resto del
@@ -769,22 +769,34 @@ Zod: `RecoleccionDestemteSchema`/`ConformarLoteDestemteSchema`
 valida en Zod a propósito — vive solo en `trg_conformar_lote_destete`
 (fuente de verdad única).
 
-**Escrito y verificado en estático** (`tests/test_pecuario_destete_recoleccion.py`,
-**15/15** estático+contrato Zod, **11 SKIPPED** en vivo — migración
-todavía no aplicada). Cubre: recolección calcula `cantidad_incluida`
-por trigger ignorando lo que manda el cliente; recolectar el mismo
-parto dos veces falla (el trigger bloquea antes de llegar a violar el
-`UNIQUE` — ver nota en el propio test); conformar lote baja
-`cantidad_pendiente`/sube `cantidad_asignada`; `cantidad_inicial` mayor
-al remanente rechazada; `sexo='mixto'` con `recoleccion_origen_id`
-rechazado por el `CHECK`; dos lotes consecutivos agotan el remanente y
-cierran la recolección sin `UPDATE` manual; un parto recolectado (sin
-lote conformado todavía) ya no aparece en `vw_pecuario_lactancia_restante`;
-aislamiento RLS cruzado de lectura/escritura; `PECUARIO_LOTES` con
+**Verificado en vivo** (`tests/test_pecuario_destete_recoleccion.py`,
+**26/26** — 15 estático+contrato Zod, 11 en vivo, ninguno SKIPPED):
+recolección calcula `cantidad_incluida` por trigger ignorando lo que
+manda el cliente; recolectar el mismo parto dos veces falla (el trigger
+bloquea antes de llegar a violar el `UNIQUE` — ver nota en el propio
+test); conformar lote baja `cantidad_pendiente`/sube
+`cantidad_asignada`; `cantidad_inicial` mayor al remanente rechazada;
+`sexo='mixto'` con `recoleccion_origen_id` rechazado por el `CHECK`;
+dos lotes consecutivos agotan el remanente y cierran la recolección sin
+`UPDATE` manual; un parto recolectado (sin lote conformado todavía) ya
+no aparece en `vw_pecuario_lactancia_restante`; aislamiento RLS cruzado
+de lectura/escritura; `PECUARIO_LOTES` con
 `recoleccion_origen_id`/`poza_actual_id` de otra organización
 rechazado.
 
-**Pendiente:** aplicación manual en Supabase Studio (Neyser). Una vez
-aplicada, re-correr `pytest tests/test_pecuario_destete_recoleccion.py -v`
-contra la base real y pegar la salida literal antes de marcar este
-módulo `APLICADA`.
+**Nota de infraestructura de tests (2026-09-25):** hasta este módulo,
+los tests en vivo de todo el repo dependían de un `export` manual de
+`SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` en una
+terminal — no existía ningún `conftest.py` ni carga de `.env.local`. Se
+agregó `tests/conftest.py` (con `python-dotenv`, agregado a
+`requirements.txt`) que carga `.env.local` y resuelve
+`SUPABASE_URL`/`SUPABASE_ANON_KEY` con fallback a
+`NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY` (los nombres
+reales en `.env.local`, prefijados para el cliente Next.js);
+`SUPABASE_SERVICE_ROLE_KEY` ya coincidía sin prefijo. `load_dotenv()`
+nunca sobreescribe una variable ya presente en el entorno, así que en
+CI (que sí setea `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` como GitHub
+Secrets reales) este archivo es un no-op seguro. Efecto colateral
+esperado: los tests en vivo de **todo** el repo (no solo Destete) ahora
+corren de verdad en cualquier entorno local con `.env.local` completo,
+en vez de skippear silenciosamente.

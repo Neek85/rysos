@@ -875,9 +875,10 @@
   **Tarea cerrada** para ambos módulos, sin merge a `main`.
 
 
-- **(2026-09-25) Destete: recolección semanal + conformación de lotes por
-  sexo — código listo, migración NO aplicada todavía (pendiente Neyser en
-  Studio).** Reemplaza el estado en memoria del navegador del simulador
+- **(2026-09-25, cierre) Destete: recolección semanal + conformación de
+  lotes por sexo — Neyser aplicó la migración en Studio; APLICADA y
+  confirmada en vivo (26/26, ninguno SKIPPED).** Reemplaza el estado en
+  memoria del navegador del simulador
   (`poolDestete`/`lotesDesteteFormados`) con 2 tablas persistentes
   (`PECUARIO_RECOLECCIONES_DESTETE`, `PECUARIO_RECOLECCION_PARTOS`) + una
   columna nueva en `PECUARIO_LOTES` (`recoleccion_origen_id`) + 2 triggers
@@ -890,25 +891,35 @@
   explícitamente por el prompt) con nota de transparencia: solo tiene §10
   (Backend), las secciones §1–§9 del simulador nunca se entregaron y no
   se inventaron.
-  `tests/test_pecuario_destete_recoleccion.py`: **15/15 estático + Zod**,
-  **11 SKIPPED en vivo** (migración no aplicada, comportamiento esperado
-  en primera pasada). Un detalle documentado en el propio test: los 2
-  casos pedidos "recolectar el mismo parto 2 veces falla (UNIQUE global)"
-  y "parto sin lactancia pendiente falla (mensaje del trigger)" colapsan
-  en el mismo test/mecanismo — el propio trigger ya bloquea el 2do intento
-  antes de llegar a violar el `UNIQUE` (recolección completa o nada), así
-  que el `UNIQUE` queda como defensa en profundidad para una carrera
+  `tests/test_pecuario_destete_recoleccion.py`: **26/26** (15
+  estático+Zod, 11 en vivo — comportamiento real confirmado, no solo "no
+  falla"). Un detalle documentado en el propio test: los 2 casos pedidos
+  "recolectar el mismo parto 2 veces falla (UNIQUE global)" y "parto sin
+  lactancia pendiente falla (mensaje del trigger)" colapsan en el mismo
+  test/mecanismo — el propio trigger ya bloquea el 2do intento antes de
+  llegar a violar el `UNIQUE` (recolección completa o nada), así que el
+  `UNIQUE` queda como defensa en profundidad para una carrera
   concurrente, no observable en un test secuencial.
+
+  **Hallazgo de infraestructura, resuelto en el camino:** al intentar
+  correr los 11 tests en vivo por pedido de Neyser, se encontró que NO
+  existía ningún mecanismo persistente (`conftest.py`, dotenv) para
+  cargar `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY`
+  en los tests — toda corrida "en vivo" anterior de esta sesión dependía
+  de un `export` manual en una terminal ya cerrada. `.env.local` sí tenía
+  los 3 valores reales, pero las 2 primeras con prefijo
+  `NEXT_PUBLIC_` (para el cliente Next.js) que los tests no reconocían.
+  Se agregó `tests/conftest.py` (carga `.env.local` vía `python-dotenv`,
+  agregado a `requirements.txt`, con fallback de nombre para las 2
+  variables con prefijo) — no reescribe ningún test existente, no toca
+  ningún valor real, y es no-op seguro en CI (`load_dotenv()` nunca
+  sobreescribe una variable ya seteada). Efecto colateral esperado: los
+  tests en vivo de todo el repo ahora corren de verdad en cualquier
+  entorno local con `.env.local` completo.
   `npm run lint` limpio (solo warnings preexistentes, sin relación).
-  `python -m pytest tests/ -v`: 606 passed, 148 skipped, 51 subtests
-  passed, **1 failed** —
-  `test_socio_creacion_atomica.py::TestMigrationFileStatic::test_no_grant_statement`,
-  confirmado preexistente (migración y test sin ningún cambio en esta
-  sesión, commit `1f936f9`), sin relación con Pecuario/Destete.
-  **Pendiente:** Neyser aplica la migración a mano en Supabase Studio;
-  hecho eso, correr `pytest tests/test_pecuario_destete_recoleccion.py -v`
-  contra la base real, pegar la salida literal, y solo entonces marcar
-  `docs/schema_live_pecuario.md` v12 como `APLICADA`.
+  `docs/schema_live_pecuario.md` v12 actualizado a `APLICADA`.
+  **Tarea cerrada de verdad** — "aplicada y verificada en vivo", sin
+  merge a `main`.
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

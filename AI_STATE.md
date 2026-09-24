@@ -1463,3 +1463,75 @@ confirme, corresponde correr
 `pytest tests/test_pecuario_destete_recoleccion.py -v` contra la base
 real, pegar la salida literal, y solo entonces marcar
 `docs/schema_live_pecuario.md` v12 como `APLICADA`. Sin merge a `main`.
+
+---
+
+## conftest.py agregado + hallazgo de regresión real en Población (2026-09-25)
+
+Se agregó `tests/conftest.py` (carga `.env.local` vía `python-dotenv`,
+fallback `NEXT_PUBLIC_SUPABASE_URL`→`SUPABASE_URL`/
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`→`SUPABASE_ANON_KEY`) porque no existía
+ningún mecanismo persistente en el repo para cargar credenciales en los
+tests -- toda corrida "en vivo" anterior dependía de un `export` manual
+en una terminal ya cerrada (confirmado: no hay dotenv/conftest en
+ninguna parte del repo antes de este cambio).
+
+Efecto esperado: 148→8 SKIPPED (140 tests que antes se saltaban ahora
+corren de verdad). De esos 140: 133 pasan limpio, **7 fallan por
+primera vez** (más el 1 preexistente ya documentado,
+`test_no_grant_statement`, total 8 failed).
+
+**De esos 7, 3 son un hallazgo real, no ruido -- REGRESIÓN causada por
+la migración de Destete (20260925090000), confirmada determinística en
+aislamiento, no dato colgado de una corrida vieja:**
+
+`tests/test_pecuario_poblacion_vistas.py::TestPoblacionVistasLive`:
+- `test_destete_completo_hace_desaparecer_el_parto_de_la_vista`
+- `test_destete_parcial_baja_cantidad_restante_sin_hacer_desaparecer_el_parto`
+- `test_invariante_total_poblacion_no_cambia_con_destete_completo`
+
+Los 3 crean un lote con `parto_origen_id` seteado (`_crear_lote(...,
+parto_origen_id=parto_id)`) y esperan que
+`vw_pecuario_lactancia_restante` baje `cantidad_restante` en
+consecuencia -- ese era el contrato de v11 (2026-09-24). La migración
+de Destete (v12) **reemplazó intencionalmente** esa vista para que
+calcule `cantidad_destetada` desde `PECUARIO_RECOLECCION_PARTOS`, no
+desde `PECUARIO_LOTES.parto_origen_id` -- documentado en la cabecera de
+la propia migración como "hallazgo propio": el flujo real de Destete
+casi nunca puebla `parto_origen_id` (agrupa varios partos sin sexar).
+Consecuencia real, no un bug de test: **un lote creado con
+`parto_origen_id` (el único camino que v11 probaba) ya NO baja la
+lactancia restante** -- confirmado con datos frescos en cada corrida
+(`cantidad_destetada: 0` incluso tras crear 2 lotes que suman el total
+del parto). Si esa vía (`parto_origen_id` directo, sin pasar por
+Recolección/Conformación) sigue siendo un camino real de alta de lotes
+en algún flujo de la app -- no solo en los tests de v11 -- los números
+de población de esa organización quedarían sobreestimados hoy en
+`vw_pecuario_poblacion_resumen`/`vw_pecuario_ocupacion_poza` (lactancia
+que nunca baja).
+
+**No se tocó nada de esto todavía** -- decisión de producto, no un
+fix de test mecánico: o bien `parto_origen_id` directo queda
+confirmado como oficialmente reemplazado por el flujo de
+Recolección/Conformación (y entonces `test_pecuario_poblacion_vistas.py`
+se actualiza para reflejar el nuevo contrato, quizás re-probando el
+mismo invariante pero a través de una recolección real), o bien hay un
+uso legítimo de `parto_origen_id` directo que debía seguir funcionando
+y la vista de Destete necesita sumar AMBAS fuentes. Pendiente de
+decisión antes de tocar código.
+
+Los otros 4 failed nuevos son de módulos sin ninguna relación con
+Pecuario -- no investigados a fondo (fuera de alcance de esta tarea),
+tracebacks completos ya entregados al usuario en el chat:
+- `test_certificaciones_normalizadas.py` (x2): `400 Bad Request` /
+  `JSON could not be generated` en un `.in_("id_socio", socio_ids)`
+  contra `SOCIO_CERTIFICACIONES` -- huele a URL demasiado larga (muchos
+  UUIDs acumulados de corridas de test anteriores) o a un límite de
+  PostgREST, no confirmado.
+- `test_e2e_etl_drive.py::test_e2e_ingesta_real_supabase`: FK violation,
+  `ORG-TEST-E2E` no existe en `ORGANIZACIONES` -- falta un fixture/seed
+  de esa organización en la base real.
+- `test_multi_producto_cafe_cacao.py::test_backfill_las_parcelas_existentes_quedan_con_cafe`:
+  una `PADRON_PARCELAS` real tiene `id_producto_predominante = NULL` en
+  vez de CAFE -- backfill de esa migración vieja incompleto para al
+  menos 1 fila real.
