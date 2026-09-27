@@ -592,28 +592,36 @@ class TestPanelIndicadoresLive(unittest.TestCase):
         self.assertEqual(despues["madres_con_intervalo_calculado"], madres_antes + 1)
 
     def test_reemplazo_reproductoras_cuenta_altas_y_bajas_de_hembras(self):
-        # HALLAZGO REAL, sin corregir a propósito (ver AI_STATE.md,
-        # 2026-09-27): este test falla hoy contra la migración ya
-        # aplicada. La vista ancla su FROM en la CTE `activas`
-        # (estado IN ('activo','enfermo')) -- fn_dar_baja_animal_por_venta
-        # (trigger preexistente, no de esta migración) pone
-        # estado='vendido' en el animal vendido, así que una
-        # organización que vende su ÚNICA hembra activa desaparece por
-        # completo de esta vista (ni altas_hembras_12m ni
-        # bajas_hembras_12m se muestran, aunque ambos eventos ocurrieron).
-        # Queda fallando a propósito como evidencia del comportamiento
-        # correcto esperado, hasta que se decida un hotfix -- no es un
-        # bug de este test.
+        # Hotfix 2026-09-28
+        # (supabase/migrations/20260928110000_fix_pecuario_reemplazo_reproductoras_from.sql):
+        # antes de este fix, una organización que vendía su ÚNICA hembra
+        # activa desaparecía POR COMPLETO de esta vista (ver AI_STATE.md,
+        # 2026-09-27) -- fn_dar_baja_animal_por_venta (trigger preexistente,
+        # no de esta migración) le pone estado='vendido', sacándola de la
+        # CTE `activas`, en la que el FROM de la vista estaba anclado. El
+        # fix cambia el FROM para que la fila siga existiendo siempre, con
+        # hembras_activas_actual=0 y tasa_reemplazo_pct NULL (división por
+        # cero evitada con NULLIF -- nunca un 0% falso).
         antes = self._get_row_org("vw_pecuario_reemplazo_reproductoras_anual")
         altas_antes = antes.get("altas_hembras_12m", 0) or 0
         bajas_antes = antes.get("bajas_hembras_12m", 0) or 0
+        activas_antes = antes.get("hembras_activas_actual", 0) or 0
 
         hembra = self._crear_reproductor("hembra")
         self._crear_venta_animal(hembra, cantidad=1, precio_total=50, tipo_salida="reproductor_saca")
 
         despues = self._get_row_org("vw_pecuario_reemplazo_reproductoras_anual")
+        self.assertNotEqual(despues, {}, "La fila de la organización debe seguir existiendo aunque se venda la única hembra activa -- ese era exactamente el bug.")
         self.assertEqual(despues["altas_hembras_12m"], altas_antes + 1)
         self.assertEqual(despues["bajas_hembras_12m"], bajas_antes + 1)
+        # Se agregó una hembra activa y se vendió la misma -- el neto de
+        # hembras_activas_actual no cambia respecto al "antes".
+        self.assertEqual(despues["hembras_activas_actual"], activas_antes)
+        if activas_antes == 0:
+            # Caso límite exacto del bug: si la organización no tenía
+            # ninguna otra hembra activa, ahora queda en 0 -- la tasa debe
+            # ser NULL, nunca una división por cero ni un 0% falso.
+            self.assertIsNone(despues["tasa_reemplazo_pct"])
 
     # =====================================================================
     # Bloque C — Sanitarios
