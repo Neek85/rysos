@@ -1113,3 +1113,49 @@ ModuleNotFoundError: No module named 'scripts' — invocacion incorrecta,
 ya documentada en CLAUDE.md.
 
 Commit 401afcb. Sin merge a main.
+
+## v16 (2026-09-28) — Panel de indicadores (ítem 10 del roadmap, ÚLTIMO)
+
+**Estado: APLICADA.**
+
+Migraciones:
+- `20260928090000_pecuario_panel_indicadores_vistas.sql`
+- `20260928110000_fix_pecuario_reemplazo_reproductoras_from.sql`
+
+10 vistas de solo lectura nuevas. Cero tablas, columnas, triggers o CHECK
+nuevos — perfil de riesgo mínimo, solo agregación de lectura sobre datos
+que las migraciones anteriores (v1-v15) ya escriben.
+
+- **Bloque A (seguimiento/FCR):** `vw_pecuario_seguimiento_lote`,
+  `vw_pecuario_seguimiento_galpon`, `vw_pecuario_seguimiento_granja`.
+  Agregación galpón/granja "pooled" (ponderada por cantidad*días y por kg,
+  no promedio de promedios) — criterio de diseño de Cowork, no una regla
+  de negocio confirmada por Neyser.
+- **Bloque B (reproducción):** `vw_pecuario_reproduccion_mes`,
+  `vw_pecuario_intervalo_partos`, `vw_pecuario_reemplazo_reproductoras_anual`.
+- **Bloque C (sanitario):** `vw_pecuario_indicadores_sanitarios_mes`,
+  `vw_pecuario_incidencia_patologias`.
+- **Bloque D (productivo):** `vw_pecuario_pesos_promedio_mes`.
+- **Bloque E (comercial):** `vw_pecuario_ventas_mes`.
+
+Notas de esquema:
+- `PECUARIO_INSUMOS.unidad_medida` es `ENUM unidad_medida_insumo`
+  (`kg, g, litro, ml, unidad, saco_50kg, saco_40kg`), no `VARCHAR` —
+  cualquier filtro futuro sobre esa columna necesita `::text` para usar
+  operadores de texto (`ILIKE`, etc.).
+- `PECUARIO_INSUMOS` está vacía en producción (0 filas, cualquier
+  categoría, cualquier organización) al momento de este cierre — el
+  Bloque A a nivel galpón/granja devuelve 0 filas hasta que se cargue el
+  catálogo de insumos. `ganancia_diaria_g` a nivel lote no depende de
+  insumos.
+- `vw_pecuario_reemplazo_reproductoras_anual` (fix `20260928110000`): el
+  `FROM` está anclado en toda organización que alguna vez tuvo una hembra
+  reproductora (cualquier estado), no solo en las que tienen hembras
+  activas hoy — para que una organización sin hembras activas actualmente
+  siga apareciendo (`hembras_activas_actual=0`, `tasa_reemplazo_pct=NULL`)
+  en vez de desaparecer de la vista.
+
+Sin contrato Zod (solo lectura, sin Server Actions de Pecuario en este
+repo). Verificado en vivo: 25/25 tests propios, suite completa
+`5 failed, 840 passed, 8 skipped, 28 warnings, 84 subtests passed in
+1454.51s`, los 5 fallos ya catalogados y sin relación.

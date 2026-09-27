@@ -1046,6 +1046,22 @@
   20260927100000_pecuario_alerta_consanguinidad_config.sql, commit
   401afcb.
 
+- **2026-09-28 — Pecuario: Panel de indicadores (ítem 10/10 del roadmap,
+  ÚLTIMO) — CERRADO.** 10 vistas de solo lectura (seguimiento/FCR,
+  reproducción, sanitario, productivo, comercial), cero tablas/columnas/
+  triggers/CHECK nuevos. Commits: `6f27a00` → `592674a` (fix BEGIN/COMMIT)
+  → `0009e26` (fix escape `%%` en RAISE) → `e1f934a` (fix
+  `unidad_medida::text`, ENUM real vs VARCHAR asumido) → `178eaf7` (fix
+  FROM mal anclado en `vw_pecuario_reemplazo_reproductoras_anual`, mismo
+  bug-class que `vw_pecuario_poblacion_resumen`). Verificado en vivo
+  25/25 propios + suite completa sin fallos nuevos (`5 failed, 840 passed,
+  8 skipped`). Redactado y revisado por Claude (Cowork) de punta a punta
+  — gate de segunda revisión (§4.1.2) cubierto en el mismo flujo. Aplicado
+  manualmente por Neyser en Studio, nunca por la CLI (§4.1.4, reafirmado
+  explícitamente durante este cierre ante una instrucción ambigua). Sin
+  merge a `main`. **Con este ítem, el roadmap completo de Pecuario Cuyes
+  (mockup → backend, 10/10 ítems) queda cerrado.**
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
