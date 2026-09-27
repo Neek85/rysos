@@ -129,7 +129,7 @@ BEGIN
     RAISE EXCEPTION 'Falta PECUARIO_VENTAS (v1, 20260910...). Corré primero esa migración.';
   END IF;
   IF to_regclass('public.vw_pecuario_poblacion_resumen') IS NULL THEN
-    RAISE EXCEPTION 'Falta vw_pecuario_poblacion_resumen (20260924110000). Corré primero esa migración -- esta la reutiliza para los denominadores de % de mortalidad.';
+    RAISE EXCEPTION 'Falta vw_pecuario_poblacion_resumen (20260924110000). Corré primero esa migración -- esta la reutiliza para los denominadores de %% de mortalidad.';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'auth_org_id') THEN
     RAISE EXCEPTION 'Falta public.auth_org_id() (login real, Fase A). Prerrequisito del filtro manual de organización en estas vistas.';
