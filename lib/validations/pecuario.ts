@@ -208,6 +208,11 @@ export const ReproductorSchema = z.object({
   notas: z.string().max(500).optional().nullable(),
   device_id: z.string().min(1),
   created_offline_at: z.string().datetime(),
+  // Item 9 (2026-09-27): true si el técnico confirmó explícitamente el
+  // banner de advertencia (consanguinidad y/o jaula ya ocupada) al dar
+  // de alta este reproductor ya asignado a una jaula. Ver
+  // supabase/migrations/20260927100000_pecuario_alerta_consanguinidad_config.sql.
+  advertencia_confirmada: z.boolean().optional().default(false),
 });
 
 export const HistorialMachoSchema = z.object({
@@ -219,6 +224,9 @@ export const HistorialMachoSchema = z.object({
   fecha_salida: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(), // NULL = todavía activo en esa jaula
   device_id: z.string().min(1),
   created_offline_at: z.string().datetime(),
+  // Item 9 (2026-09-27): mismo criterio que ReproductorSchema.advertencia_confirmada,
+  // aplicado a la asignación de un macho a una jaula (Empadre).
+  advertencia_confirmada: z.boolean().optional().default(false),
 });
 
 // Exactamente un target (galpon_id/lote_id/animal_id) según el alcance
