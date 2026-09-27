@@ -1867,3 +1867,82 @@ sin que se haya pedido. Fix futuro sugerido, no implementado: comparar
 contra `SELECT CURRENT_DATE` del propio servidor (vía service role) en
 vez de `datetime.date.today()` local, o tolerar ±1 día en la
 aserción. Señalado para decidir aparte.
+
+---
+
+## Panel de indicadores — migración ya aplicada, 1 hallazgo real + 3 bugs de test corregidos (2026-09-27)
+
+Al confirmar el fix de `unidad_medida::text ILIKE 'kg'`, se descubrió que
+`20260928090000_pecuario_panel_indicadores_vistas.sql` **ya estaba
+aplicada en producción** (Neyser la corrió en Studio, encontró el bug
+del enum, Cowork lo corrigió, y quedó aplicada con el fix) -- los 17
+tests en vivo de `tests/test_pecuario_panel_indicadores.py`, hasta
+entonces SKIPPED, corrieron de verdad por primera vez. Resultado: 4
+fallos reales + 1 assert estático desactualizado.
+
+**3 eran bugs de mi propio test, confirmados y corregidos:**
+
+1. `test_solo_suma_alimento_en_kg` (estático) -- buscaba el string viejo
+   `i.unidad_medida ILIKE 'kg'`, ya no existe tras el fix del enum
+   (`::text ILIKE 'kg'`). Corregido el string buscado.
+2. `test_caso2_dos_pesajes_sin_alimento_en_rango...` -- esperaba
+   `fcr IS NULL` cuando no hay ningún movimiento de alimento en el
+   período. La vista en realidad devuelve `fcr = 0.00` en ese caso (la
+   fórmula solo devuelve `NULL` cuando la ganancia es `<= 0`, nunca por
+   alimento en cero) -- consistente con el propio comentario de la
+   vista ("datos_suficientes = false... el consumidor debe mostrar el
+   dato de galpón como referencia, nunca un cero" -- la vista ya admite
+   que puede devolver ese cero crudo, la responsabilidad de no
+   mostrarlo es del consumidor vía `datos_suficientes`). Corregido:
+   ahora se espera `fcr == 0.0` y se sigue verificando
+   `datos_suficientes is False`.
+3. `test_caso6_insumo_alimento_en_otra_unidad...` -- usaba `'sacos'`
+   como unidad_medida, asumiendo texto libre (documentación local
+   desactualizada). `unidad_medida` es un ENUM real
+   (`unidad_medida_insumo`: `kg, g, litro, ml, unidad, saco_50kg,
+   saco_40kg`) -- `'sacos'` no es un valor válido, un `INSERT` con ese
+   valor falla con 400 antes de llegar a probar nada. Corregido: usa
+   `'saco_50kg'` (valor real del enum).
+4. `test_pesos_promedio_destete_mes` -- creaba un lote con
+   `recoleccion_origen_id` apuntando a una recolección VACÍA (sin
+   ningún parto recolectado) -- `trg_conformar_lote_destete` (ítem 6,
+   Destete) rechaza correctamente ese insert
+   ("La cantidad del lote (10) supera el remanente disponible de la
+   recolección (0)"). Mi test se saltó el paso real de "recolectar" un
+   parto antes de conformar el lote. Corregido: ahora crea un parto real
+   con `n_vivos>=10`, lo recolecta (`PECUARIO_RECOLECCION_PARTOS`), y
+   solo entonces conforma el lote con `cantidad_inicial` dentro de lo
+   recolectado.
+
+**El 4to es un hallazgo real de la migración, NO corregido, dejado
+fallando a propósito como evidencia (mismo criterio que los 3 hotfixes
+de Empadre):**
+
+`test_reemplazo_reproductoras_cuenta_altas_y_bajas_de_hembras` --
+`vw_pecuario_reemplazo_reproductoras_anual` ancla su `FROM` en la CTE
+`activas` (`WHERE sexo='hembra' AND estado IN ('activo','enfermo')`).
+Confirmado con una prueba manual real: una organización que vende su
+**única** hembra reproductora activa (`tipo_salida='reproductor_saca'`)
+desaparece POR COMPLETO de la vista -- no queda ninguna fila, ni para
+`altas_hembras_12m` ni para `bajas_hembras_12m`, aunque ambos eventos
+sucedieron dentro de los últimos 12 meses. Causa raíz exacta: el
+trigger `fn_dar_baja_animal_por_venta` (preexistente, de una tarea
+anterior al roadmap de Pecuario, no de esta migración) pone
+`estado='vendido'` en el animal vendido -- eso la saca de `activas`, y
+como el `FROM`/`LEFT JOIN` de la vista está anclado en `activas`, sin
+ninguna fila ahí no hay fila para esa organización en absoluto,
+aunque `altas`/`bajas_venta` sí tendrían datos reales para mostrar.
+
+Esto es exactamente el escenario que una "tasa de reemplazo" más
+necesita mostrar (una organización que se quedó sin reproductoras
+activas tras una baja) -- y es el que queda invisible. Confirmado
+determinístico con una prueba manual (`hembra creada -> estado=activo
+-> vista muestra la fila` vs. `hembra creada + vendida -> estado=vendido
+-> vista NO muestra ninguna fila para esa organización`).
+
+**No se corrigió** -- es una decisión de diseño sobre el `FROM` de la
+vista (anclar en la UNIÓN de organizaciones con actividad en cualquiera
+de las 4 CTEs, no solo en `activas`), no algo que corresponda decidir
+sin confirmación explícita. El test queda tal cual, fallando a
+propósito, como evidencia de la conducta correcta esperada, hasta que
+se decida el hotfix.

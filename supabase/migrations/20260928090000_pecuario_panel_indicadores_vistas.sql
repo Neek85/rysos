@@ -82,6 +82,20 @@
 -- catálogo real de Granja Valencia usa 'kg' para alimento, pero se deja
 -- documentado por si se da de alta un insumo de alimento en otra unidad.
 --
+-- CORRECCIÓN DE ESQUEMA (2026-09-28, hallazgo real al aplicar en Studio):
+-- PECUARIO_INSUMOS.unidad_medida es un ENUM (unidad_medida_insumo) en la
+-- base real, no el VARCHAR(20) que asumía la copia local de la migración
+-- v2 (20260911090000) usada para diseñar esto -- ILIKE no tiene operador
+-- contra un enum sin castear (error 42883). Las 3 comparaciones de abajo
+-- usan unidad_medida::text ILIKE 'kg' -- el cast a texto funciona igual
+-- de bien sea VARCHAR o ENUM, así que no depende de resolver cuál de los
+-- dos es la copia desactualizada. Confirmado contra la base real (ver
+-- verificación al pie) que 'kg' es efectivamente uno de los valores del
+-- enum y el que usan los insumos de alimento reales de Granja Valencia
+-- antes de aceptar este cierre -- un enum con otro casing/valor (ej.
+-- 'Kg', 'kilogramo') habría dejado el filtro compilando pero sin
+-- matchear nunca, en silencio, sin ningún error que lo delate.
+--
 -- APROXIMACIÓN DOCUMENTADA SOBRE TASAS DE MORTALIDAD (%): el denominador
 -- (población en riesgo) se aproxima con la población ACTUAL de esa etapa
 -- (vw_pecuario_poblacion_resumen / conteo de reproductores activos), no
@@ -213,7 +227,7 @@ SELECT
         WHERE m.lote_id = l.id
           AND m.tipo_movimiento = 'salida'
           AND i.categoria = 'alimento'
-          AND i.unidad_medida ILIKE 'kg'
+          AND i.unidad_medida::text ILIKE 'kg'
           AND m.fecha BETWEEN per.fecha_pesaje_anterior AND per.fecha_pesaje_reciente
     ), 0) AS alimento_consumido_kg,
     -- Regla de "datos suficientes" (spec §2.5, versión 33 del simulador):
@@ -227,7 +241,7 @@ SELECT
         WHERE m.lote_id = l.id
           AND m.tipo_movimiento = 'salida'
           AND i.categoria = 'alimento'
-          AND i.unidad_medida ILIKE 'kg'
+          AND i.unidad_medida::text ILIKE 'kg'
           AND m.fecha BETWEEN per.fecha_pesaje_anterior AND per.fecha_pesaje_reciente
     )) AS datos_suficientes,
     -- FCR: alimento consumido (kg) / peso total ganado (kg) en el período.
@@ -245,7 +259,7 @@ SELECT
                 WHERE m.lote_id = l.id
                   AND m.tipo_movimiento = 'salida'
                   AND i.categoria = 'alimento'
-                  AND i.unidad_medida ILIKE 'kg'
+                  AND i.unidad_medida::text ILIKE 'kg'
                   AND m.fecha BETWEEN per.fecha_pesaje_anterior AND per.fecha_pesaje_reciente
             ), 0)
             / (((per.peso_promedio_reciente_g - per.peso_promedio_anterior_g) / 1000.0) * l.cantidad_actual),
@@ -610,6 +624,20 @@ GRANT SELECT ON public.vw_pecuario_ventas_mes TO authenticated;
 COMMIT;
 
 -- ---------------------------------------------------------------------
+-- Verificación PREVIA obligatoria (2026-09-28, antes de las de siempre) --
+-- confirmar el enum real de unidad_medida antes de confiar en el filtro:
+--
+-- SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+--   WHERE t.typname = 'unidad_medida_insumo' ORDER BY e.enumsortorder;
+--   -- confirmar que 'kg' (minúscula) es uno de los valores.
+-- SELECT DISTINCT unidad_medida FROM "PECUARIO_INSUMOS" WHERE categoria = 'alimento';
+--   -- confirmar que los insumos de alimento REALES de Granja Valencia
+--   -- (Forraje/Concentrado) efectivamente usan ese valor -- si alguno usa
+--   -- otro (ej. una unidad distinta a 'kg'), ese insumo específico
+--   -- quedaría fuera del FCR a propósito (ver limitación documentada
+--   -- arriba), pero necesita saberse ANTES de aceptar el cierre, no
+--   -- descubrirse después con un FCR que da más bajo de lo esperado.
+--
 -- Verificación rápida post-migración (ejecutar a mano en Studio):
 --
 -- SELECT * FROM vw_pecuario_seguimiento_lote WHERE "ID_Organizacion" = 'GRANJA-VALENCIA';
