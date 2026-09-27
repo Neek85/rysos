@@ -986,6 +986,51 @@
 
   **Tarea cerrada de verdad** — sin merge a `main`.
 
+- **(2026-09-27, cierre) Reglas configurables de reemplazo/descarte de
+  reproductoras — ítem 8 del roadmap, CERRADO.** Sugerencia automática
+  (nunca acción automática) cuando una reproductora identificada
+  alcanza el máximo de partos configurado (`PECUARIO_CONFIGURACION.max_partos_madre`)
+  o tiene una camada chica en su 1er o 2do parto
+  (`min_crias_vivas_parto_temprano`, renombrada desde
+  `min_promedio_crias_vivas` — el nombre original sugería un promedio;
+  la regla real es un umbral por-parto individual, confirmado por grep
+  que nada la consumía todavía). `PECUARIO_SUGERENCIAS_REEMPLAZO`
+  (nueva, `UNIQUE(reproductor_id, motivo)` + `ON CONFLICT DO NOTHING`
+  para que una sugerencia resuelta nunca reaparezca) + FK real
+  `PECUARIO_PARTOS.madre_id -> PECUARIO_REPRODUCTORES` (antes
+  "reservado, sin FK") + validación multi-tenant/sexo + motor de
+  reglas que solo corre cuando `madre_id` está identificado + `resuelta_en`
+  calculado por trigger + "Confirmar descarte" como único disparador
+  de `proposito='descarte'` (nunca automático) + vista para Alertas.
+  Reutiliza un solo schema Zod (`SugerenciaReemplazoAccionSchema`) para
+  las 2 acciones ("Confirmar descarte"/"Ignorar por ahora").
+
+  **Diagnóstico de solo lectura previo** (paso explícito del prompt,
+  `supabase db query --linked`, ADR-042, antes de escribir la
+  migración): 0 partos con `madre_id` huérfanos, 0 organizaciones con
+  fila de configuración — migración confirmada segura de aplicar antes
+  de tocar nada.
+
+  **Evidencia:** `tests/test_pecuario_reglas_reemplazo.py -v -rs`:
+  **28/28**, ninguno SKIPPED — cubre el rename, ambas reglas (máximo de
+  partos, camada chica 1ro/2do con el caso de "3er parto no dispara
+  nada nuevo" y el de dedup por `ON CONFLICT`), que solo cuenta
+  `n_vivos` nunca `n_muertos`, confirmar/ignorar con `resuelta_en`, el
+  `CHECK` de coherencia vía un insert directo que bypasea el trigger,
+  validación de `madre_id` (organización/sexo), aislamiento RLS
+  cruzado, y el caso poblacional sin `madre_id`. `npm run lint` limpio.
+  Suite general (2026-09-27): 793 passed, 8 skipped, 54 subtests
+  passed, 6 failed — los 5 preexistentes de siempre + 1 hallazgo de
+  huso horario en `test_pecuario_empadre_asignacion_macho.py` (ítem 7,
+  ya cerrado, sin relación con esta migración, documentado en
+  `AI_STATE.md`, no corregido por exceder el alcance de esta tarea).
+  Re-confirmada la misma lista de 6, sin ningún fallo nuevo, en una
+  corrida posterior pedida explícitamente para verificarlo.
+
+  `docs/schema_live_pecuario.md` v14 actualizado a `APLICADA`.
+
+  **Tarea cerrada de verdad** — sin merge a `main`.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

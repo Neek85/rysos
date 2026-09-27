@@ -961,3 +961,90 @@ ticket aparte, igual que el hallazgo más amplio de `Config`.
 
 **Tarea cerrada de verdad** — "aplicada y verificada en vivo", 3 bugs
 reales encontrados y corregidos el mismo día. Sin merge a `main`.
+
+## Módulo Pecuario Cuyes — v14 (Reglas configurables de reemplazo/descarte de reproductoras), APLICADA (2026-09-27)
+
+`supabase/migrations/20260927090000_pecuario_reglas_reemplazo_reproductoras.sql`
+(`specs/pecuario_reglas_reemplazo_reproductoras.md` referenciada, no
+existe en este repo — mismo hallazgo recurrente de toda esta ronda, no
+se fabrica). Sugerencia automática (nunca acción automática) cuando una
+reproductora identificada alcanza el máximo de partos configurado o
+tiene una camada chica en su 1er o 2do parto:
+
+- **Rename**: `PECUARIO_CONFIGURACION.min_promedio_crias_vivas` →
+  `min_crias_vivas_parto_temprano` — el nombre original sugería un
+  promedio; la regla real es un umbral por-parto individual (default
+  `2.0`, `NUMERIC(3,1)`, sin cambio de tipo). Confirmado por grep antes
+  de escribir la migración que nada en el código todavía consumía el
+  nombre viejo — rename seguro.
+- **`PECUARIO_SUGERENCIAS_REEMPLAZO`** (nueva) — `motivo`
+  (`max_partos_alcanzado` | `camada_chica_parto_temprano`), `estado`
+  (`pendiente` | `confirmada` | `ignorada`), `UNIQUE(reproductor_id,
+  motivo)` + `ON CONFLICT DO NOTHING` en el motor (abajo) para que una
+  sugerencia ya resuelta nunca reaparezca — el registro de la primera
+  detección queda inmutable. Los 2 motivos son independientes (una
+  misma reproductora puede tener ambos a la vez, divergencia menor y
+  documentada respecto al mockup original, que evaluaba uno solo).
+- **`PECUARIO_PARTOS.madre_id`** — FK real a `PECUARIO_REPRODUCTORES`
+  agregada (antes "reservado, sin FK"), guardada de forma no
+  bloqueante (`RAISE NOTICE` si hay huérfanos, no rompe la migración).
+  `trg_partos_validar_madre` (`BEFORE INSERT OR UPDATE`) exige que
+  `madre_id` sea de la misma organización y `sexo='hembra'`.
+- **Motor de reglas** (`trg_partos_evaluar_sugerencia_reemplazo`,
+  `AFTER INSERT` en `PECUARIO_PARTOS`, solo cuando `madre_id IS NOT
+  NULL` — alcance limitado a identificación individual activa): regla
+  1, total de partos de esa madre `>= max_partos_madre` (default `4`
+  si la organización no tiene fila propia en `PECUARIO_CONFIGURACION`
+  — hoy ninguna la tiene); regla 2, cualquiera de los 2 primeros
+  partos (por `fecha_parto`/`created_at`) con `n_vivos < min_crias_vivas_parto_temprano`
+  (default `2`) — nunca cuenta `n_muertos`.
+- **`resuelta_en`** calculado siempre por trigger
+  (`trg_sugerencia_reemplazo_resuelta_en`, `BEFORE UPDATE`), nunca por
+  el cliente — mismo criterio que `cantidad_incluida` (Destete) y
+  `resuelta_en` de `PECUARIO_RETIROS_MACHO_PENDIENTES` (Empadre).
+  `CHECK chk_sugerencia_reemplazo_resuelta_coherente` exige coherencia
+  entre `estado`/`resuelta_en`.
+- **"Confirmar descarte"** (`trg_sugerencia_reemplazo_confirmar_descarte`,
+  `AFTER UPDATE`, solo cuando `estado` pasa a `'confirmada'`) es el
+  **único** disparador de `PECUARIO_REPRODUCTORES.proposito='descarte'`
+  por esta funcionalidad — ningún trigger sobre `PECUARIO_PARTOS`
+  cambia `proposito` automáticamente, solo reacciona a la acción
+  explícita del técnico/admin. "Ignorar por ahora" (`estado='ignorada'`)
+  resuelve el pendiente sin tocar `proposito`.
+- **`vw_pecuario_sugerencias_reemplazo`** — para Alertas en Inicio y
+  ficha del reproductor, filtro de organización escrito a mano, mismo
+  patrón de siempre.
+
+Zod: `SugerenciaReemplazoAccionSchema`/`SugerenciaReemplazoAccionInput`
+(`lib/validations/pecuario.ts`) — un solo schema para "Confirmar
+descarte" e "Ignorar por ahora" (`{ reproductor_id, ID_Organizacion }`),
+difieren solo en qué Server Action las llama y qué `estado` escribe.
+
+**Diagnóstico de solo lectura previo** (`supabase db query --linked`,
+ADR-042, antes de aplicar nada): `total_partos_con_madre=0`,
+`madre_id_huerfanos=0`, `orgs_con_config=0` — migración segura de
+aplicar, sin ningún dato huérfano.
+
+**Verificado en vivo** (`tests/test_pecuario_reglas_reemplazo.py`,
+**28/28**, ninguno SKIPPED): rename de columna (la vieja ya no existe,
+la nueva sí con default `2.0`); parto que alcanza `max_partos_madre`
+crea la sugerencia `pendiente`; 1er y 2do parto con camada chica
+disparan la sugerencia, un 3er parto con camada chica no dispara nada
+nuevo (la regla es solo 1ro/2do); un 2do parto con camada chica cuando
+ya había una sugerencia pendiente del mismo motivo no duplica la fila
+(`UNIQUE`+`ON CONFLICT DO NOTHING`, se preserva el registro original);
+solo cuenta `n_vivos`, nunca `n_muertos`; "Confirmar descarte" setea
+`resuelta_en` y marca `proposito='descarte'`; "Ignorar" setea
+`resuelta_en` sin tocar `proposito`; un `INSERT` directo con
+`estado='confirmada'` sin `resuelta_en` (bypaseando el trigger) falla
+el `CHECK`; `madre_id` de otra organización o de sexo macho falla;
+aislamiento RLS cruzado en la vista; un parto sin `madre_id` (modo
+poblacional) no dispara nada. Suite general sin ningún fallo nuevo
+atribuible a esta migración (los 6 fallos de la corrida completa son
+los ya catalogados — certificaciones x2, e2e_etl_drive,
+multi_producto_cafe_cacao, `test_no_grant_statement`, y el de huso
+horario en `test_pecuario_empadre_asignacion_macho.py`, ítem 7 ya
+cerrado, sin relación).
+
+**Tarea cerrada de verdad** — "aplicada y verificada en vivo". Sin
+merge a `main`.
