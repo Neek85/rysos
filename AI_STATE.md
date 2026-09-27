@@ -1836,3 +1836,34 @@ anterior con `NEW.fecha_entrada`, sin la condición
 `fecha_salida` en filas con fecha planificada que todavía no se
 reasignaron, así que necesita su propia revisión de diseño, no un
 cambio mecánico.
+
+---
+
+## Hallazgo nuevo, fuera de alcance de esta tarea (Reglas de Reemplazo) — flakiness de huso horario en un test de Empadre (2026-09-26, ~20:17 hora local)
+
+Al correr la suite completa requerida por esta tarea (ítem 8), apareció
+**1 fallo nuevo** además de los 5 ya conocidos:
+`tests/test_pecuario_empadre_asignacion_macho.py::TestEmpadreAsignacionMachoLive::test_marcar_pendiente_resuelto_cierra_historial_y_limpia_jaula_actual`
+-- `AssertionError: '2026-09-27' != '2026-09-26'`.
+
+**Confirmado que NO es una regresión de los 3 hotfixes de Empadre** (ya
+verificados 24/24 en vivo, ítem 7 cerrado) -- es un desfasaje de huso
+horario entre esta máquina (hora local, `date`/`datetime.date.today()`
+= 2026-09-26 a las ~20:17) y el servidor de Supabase (UTC,
+`CURRENT_DATE`/`now()` = 2026-09-27 01:17 UTC -- ya cruzó la
+medianoche). El test compara `PECUARIO_HISTORIAL_MACHOS.fecha_salida`
+(seteada por el trigger con `CURRENT_DATE`, servidor, UTC -- correcto y
+diseñado así) contra `datetime.date.today()` (local, Python) -- durante
+la ventana de cada día en que el huso horario local todavía no llegó a
+medianoche pero UTC ya sí, ambas fechas difieren en 1 día y el test
+falla, sin que el trigger tenga ningún problema real. Reproducido 2
+veces en aislamiento, mismo resultado ambas veces (no es un flake de
+red/rate-limit).
+
+**No se corrige en esta tarea** -- pertenece a
+`tests/test_pecuario_empadre_asignacion_macho.py` (ítem 7, ya cerrado),
+tocarlo excede el alcance de esta tarea (ítem 8, Reglas de Reemplazo)
+sin que se haya pedido. Fix futuro sugerido, no implementado: comparar
+contra `SELECT CURRENT_DATE` del propio servidor (vía service role) en
+vez de `datetime.date.today()` local, o tolerar ±1 día en la
+aserción. Señalado para decidir aparte.

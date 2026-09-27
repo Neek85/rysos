@@ -506,6 +506,24 @@ export const ConformarLoteDestemteSchema = z.object({
   }).optional().nullable(),
 });
 
+// v12 (2026-09-27): Reglas de reemplazo/descarte de reproductoras --
+// migración 20260927090000_pecuario_reglas_reemplazo_reproductoras.sql.
+// Ver specs/pecuario_reglas_reemplazo_reproductoras.md §5.
+//
+// Un solo schema para las dos acciones ("Confirmar descarte" e "Ignorar
+// por ahora") -- misma forma exacta, difieren solo en qué Server Action
+// las llama y en qué valor de `estado` escribe el UPDATE
+// (confirmada/ignorada) sobre PECUARIO_SUGERENCIAS_REEMPLAZO. La spec
+// pide reproductor_id (no un id de sugerencia puntual) porque ambas
+// acciones son una decisión sobre EL ANIMAL, no sobre una regla
+// específica -- el Server Action actualiza en bloque todas las
+// sugerencias `pendiente` de ese reproductor (puede haber más de una
+// simultánea, ver nota de diseño en la migración §3).
+export const SugerenciaReemplazoAccionSchema = z.object({
+  reproductor_id: z.string().uuid(),
+  ID_Organizacion: IdOrganizacionSchema,
+});
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;
@@ -525,3 +543,4 @@ export type CompraInput = z.infer<typeof CompraSchema>;
 export type VentaSubproductoInput = z.infer<typeof VentaSubproductoSchema>;
 export type RecoleccionDestemteInput = z.infer<typeof RecoleccionDestemteSchema>;
 export type ConformarLoteDestemteInput = z.infer<typeof ConformarLoteDestemteSchema>;
+export type SugerenciaReemplazoAccionInput = z.infer<typeof SugerenciaReemplazoAccionSchema>;
