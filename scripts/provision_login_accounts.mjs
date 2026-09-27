@@ -98,6 +98,13 @@ const CUENTAS = [
     id_organizacion: 'ORG-TEST-DEMO',
     modo: 'password',
   },
+  {
+    email: 'dneyser5@gmail.com',
+    nombre_completo: 'Neyser Diaz Maldonado',
+    rol: 'admin',
+    id_organizacion: 'GRANJA-VALENCIA',
+    modo: 'invite',
+  },
 ].map((c) => CuentaAProvisionar.parse(c))
 
 // ── Buscar un auth.users existente por email (sin getUserByEmail) ─────
