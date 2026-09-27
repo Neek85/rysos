@@ -820,7 +820,12 @@ esperado: los tests en vivo de **todo** el repo (no solo Destete) ahora
 corren de verdad en cualquier entorno local con `.env.local` completo,
 en vez de skippear silenciosamente.
 
-## Módulo Pecuario Cuyes — v13 (Empadre: "Asignar macho a jaula" + retiro pendiente), APLICADA pero ROTA — hotfix pendiente (2026-09-26)
+## Módulo Pecuario Cuyes — v13 (Empadre: "Asignar macho a jaula" + retiro pendiente), APLICADA (2026-09-26)
+
+Migraciones: `20260926090000` (original) + 3 hotfixes del mismo día —
+`20260926100000` (cast `Config` a `jsonb`), `20260926110000` (auto-completar
+`resuelta_en`), `20260926120000` (condición correcta al resolver). Las 4
+están aplicadas en Supabase Studio y verificadas en vivo.
 
 `supabase/migrations/20260926090000_pecuario_empadre_asignacion_macho.sql`
 (`specs/pecuario_sistema_empadre.md` referenciada, no existe en este
@@ -929,8 +934,30 @@ Creado
 — `CREATE OR REPLACE FUNCTION trg_resolver_retiro_macho_pendiente()`,
 único cambio: `IF v_fecha_salida_actual = NEW.fecha_retiro_planificada`
 en vez de `IS NULL`. Mismo cuerpo de ambas ramas. No toca los 3
-archivos anteriores. **Pendiente de aplicación manual en Supabase
-Studio (Neyser)** — una vez aplicado, corresponde re-correr
-`tests/test_pecuario_empadre_asignacion_macho.py -v -rs` contra la
-base real y solo entonces marcar este módulo `APLICADA` de verdad
-(24/24).
+archivos anteriores.
+
+**Aplicado por Neyser en Studio — verificado en vivo, 24/24**
+(`tests/test_pecuario_empadre_asignacion_macho.py -v -rs`, ninguno
+SKIPPED), incluyendo específicamente el caso "macho reasignado antes de
+marcar hecho el pendiente viejo, no debe tocar `jaula_actual_id`"
+(`test_resolver_pendiente_viejo_no_toca_jaula_si_macho_ya_fue_reasignado`).
+Suite general (`python -m pytest tests/ -v`, 2026-09-26): **766 passed,
+8 skipped, 54 subtests passed, 5 failed** — los mismos 5 preexistentes
+de siempre (`test_certificaciones_normalizadas.py` x2,
+`test_e2e_etl_drive.py`, `test_multi_producto_cafe_cacao.py`,
+`test_no_grant_statement`), sin ninguna relación con Pecuario/Empadre,
+sin ningún fallo nuevo — confirmado por Cowork. Ninguno de los 24 tests
+de Empadre aparece en esa lista.
+
+**Limitación conocida, señalada, no corregida en esta ronda** (ver
+`AI_STATE.md`): el paso (a) de `trg_historial_macho_efectos` solo
+cierra la fila anterior de `PECUARIO_HISTORIAL_MACHOS` cuando esa fila
+no tenía `fecha_salida` seteada — en modo `controlado` o en `continuo`
+con fecha planificada opcional, una reasignación deja esa fila vieja
+con su `fecha_salida` original stale (dato de auditoría impreciso).
+`PECUARIO_REPRODUCTORES.jaula_actual_id` sigue siempre correcto (se
+actualiza sin condición) — no afecta el comportamiento funcional,
+ticket aparte, igual que el hallazgo más amplio de `Config`.
+
+**Tarea cerrada de verdad** — "aplicada y verificada en vivo", 3 bugs
+reales encontrados y corregidos el mismo día. Sin merge a `main`.

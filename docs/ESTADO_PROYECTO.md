@@ -936,6 +936,56 @@
   **Tarea cerrada de verdad, sin deuda pendiente** — "aplicada y
   verificada en vivo", sin merge a `main`.
 
+- **(2026-09-26, cierre) Empadre: "Asignar macho a jaula" + retiro
+  pendiente — ítem 7 del roadmap, CERRADO.** `PECUARIO_RETIROS_MACHO_PENDIENTES`
+  (nueva) + 2 triggers sobre `PECUARIO_HISTORIAL_MACHOS` (validación
+  multi-tenant/sexo/modo controlado, efectos de cierre de asignación
+  previa + sincronización de `jaula_actual_id` + creación de
+  pendiente) + trigger de resolución + `vw_pecuario_retiros_macho_pendientes`.
+  Reutiliza `HistorialMachoSchema` (v3) sin crear ningún schema Zod
+  nuevo. La migración original (`20260926090000`) ya estaba aplicada en
+  producción antes de empezar esta tarea (Neyser la aplicó por fuera de
+  esta conversación) — confirmado por `supabase db query --linked`
+  (lectura, ADR-042).
+
+  **3 bugs reales encontrados y corregidos el mismo día**, cada uno
+  confirmado con una prueba real (no especulación) antes de tocar nada,
+  y cada hotfix decidido explícitamente por Neyser antes de escribirse
+  (nunca corregidos unilateralmente):
+  1. `ORGANIZACIONES."Config"` es `text`, no `jsonb` — el trigger de
+     validación usaba el operador `->` directo y rompía **todo** insert
+     legítimo con `42883`. Hotfix: cast puntual
+     (`("Config")::jsonb->...`), `20260926100000`.
+  2. `CHECK chk_retiros_macho_resuelta_coherente` exigía `resuelta_en`
+     al resolver un pendiente, pero nada lo calculaba — "Marcar hecho"
+     rompía con `23514`. Hotfix: trigger `BEFORE UPDATE` nuevo que lo
+     calcula server-side, `20260926110000`.
+  3. La condición `IF fecha_salida IS NULL` de
+     `trg_resolver_retiro_macho_pendiente` era código muerto (nunca
+     podía ser verdadera para una fila con pendiente) — "Marcar hecho"
+     devolvía `200 OK` pero no cerraba nada, en silencio, el bug más
+     grave de los 3 por no dar ningún error visible. Hotfix: comparar
+     contra `fecha_retiro_planificada`, `20260926120000`.
+
+  **Evidencia:** `tests/test_pecuario_empadre_asignacion_macho.py -v -rs`:
+  **24/24**, ninguno SKIPPED, incluyendo el caso puntual "macho
+  reasignado antes de marcar hecho el pendiente viejo no debe tocar
+  `jaula_actual_id`". Suite general: 766 passed, 8 skipped, 54 subtests
+  passed, 5 failed — los mismos 5 preexistentes de siempre, sin
+  relación con Pecuario, sin ningún fallo nuevo, confirmado por Cowork.
+  `docs/schema_live_pecuario.md` v13 actualizado a `APLICADA` con las 4
+  migraciones (original + 3 hotfixes).
+
+  **Limitación conocida, señalada, no corregida** (documentada en
+  `AI_STATE.md`): una reasignación de macho con `fecha_salida` ya
+  seteada (modo controlado, o continuo con fecha planificada) deja la
+  fila anterior de `PECUARIO_HISTORIAL_MACHOS` con su `fecha_salida`
+  original stale (dato de auditoría impreciso) — `jaula_actual_id`
+  sigue siempre correcto, no afecta el comportamiento funcional. Ticket
+  aparte, igual que el hallazgo más amplio de `Config`.
+
+  **Tarea cerrada de verdad** — sin merge a `main`.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

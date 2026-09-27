@@ -1793,3 +1793,46 @@ Studio.
 `tests/test_pecuario_empadre_asignacion_macho.py` no se modificó -- su
 único fallo restante debe pasar a PASSED (24/24) una vez aplicado este
 tercer hotfix.
+
+---
+
+## Limitación conocida, no corregida (2026-09-26) — auditoría stale de PECUARIO_HISTORIAL_MACHOS al reasignar
+
+Documentada por Cowork, no encontrada por los tests de esta ronda (los
+3 hotfixes anteriores sí lo fueron): el paso (a) de
+`trg_historial_macho_efectos` --
+
+```sql
+UPDATE public."PECUARIO_HISTORIAL_MACHOS"
+  SET fecha_salida = NEW.fecha_entrada
+  WHERE macho_id = NEW.macho_id
+    AND fecha_salida IS NULL
+    AND id <> NEW.id;
+```
+
+-- solo cierra la fila anterior de un macho reasignado cuando esa fila
+**no tenía `fecha_salida` seteada** (`fecha_salida IS NULL`). Pero en
+modo `controlado` (`fecha_salida` siempre obligatoria al asignar) o en
+modo `continuo` con una fecha planificada opcional (spec §2.2, sigue
+permitido), la fila anterior YA tiene un `fecha_salida` propio desde el
+momento en que se creó -- ese `WHERE fecha_salida IS NULL` nunca
+matchea esa fila, así que al reasignar el macho a una jaula nueva, la
+fila vieja queda con su `fecha_salida` **original planificada** en vez
+de la fecha real de la reasignación -- un dato de auditoría impreciso
+(dice "se retira tal día" cuando en realidad se lo movieron antes).
+
+**`PECUARIO_REPRODUCTORES.jaula_actual_id` sigue siempre correcto** --
+el paso (b) del mismo trigger lo actualiza sin ninguna condición, así
+que el estado ACTUAL (dónde está el macho hoy) nunca se ve afectado por
+esta limitación -- es puramente un problema de precisión histórica en
+`PECUARIO_HISTORIAL_MACHOS`, no de comportamiento funcional.
+
+**No se corrige en esta ronda** -- mismo criterio que el hallazgo más
+amplio de `Config` (ver hotfix #1 más arriba): queda señalado como
+ticket aparte, no bloquea el cierre de Empadre. Posible fix futuro (no
+implementado, no decidido): que el paso (a) cierre SIEMPRE la fila
+anterior con `NEW.fecha_entrada`, sin la condición
+`fecha_salida IS NULL` -- pero eso cambiaría el significado de
+`fecha_salida` en filas con fecha planificada que todavía no se
+reasignaron, así que necesita su propia revisión de diseño, no un
+cambio mecánico.
