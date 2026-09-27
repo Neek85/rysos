@@ -92,7 +92,24 @@
 -- queda como refinamiento futuro, no bloquea este cierre.
 --
 -- Aditiva. Idempotente (CREATE OR REPLACE VIEW).
+--
+-- BEGIN/COMMIT explícito (2026-09-28, corrección propia sobre esta misma
+-- migración): las primeras 10 vistas de este archivo se redactaron sin
+-- envolver el script en una transacción, a diferencia de las 9
+-- migraciones anteriores del roadmap. Sin BEGIN/COMMIT, un fallo a mitad
+-- de las 10 CREATE OR REPLACE VIEW (ej. la vista #6 referenciando una
+-- columna que en realidad no existe) dejaría 5 vistas ya creadas y 5 sin
+-- crear -- un esquema a medio aplicar, sin ningún error visible que lo
+-- distinga de un éxito parcial. Envolver en una transacción no cambia el
+-- comportamiento de ninguna vista (CREATE OR REPLACE VIEW es igual de
+-- idempotente adentro o afuera de un BEGIN/COMMIT) -- solo agrega
+-- atomicidad real: o se crean las 10, o no se crea ninguna. Hallazgo
+-- propio de la CLI (Claude Code) durante la verificación de premisas,
+-- antes de aplicar nada -- no bloqueaba, pero se corrige por consistencia
+-- con el resto del roadmap y por seguridad real de la migración.
 -- =====================================================================
+
+BEGIN;
 
 DO $$
 BEGIN
@@ -589,6 +606,8 @@ COMMENT ON VIEW public.vw_pecuario_ventas_mes IS
 'Ventas del mes calendario actual: cantidad, monto total, kg vendidos y rendimiento de carcasa promedio (spec §5.6 -- PECUARIO_VENTAS.rendimiento_carcasa_pct ya es una columna GENERATED desde la venta de pelado beneficiado, v9 -- ya se calculaba en pantalla pero no existía un promedio agregado hasta esta vista). Promedio ponderado simple (AVG) sobre las ventas que sí lo registraron -- ventas_con_rendimiento_registrado indica el tamaño de esa muestra.';
 
 GRANT SELECT ON public.vw_pecuario_ventas_mes TO authenticated;
+
+COMMIT;
 
 -- ---------------------------------------------------------------------
 -- Verificación rápida post-migración (ejecutar a mano en Studio):
