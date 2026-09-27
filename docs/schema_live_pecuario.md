@@ -1048,3 +1048,68 @@ cerrado, sin relación).
 
 **Tarea cerrada de verdad** — "aplicada y verificada en vivo". Sin
 merge a `main`.
+
+## Módulo Pecuario Cuyes — v15 (Alerta de consanguinidad en Empadre/Alta), APLICADA (2026-09-27)
+
+Item 9 del roadmap. Conecta fn_son_parientes() (existente desde v3,
+2026-09-11) al resto del esquema — no crea logica de consanguinidad
+nueva. Migracion: supabase/migrations/20260927100000_pecuario_alerta_consanguinidad_config.sql.
+
+Cambios:
+
+PECUARIO_CONFIGURACION gana 2 columnas: alerta_consanguinidad_activa
+(BOOLEAN NOT NULL DEFAULT true), generaciones_consanguinidad (INT NOT
+NULL DEFAULT 3, mismo default que fn_son_parientes(generaciones INT
+DEFAULT 3)). Fallback documentado: si la organizacion no tiene fila
+propia en PECUARIO_CONFIGURACION (hoy vacia para las 3 organizaciones
+reales), tratar como true/3 — los defaults de columna no alcanzan solos
+sin fila que leer.
+Funcion nueva fn_jaula_tiene_otro_macho_activo(p_jaula_id UUID,
+p_macho_id_excluir UUID DEFAULT NULL) RETURNS BOOLEAN — chequeo de
+"jaula ya ocupada" que la spec original (pecuario_alerta_consanguinidad_empadre.md
+§9) habia dejado sin funcion equivalente a fn_son_parientes(). SECURITY
+DEFINER, STABLE, mismo patron que fn_son_parientes().
+Columna advertencia_confirmada (BOOLEAN NOT NULL DEFAULT false) agregada
+tanto a PECUARIO_HISTORIAL_MACHOS (Empadre) como a PECUARIO_REPRODUCTORES
+(Alta) — una sola columna generica de auditoria, no una por motivo,
+porque el banner real (spec §9.1) combina consanguinidad + "jaula
+ocupada" en un unico checkbox de confirmacion.
+Sin CHECK ni trigger bloqueante nuevo — se mantiene sin excepcion el
+criterio ya fijado en el comentario de fn_son_parientes(): advertencia
+en la app, nunca bloqueo duro de base de datos. Verificado explicitamente
+con test: un INSERT con relacion de parentesco real y jaula ya ocupada,
+sin advertencia_confirmada, se sigue permitiendo.
+
+Contrato Zod (lib/validations/pecuario.ts): HistorialMachoSchema y
+ReproductorSchema (ambos ya existentes desde v3, ningun schema nuevo)
+ganan advertencia_confirmada: z.boolean().optional().default(false).
+
+Correccion de alcance real (encontrada por la CLI antes de tocar nada,
+paso 2 del prompt de Cowork): el diseño original pedia extender Server
+Actions de Empadre/Alta en lib/actions/ — no existe ninguna Server Action
+de Pecuario en este repo (todo el trabajo de Pecuario de los items 1-8 fue
+solo capa de datos, la app real de Pecuario es un cliente Expo separado,
+fuera de este repositorio). Corregido: este item cierra solo con capa de
+datos, igual que los 8 anteriores. La doble validacion server-side queda
+documentada en la spec como contrato para quien construya la app real.
+
+Verificado en vivo de verdad, 21/21, ninguno SKIPPED
+(tests/test_pecuario_alerta_consanguinidad.py -v -rs, salida literal
+"21 passed in 50.76s"): fn_son_parientes() sin regresion (padre-hijo
+directo, hermanos por madre comun, sin relacion), fn_jaula_tiene_otro_macho_activo()
+(con macho activo, sin macho, macho vendido, exclusion del propio macho
+reasignado), columnas de configuracion con default true/3,
+advertencia_confirmada con default false en ambas tablas, aislamiento RLS
+cruzado de la configuracion por organizacion, y el test central del item:
+test_insert_con_parentesco_real_y_jaula_ocupada_no_se_bloquea_aunque_advertencia_confirmada_sea_false.
+
+Suite completa re-confirmada tras aplicar, sin ningun fallo nuevo:
+"6 failed, 814 passed, 8 skipped, 28 warnings, 54 subtests passed in
+851.72s" — los mismos 6 ya catalogados de siempre; 814 vs 803 anteriores
+confirma exactamente los 11 tests en vivo de este item que antes estaban
+SKIPPED. Hallazgo de infraestructura sin relacion con Pecuario: pytest
+tests/ (bare, sin python -m) falla la coleccion de 3 archivos e2e por
+ModuleNotFoundError: No module named 'scripts' — invocacion incorrecta,
+ya documentada en CLAUDE.md.
+
+Commit 401afcb. Sin merge a main.

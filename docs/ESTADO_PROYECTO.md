@@ -1031,6 +1031,21 @@
 
   **Tarea cerrada de verdad** — sin merge a `main`.
 
+- **(2026-09-27, cierre) Alerta de consanguinidad en Empadre/Alta —
+  item 9 del roadmap, CERRADO.** Conecta fn_son_parientes() (v3,
+  2026-09-11) al resto del esquema: 2 columnas de configuracion por
+  organizacion, funcion nueva fn_jaula_tiene_otro_macho_activo(), columna
+  de auditoria advertencia_confirmada en 2 tablas. Sin CHECK/trigger
+  bloqueante — advertencia, nunca bloqueo duro, verificado con test
+  dedicado. Correccion de alcance real durante la verificacion: el diseño
+  original asumia Server Actions de Pecuario que no existen en este repo
+  (la app real es un cliente Expo separado) — corregido antes de escribir
+  codigo, sin rehacer nada. Evidencia: 21/21 en vivo sin skips, suite
+  completa re-confirmada sin fallos nuevos (814 passed, los mismos 6 ya
+  catalogados). Ver docs/schema_live_pecuario.md v15. Migracion
+  20260927100000_pecuario_alerta_consanguinidad_config.sql, commit
+  401afcb.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
