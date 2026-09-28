@@ -532,6 +532,32 @@ export const SugerenciaReemplazoAccionSchema = z.object({
   ID_Organizacion: IdOrganizacionSchema,
 });
 
+// Alta de Galpones/Pozas (app Granja Valencia,
+// specs/app_granja_valencia_galpones_jaulas.md §3) -- primera pantalla de
+// escritura de la app, contrato compartido (no exclusivo de la app) por
+// mismo criterio que el resto de este archivo.
+export const GalponAltaSchema = z.object({
+  ID_Organizacion: z.string().min(1),
+  codigo_galpon: z.string().trim().min(1, 'El código de galpón es obligatorio.'),
+  nombre: z.string().trim().optional(),
+  capacidad_pozas: z.coerce.number().int().positive().optional(),
+  dias_frecuencia_limpieza: z.coerce.number().int().positive().optional(),
+})
+export type GalponAltaValues = z.infer<typeof GalponAltaSchema>
+
+export const TIPO_USO_POZA = ['empadre', 'maternidad', 'recria', 'engorde', 'aislamiento'] as const
+
+export const PozaAltaSchema = z.object({
+  ID_Organizacion: z.string().min(1),
+  codigo_poza: z.string().trim().min(1, 'El código de poza es obligatorio.'),
+  tipo_uso: z.enum(TIPO_USO_POZA),
+  galpon_id: z.string().uuid().nullable().optional(),
+  capacidad_max: z.coerce.number().int().positive().optional(),
+  macho_codigo: z.string().trim().optional(),
+  linea_genetica: z.string().trim().optional(),
+})
+export type PozaAltaValues = z.infer<typeof PozaAltaSchema>
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;

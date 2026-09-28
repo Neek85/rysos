@@ -19,7 +19,7 @@ export default function RootLayout() {
         <Stack.Screen name="index" />
       </Stack.Protected>
       <Stack.Protected guard={!!session}>
-        <Stack.Screen name="dashboard-stub" />
+        <Stack.Screen name="galpones-pozas" />
       </Stack.Protected>
     </Stack>
   )
