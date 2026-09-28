@@ -6,7 +6,6 @@
 // alcance en v1, ver spec §1).
 import { useState } from 'react'
 import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
-import { router } from 'expo-router'
 import { supabase } from '../../lib/supabase/client'
 import { LoginFormSchema } from '../../lib/validations/auth'
 
@@ -34,7 +33,10 @@ export default function LoginScreen() {
         setError('Email o contraseña incorrectos.')
         return
       }
-      router.replace('/dashboard-stub')
+      // Sin navegación manual acá -- el cambio de sesión disparado por
+      // signInWithPassword llega a useSession() vía onAuthStateChange, y
+      // el guard de Stack.Protected en _layout.tsx redirige solo a
+      // /dashboard-stub. Navegar acá también sería redundante/racy.
     } finally {
       setLoading(false)
     }

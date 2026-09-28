@@ -116,6 +116,39 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 4. Loading state mientras la llamada está en curso (botón deshabilitado).
 5. Sin "¿Olvidaste tu contraseña?" (§1).
 
+### 5.1. Bootstrap de sesión al abrir la app (2026-09-28, fix real)
+
+**Hallazgo de Neyser en dispositivo real:** login exitoso, pero al cerrar
+la app completamente y reabrirla vuelve a pedir credenciales en vez de ir
+directo al Dashboard/stub. Diagnóstico confirmado por la CLI: la
+configuración de `client.ts` (§4) ya persistía la sesión correctamente en
+`AsyncStorage` desde el primer commit, sin cambios — el problema real era
+que **nada la consultaba al arrancar la app**. `_layout.tsx` montaba el
+`Stack` directo con `index` (Login) siempre como pantalla visible, sin
+ninguna llamada a `supabase.auth.getSession()` (confirmado por grep
+exhaustivo de `getSession`/`onAuthStateChange` en `src/` y `lib/`: cero
+resultados antes de este fix).
+
+**Fix — `apps/granja-valencia/lib/supabase/useSession.ts`** (hook nuevo):
+al montar, `supabase.auth.getSession()` resuelve lo que haya en
+`AsyncStorage` (con un `isLoading` mientras responde);
+`supabase.auth.onAuthStateChange()` mantiene el estado sincronizado
+después (login exitoso, refresh o expiración del token con la app
+abierta).
+
+**`_layout.tsx`** usa ese hook y reemplaza el `Stack` fijo por el patrón
+oficial de Expo Router para rutas protegidas
+(`Stack.Protected`, https://docs.expo.dev/router/advanced/authentication/):
+mientras `isLoading`, se muestra un `ActivityIndicator` de pantalla
+completa en vez del `Stack`; resuelto, `index` (Login) solo es alcanzable
+sin sesión y `dashboard-stub` solo con sesión — el guard redirige solo
+cuando la sesión cambia (login exitoso incluido), así que la pantalla de
+Login (§5) YA NO navega manualmente a `/dashboard-stub` tras
+`signInWithPassword` (se quitó ese `router.replace` — sería redundante/
+racy contra el guard).
+
+## 6. Pruebas
+
 ## 6. Pruebas
 
 - Unit: `LoginFormSchema` — casos válidos e inválidos (email malformado,
