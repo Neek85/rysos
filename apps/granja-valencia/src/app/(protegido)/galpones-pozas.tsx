@@ -1,7 +1,8 @@
 // Alta de Galpones y Pozas/Jaulas (specs/app_granja_valencia_galpones_jaulas.md)
-// -- primera pantalla de escritura de la app. Reemplaza temporalmente
-// /dashboard-stub como destino post-login hasta que exista Dashboard/
-// Población real (spec §4) -- sin menú de navegación todavía.
+// -- alcanzable desde el grid de acciones de Inicio (tile "Pozas"). El
+// header (con logout) ya no vive acá -- lo monta
+// src/app/(protegido)/_layout.tsx una sola vez para todo el grupo
+// protegido (specs/app_granja_valencia_inicio.md §3).
 import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
@@ -13,10 +14,10 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { GalponAltaSchema, PozaAltaSchema, TIPO_USO_POZA } from '../../../../lib/validations/pecuario'
-import { supabase } from '../../lib/supabase/client'
-import { useProfile } from '../../lib/supabase/useProfile'
+import { GalponAltaSchema, PozaAltaSchema, TIPO_USO_POZA } from '../../../../../lib/validations/pecuario'
+import { supabase } from '../../../lib/supabase/client'
+import { useProfile } from '../../../lib/supabase/useProfile'
+import { BackToInicioButton } from '../../../components/ui/BackToInicioButton'
 
 type Galpon = {
   id: string
@@ -34,7 +35,6 @@ type Poza = {
 }
 
 export default function GalponesPozasScreen() {
-  const insets = useSafeAreaInsets()
   const { organizacion, loading: profileLoading } = useProfile()
 
   const [galpones, setGalpones] = useState<Galpon[]>([])
@@ -155,19 +155,9 @@ export default function GalponesPozasScreen() {
     }
   }
 
-  // Provisional -- solo para poder ver el Login rediseñado sin depender
-  // de borrar datos de la app a mano. Sin lógica extra: signOut() dispara
-  // onAuthStateChange en useSession(), y el guard de Stack.Protected en
-  // _layout.tsx redirige solo a /index (Login).
-  async function handleCerrarSesion() {
-    await supabase.auth.signOut()
-  }
-
   return (
-    <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingTop: insets.top + 20 }]}>
-      <TouchableOpacity style={styles.cerrarSesionButton} onPress={handleCerrarSesion}>
-        <Text style={styles.cerrarSesionTexto}>Cerrar sesión</Text>
-      </TouchableOpacity>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <BackToInicioButton />
 
       {perfilMensaje && <Text style={styles.perfilMensaje}>{perfilMensaje}</Text>}
 
@@ -313,15 +303,6 @@ const styles = StyleSheet.create({
   content: {
     padding: 20,
     paddingBottom: 40,
-  },
-  cerrarSesionButton: {
-    alignSelf: 'flex-end',
-    marginBottom: 12,
-  },
-  cerrarSesionTexto: {
-    fontSize: 13,
-    color: '#dc2626',
-    fontWeight: '600',
   },
   perfilMensaje: {
     fontSize: 13,

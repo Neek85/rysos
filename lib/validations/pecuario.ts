@@ -558,6 +558,20 @@ export const PozaAltaSchema = z.object({
 })
 export type PozaAltaValues = z.infer<typeof PozaAltaSchema>
 
+// vw_pecuario_poblacion_resumen (app Granja Valencia, pantalla Inicio,
+// specs/app_granja_valencia_inicio.md) -- vista de solo lectura, tipos
+// ajustados exactamente a las columnas reales de la vista (confirmadas
+// en vivo), sin agregar ninguna de más.
+export const PoblacionResumenSchema = z.object({
+  ID_Organizacion: z.string(),
+  total_poblacion: z.coerce.number().int().nonnegative(),
+  total_reproductores: z.coerce.number().int().nonnegative(),
+  total_recria: z.coerce.number().int().nonnegative(),
+  total_engorde: z.coerce.number().int().nonnegative(),
+  total_lactancia: z.coerce.number().int().nonnegative(),
+})
+export type PoblacionResumenValues = z.infer<typeof PoblacionResumenSchema>
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;
