@@ -1,15 +1,22 @@
-// Pantalla de Login (specs/app_granja_valencia_login.md) -- adaptación al
-// cliente Expo/React Native del patrón real ya implementado en
+// Pantalla de Login (specs/app_granja_valencia_login.md,
+// specs/app_granja_valencia_diseno_login.md) -- adaptación al cliente
+// Expo/React Native del patrón real ya implementado en
 // app/login/page.jsx (Fase B). Mismo mecanismo de auth
 // (PERFILES_USUARIO_INTERNOS + Supabase Auth signInWithPassword), sin
 // "¿Olvidaste tu contraseña?" ni lógica condicional por rol (fuera de
-// alcance en v1, ver spec §1).
+// alcance en v1, ver spec de login §1). Rediseño visual sobre el mockup
+// real (diseno_login.md §4) -- NO se tocó useSession/Stack.Protected/
+// LoginFormSchema, solo el envoltorio visual.
 import { useState } from 'react'
-import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { StyleSheet, Text, View } from 'react-native'
 import { supabase } from '../../lib/supabase/client'
 import { LoginFormSchema } from '../../lib/validations/auth'
+import { useThemeColors } from '../../theme/useThemeColors'
+import { Field } from '../../components/ui/Field'
+import { PrimaryButton } from '../../components/ui/PrimaryButton'
 
 export default function LoginScreen() {
+  const colors = useThemeColors()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -36,40 +43,40 @@ export default function LoginScreen() {
       // Sin navegación manual acá -- el cambio de sesión disparado por
       // signInWithPassword llega a useSession() vía onAuthStateChange, y
       // el guard de Stack.Protected en _layout.tsx redirige solo a
-      // /dashboard-stub. Navegar acá también sería redundante/racy.
+      // /galpones-pozas. Navegar acá también sería redundante/racy.
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>RYZOS</Text>
-      <Text style={styles.subtitle}>Ingresá con tu cuenta interna.</Text>
+    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+      <View style={styles.header}>
+        <Text style={styles.emoji}>🐹</Text>
+        <Text style={[styles.title, { color: colors.ink, fontFamily: 'Archivo_800ExtraBold' }]}>
+          Granja Valencia
+        </Text>
+      </View>
 
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
+      <Field
+        label="Email"
         autoCapitalize="none"
         autoComplete="email"
         keyboardType="email-address"
         value={email}
         onChangeText={setEmail}
       />
-      <TextInput
-        style={styles.input}
-        placeholder="Contraseña"
+      <Field
+        label="Contraseña"
         secureTextEntry
         autoComplete="password"
         value={password}
         onChangeText={setPassword}
       />
 
-      {error && <Text style={styles.error}>{error}</Text>}
+      {error && <Text style={[styles.error, { color: colors.danger }]}>{error}</Text>}
 
-      <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={loading}>
-        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Ingresar</Text>}
-      </TouchableOpacity>
+      <PrimaryButton label="Entrar" onPress={handleSubmit} loading={loading} />
     </View>
   )
 }
@@ -79,43 +86,21 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     padding: 24,
-    backgroundColor: '#f9fafb',
+  },
+  header: {
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  emoji: {
+    fontSize: 40,
+    marginBottom: 8,
   },
   title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#6b7280',
-    marginBottom: 24,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 12,
-    fontSize: 14,
-    backgroundColor: '#fff',
+    fontSize: 22,
   },
   error: {
-    color: '#dc2626',
+    fontFamily: 'PublicSans_600SemiBold',
     fontSize: 13,
     marginBottom: 12,
-  },
-  button: {
-    backgroundColor: '#166534',
-    borderRadius: 8,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
   },
 })
