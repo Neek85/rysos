@@ -153,8 +153,20 @@ export default function GalponesPozasScreen() {
     }
   }
 
+  // Provisional -- solo para poder ver el Login rediseñado sin depender
+  // de borrar datos de la app a mano. Sin lógica extra: signOut() dispara
+  // onAuthStateChange en useSession(), y el guard de Stack.Protected en
+  // _layout.tsx redirige solo a /index (Login).
+  async function handleCerrarSesion() {
+    await supabase.auth.signOut()
+  }
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <TouchableOpacity style={styles.cerrarSesionButton} onPress={handleCerrarSesion}>
+        <Text style={styles.cerrarSesionTexto}>Cerrar sesión</Text>
+      </TouchableOpacity>
+
       {perfilMensaje && <Text style={styles.perfilMensaje}>{perfilMensaje}</Text>}
 
       <Text style={styles.seccionTitulo}>Galpones</Text>
@@ -299,6 +311,15 @@ const styles = StyleSheet.create({
   content: {
     padding: 20,
     paddingBottom: 40,
+  },
+  cerrarSesionButton: {
+    alignSelf: 'flex-end',
+    marginBottom: 12,
+  },
+  cerrarSesionTexto: {
+    fontSize: 13,
+    color: '#dc2626',
+    fontWeight: '600',
   },
   perfilMensaje: {
     fontSize: 13,
