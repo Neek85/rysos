@@ -1,8 +1,10 @@
 // Pantalla Inicio (hub post-login) -- specs/app_granja_valencia_inicio.md.
 // Réplica del mockup real (claude.ai/artifact/7vebvnVwLNR15TT9DL2DyX,
 // líneas 727-816). Reemplaza a galpones-pozas.tsx como pantalla raíz
-// autenticada -- galpones-pozas sigue existiendo, alcanzable desde el
-// tile "Pozas" del grid.
+// autenticada. El tile "Pozas" apunta a pozas/index.tsx (directorio real
+// del mockup, specs/app_granja_valencia_pozas_reproductores.md) -- ya no
+// a galpones-pozas.tsx directo; esa pantalla sigue intacta, reubicada
+// como "+ Nueva poza / galpón" dentro del directorio.
 import { useEffect, useState } from 'react'
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { router } from 'expo-router'
@@ -15,7 +17,7 @@ import { Icon, type IconName } from '../../../components/ui/Icon'
 type Accion = {
   label: string
   icon: IconName
-  route: '/galpones-pozas' | { pathname: '/proximamente/[title]'; params: { title: string } }
+  route: '/galpones-pozas' | '/pozas' | { pathname: '/proximamente/[title]'; params: { title: string } }
   danger?: boolean
 }
 
@@ -40,7 +42,7 @@ const ACCIONES: Accion[] = [
   { label: 'Compras', icon: 'compras', route: { pathname: '/proximamente/[title]', params: { title: 'Compras' } } },
   { label: 'Empadre', icon: 'empadre', route: { pathname: '/proximamente/[title]', params: { title: 'Empadre' } } },
   { label: 'Lotes', icon: 'lotes', route: { pathname: '/proximamente/[title]', params: { title: 'Lotes' } } },
-  { label: 'Pozas', icon: 'pozas', route: '/galpones-pozas' },
+  { label: 'Pozas', icon: 'pozas', route: '/pozas' },
 ]
 
 export default function InicioScreen() {

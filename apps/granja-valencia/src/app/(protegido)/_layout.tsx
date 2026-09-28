@@ -18,6 +18,9 @@ export default function ProtegidoLayout() {
     >
       <Stack.Screen name="inicio" />
       <Stack.Screen name="galpones-pozas" />
+      <Stack.Screen name="pozas/index" />
+      <Stack.Screen name="pozas/[id]" />
+      <Stack.Screen name="reproductores/nuevo" />
       <Stack.Screen name="proximamente/[title]" />
     </Stack>
   )

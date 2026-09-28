@@ -572,6 +572,25 @@ export const PoblacionResumenSchema = z.object({
 })
 export type PoblacionResumenValues = z.infer<typeof PoblacionResumenSchema>
 
+// Alta de reproductor (app Granja Valencia, pantalla "Alta de
+// reproductor", specs/app_granja_valencia_pozas_reproductores.md) --
+// proposito/estado quedan en su default de tabla ('reproductor'/'activo'),
+// no se envían acá.
+export const SEXO_CUY = ['macho', 'hembra'] as const
+
+export const ReproductorAltaSchema = z.object({
+  ID_Organizacion: z.string().min(1),
+  codigo_arete: z.string().trim().min(1, 'El código de arete es obligatorio.'),
+  sexo: z.enum(SEXO_CUY),
+  raza: z.string().trim().optional(),
+  fecha_nacimiento: z.string().optional(),
+  jaula_actual_id: z.string().uuid().nullable().optional(),
+  madre_id: z.string().uuid().nullable().optional(),
+  padre_id: z.string().uuid().nullable().optional(),
+  advertencia_confirmada: z.boolean().default(false),
+})
+export type ReproductorAltaValues = z.infer<typeof ReproductorAltaSchema>
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;
