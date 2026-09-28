@@ -60,6 +60,14 @@ const CuentaAProvisionar = z.object({
   rol: RolInterno,
   id_organizacion: z.string().min(1),
   modo: z.enum(['invite', 'password']),
+  // Si se define, se lee esa env var (nunca el valor en sí -- solo el
+  // NOMBRE de la variable vive en este array committeado) como
+  // contraseña fija en vez de generar una random. Uso: cuando la
+  // persona ya tiene una contraseña elegida por ella misma (nunca
+  // inventada por la CLI) y quiere loguearse con esa desde el principio,
+  // en vez de la password random + "cambiala en el primer login" que
+  // usan las cuentas demo.
+  password_env: z.string().optional(),
 })
 
 const CUENTAS = [
@@ -105,6 +113,14 @@ const CUENTAS = [
     id_organizacion: 'GRANJA-VALENCIA',
     modo: 'invite',
   },
+  {
+    email: 'dneyser5+test@gmail.com',
+    nombre_completo: 'Neyser Diaz Maldonado (cuenta de prueba)',
+    rol: 'admin',
+    id_organizacion: 'GRANJA-TEST',
+    modo: 'password',
+    password_env: 'PASSWORD_GRANJA_TEST',
+  },
 ].map((c) => CuentaAProvisionar.parse(c))
 
 // ── Buscar un auth.users existente por email (sin getUserByEmail) ─────
@@ -145,7 +161,19 @@ async function provisionCuenta(supabaseAdmin, cuenta) {
     resultado.user_id = data.user.id
     resultado.auth_accion = 'invitado'
   } else {
-    const password = crypto.randomBytes(18).toString('base64url')
+    let password
+    let esFija = false
+    if (cuenta.password_env) {
+      password = process.env[cuenta.password_env]
+      if (!password) {
+        throw new Error(
+          `Falta la env var ${cuenta.password_env} con la contraseña para ${cuenta.email} (nunca se hardcodea en este archivo).`
+        )
+      }
+      esFija = true
+    } else {
+      password = crypto.randomBytes(18).toString('base64url')
+    }
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
       email: cuenta.email,
       password,
@@ -155,7 +183,10 @@ async function provisionCuenta(supabaseAdmin, cuenta) {
     if (error) throw new Error(`createUser(${cuenta.email}) falló: ${error.message}`)
     resultado.user_id = data.user.id
     resultado.auth_accion = 'creado'
-    resultado.password_generada = password
+    // Si la contraseña vino fija por env var, la persona ya la sabe --
+    // nunca se imprime (a diferencia de una generada al azar, que sí hay
+    // que mostrar una vez porque nadie más la conoce).
+    resultado.password_generada = esFija ? null : password
   }
 
   const { error: upsertError } = await supabaseAdmin
