@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GalponAltaSchema, PozaAltaSchema, TIPO_USO_POZA } from '../../../../lib/validations/pecuario'
 import { supabase } from '../../lib/supabase/client'
 import { useProfile } from '../../lib/supabase/useProfile'
@@ -33,6 +34,7 @@ type Poza = {
 }
 
 export default function GalponesPozasScreen() {
+  const insets = useSafeAreaInsets()
   const { organizacion, loading: profileLoading } = useProfile()
 
   const [galpones, setGalpones] = useState<Galpon[]>([])
@@ -162,7 +164,7 @@ export default function GalponesPozasScreen() {
   }
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingTop: insets.top + 20 }]}>
       <TouchableOpacity style={styles.cerrarSesionButton} onPress={handleCerrarSesion}>
         <Text style={styles.cerrarSesionTexto}>Cerrar sesión</Text>
       </TouchableOpacity>
