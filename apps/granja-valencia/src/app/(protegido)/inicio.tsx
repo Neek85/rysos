@@ -21,6 +21,7 @@ type Accion = {
     | '/galpones-pozas'
     | '/pozas'
     | '/empadre/asignar-macho'
+    | '/parto/registrar'
     | { pathname: '/proximamente/[title]'; params: { title: string } }
   danger?: boolean
 }
@@ -30,7 +31,7 @@ type Accion = {
 // condiciona a un toggle de "identificación individual" que no existe
 // como columna real en PECUARIO_CONFIGURACION).
 const ACCIONES: Accion[] = [
-  { label: 'Parto', icon: 'parto', route: { pathname: '/proximamente/[title]', params: { title: 'Parto' } } },
+  { label: 'Parto', icon: 'parto', route: '/parto/registrar' },
   { label: 'Destete', icon: 'destete', route: { pathname: '/proximamente/[title]', params: { title: 'Destete' } } },
   { label: 'Pesaje', icon: 'pesaje', route: { pathname: '/proximamente/[title]', params: { title: 'Pesaje' } } },
   {

@@ -7,7 +7,14 @@ import { z } from 'zod';
 // real que la app intentara guardar offline.
 const IdOrganizacionSchema = z.string().min(1, 'ID_Organizacion es requerido');
 
-export const PartoRegistroSchema = z.object({
+// Renombrado (2026-09-29, app Granja Valencia): este era el
+// PartoRegistroSchema original -- diseño especulativo de sync offline
+// (device_id/created_offline_at obligatorios), nunca conectado a ningún
+// consumidor real (confirmado por grep exhaustivo antes de tocar esto).
+// El nombre PartoRegistroSchema pasa al contrato real de la pantalla
+// "Registrar parto" de la app (ver más abajo) -- decisión explícita de
+// Neyser, no una limpieza unilateral. Forma sin cambios.
+export const PartoOfflineDraftSchema = z.object({
   id: z.string().uuid(),
   ID_Organizacion: IdOrganizacionSchema,
   poza_id: z.string().uuid(),
@@ -607,11 +614,30 @@ export const EmpadreAsignacionSchema = z.object({
 })
 export type EmpadreAsignacionValues = z.infer<typeof EmpadreAsignacionSchema>
 
+// Registrar parto (app Granja Valencia, specs/app_granja_valencia_parto.md)
+// -- INSERT en PECUARIO_PARTOS, solo modo "Reproductora identificada"
+// (madre_id obligatorio acá -- el modo poblacional del mockup queda
+// fuera de esta pantalla, ver spec §1). macho_id se resuelve en el
+// cliente contra PECUARIO_HISTORIAL_MACHOS antes de armar este objeto
+// -- ningún trigger real lo completa solo (confirmado en vivo).
+export const PartoRegistroSchema = z.object({
+  ID_Organizacion: z.string().min(1),
+  poza_id: z.string().uuid(),
+  madre_id: z.string().uuid(),
+  macho_id: z.string().uuid().nullable().optional(),
+  fecha_parto: z.string(),
+  n_vivos: z.coerce.number().int().nonnegative(),
+  n_muertos: z.coerce.number().int().nonnegative(),
+  peso_total_camada_g: z.coerce.number().int().positive().nullable().optional(),
+  observaciones: z.string().trim().optional(),
+})
+export type PartoRegistroInput = z.infer<typeof PartoRegistroSchema>
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;
 export type MortalidadFotoInput = z.infer<typeof MortalidadFotoSchema>;
-export type PartoRegistroInput = z.infer<typeof PartoRegistroSchema>;
+export type PartoOfflineDraftInput = z.infer<typeof PartoOfflineDraftSchema>;
 export type MortalidadRegistroInput = z.infer<typeof MortalidadRegistroSchema>;
 export type PesajeLoteInput = z.infer<typeof PesajeLoteSchema>;
 export type VentaRegistroInput = z.infer<typeof VentaRegistroSchema>;

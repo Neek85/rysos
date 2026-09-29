@@ -22,6 +22,7 @@ export default function ProtegidoLayout() {
       <Stack.Screen name="pozas/[id]" />
       <Stack.Screen name="reproductores/nuevo" />
       <Stack.Screen name="empadre/asignar-macho" />
+      <Stack.Screen name="parto/registrar" />
       <Stack.Screen name="proximamente/[title]" />
     </Stack>
   )
