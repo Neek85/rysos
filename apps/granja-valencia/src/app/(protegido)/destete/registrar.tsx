@@ -97,6 +97,17 @@ export default function RegistrarDesteteScreen() {
           setRecoleccionId(abierta.id)
           setCantidadPendiente(abierta.cantidad_pendiente)
           setPaso(2)
+          // "Lotes conformados en esta sesión" se carga de la fuente real
+          // (PECUARIO_LOTES), no de un acumulador local -- si la pantalla
+          // se remonta (navegar afuera y volver) el estado local se
+          // perdía, aunque los lotes ya estuvieran bien guardados en base
+          // (hallazgo real, ver specs/app_granja_valencia_destete.md).
+          const { data: lotesExistentes } = await supabase
+            .from('PECUARIO_LOTES')
+            .select('codigo_lote, sexo, cantidad_inicial')
+            .eq('recoleccion_origen_id', abierta.id)
+            .order('created_at')
+          setLotesConformados((lotesExistentes ?? []) as LoteConformado[])
         } else {
           const { data: partos } = await supabase
             .from('vw_pecuario_lactancia_restante')
@@ -241,11 +252,17 @@ export default function RegistrarDesteteScreen() {
         return
       }
 
-      setLotesConformados((prev) => [
-        ...prev,
-        { codigo_lote: codigoLote, sexo: sexoLote, cantidad_inicial: cantidadLote },
-      ])
-      setCodigoLote('')
+      // "Lotes conformados en esta sesión" se re-lee de PECUARIO_LOTES
+      // (fuente real), no se acumula solo en memoria local -- así lista
+      // TODOS los lotes reales de esta recolección, incluso si la
+      // pantalla se remontó entre uno y otro.
+      const { data: lotesActualizados } = await supabase
+        .from('PECUARIO_LOTES')
+        .select('codigo_lote, sexo, cantidad_inicial')
+        .eq('recoleccion_origen_id', recoleccionId)
+        .order('created_at')
+      setLotesConformados((lotesActualizados ?? []) as LoteConformado[])
+
       setCantidadLote(1)
 
       const { data: recoleccionActual } = await supabase
@@ -254,6 +271,13 @@ export default function RegistrarDesteteScreen() {
         .eq('id', recoleccionId)
         .maybeSingle()
       setCantidadPendiente(recoleccionActual?.cantidad_pendiente ?? 0)
+
+      // El código sugerido se recalcula contra el estado real cada vez
+      // que se agrega un lote (hallazgo real: antes solo se calculaba al
+      // tocar "Sugerir" una vez, y quedaba desactualizado para el
+      // siguiente lote de la misma sesión -- causa real de los
+      // "duplicate key" contra uq_lote_org_codigo).
+      await sugerirCodigoLote()
     } finally {
       setGuardandoLote(false)
     }
@@ -388,7 +412,10 @@ export default function RegistrarDesteteScreen() {
                     key={valor}
                     label={valor === 'macho' ? 'Machos' : 'Hembras'}
                     selected={sexoLote === valor}
-                    onPress={() => setSexoLote(valor)}
+                    onPress={() => {
+                      setSexoLote(valor)
+                      setError(null)
+                    }}
                   />
                 ))}
               </View>
@@ -405,14 +432,24 @@ export default function RegistrarDesteteScreen() {
                       key={p.id}
                       label={p.codigo_poza}
                       selected={pozaDestinoId === p.id}
-                      onPress={() => setPozaDestinoId(p.id)}
+                      onPress={() => {
+                        setPozaDestinoId(p.id)
+                        setError(null)
+                      }}
                     />
                   ))}
                 </View>
               )}
 
               <Text style={[styles.label, { color: colors.inkSoft }]}>Cantidad para este lote</Text>
-              <Stepper value={cantidadLote} onChange={setCantidadLote} min={1} />
+              <Stepper
+                value={cantidadLote}
+                onChange={(v) => {
+                  setCantidadLote(v)
+                  setError(null)
+                }}
+                min={1}
+              />
               <Text style={[styles.hint, { color: colors.inkFaint }]}>Máximo disponible: {cantidadPendiente}</Text>
 
               <Text style={[styles.label, { color: colors.inkSoft }]}>Código de lote</Text>
@@ -426,7 +463,10 @@ export default function RegistrarDesteteScreen() {
                   placeholder="Ej. L-001"
                   placeholderTextColor={colors.inkFaint}
                   value={codigoLote}
-                  onChangeText={setCodigoLote}
+                  onChangeText={(v) => {
+                    setCodigoLote(v)
+                    setError(null)
+                  }}
                   autoCapitalize="characters"
                 />
                 <TouchableOpacity

@@ -170,12 +170,62 @@ recolectar — **esa ausencia es la prueba real de que el trigger/la vista
 previenen la doble recolección**, no un intento fallido forzado por
 SQL directo (tal como pedía esta tarea, no se forzó ese camino).
 
-## 8. Estado
+## 8. Hallazgos reales de la segunda verificación en dispositivo (Paso 2)
 
-CERRADO en el backend/lógica de negocio — el hallazgo de `cantidad_actual`
-quedó corregido y verificado en vivo con datos reales, y el rechazo de
-recolección duplicada quedó confirmado sin necesidad de un segundo
-intento forzado. Pendiente únicamente: que Neyser repita la conformación
-de un segundo lote de prueba (no hace falta deshacer el existente) y
-confirme con un `SELECT` nuevo que esta vez `cantidad_actual` sale igual
-a `cantidad_inicial`.
+Segunda ronda de pruebas en GRANJA-TEST (recolección real
+`78895180-ca95-4cef-8b49-c562a5d8497c`, 4 gazapos, 2 lotes reales
+`L-002`/`L-003` conformados, ambos `hembra`, `cantidad_actual` ya
+correcto por el fix de §6). Se reportaron 4 síntomas — cada uno
+confirmado leyendo el código real, no asumido:
+
+1/5. **"2 pendientes" en vez de 4 al entrar a Paso 2 — sin bug de datos
+real, confirmado con `created_at` exactos.** `PECUARIO_RECOLECCIONES_DESTETE`
+para GRANJA-TEST tiene **una sola** fila para esta sesión
+(`78895180...`, `created_at` `23:45:22.171`) — no hay ninguna recolección
+fantasma ni doble-submit del botón "Registrar recolección". `L-002`
+(hembra, 2) se creó a `23:45:48.908` — **26 segundos** después de la
+recolección, ya vinculado a `recoleccion_origen_id = 78895180...`. Es
+decir: para el momento en que se observó "2 pendientes", el primer lote
+**ya se había guardado correctamente** — no es un valor viejo/mal
+refrescado, es el valor real después de una primera adición exitosa que
+no tuvo ninguna confirmación visual clara en pantalla. **No se
+"corrige" nada de cálculo** — la causa real es la misma que el punto 4
+(ver abajo): sin una lista de lotes ya confirmados visible y confiable,
+un primer "Agregar" exitoso pasaba desapercibido.
+2. **Código sugerido no se refrescaba entre lotes — confirmado en el
+   código:** `sugerirCodigoLote()` solo se invocaba manualmente (botón
+   "Sugerir") y, tras un insert exitoso, el campo solo se vaciaba
+   (`setCodigoLote('')`) — nunca se recalculaba automáticamente. Si el
+   siguiente intento reusaba o retecleaba un código ya tomado por un
+   lote recién creado en la misma sesión, chocaba con
+   `uq_lote_org_codigo` (exactamente lo que pasó con `L-002`/`L-003`
+   contra los intentos de macho). **Fix:** tras cada insert exitoso se
+   llama `sugerirCodigoLote()` de nuevo automáticamente — recalcula
+   contra `PECUARIO_LOTES` real (lectura después de escritura, mismo
+   connection/transacción confirmada, sin lag).
+3. **Mensaje de error pegado en pantalla — confirmado en el código:**
+   `setError(null)` solo se ejecutaba al tocar "Agregar este lote" de
+   nuevo, nunca al editar sexo/poza/cantidad/código tras un fallo. **Fix:**
+   los 4 handlers de esos campos ahora limpian `error` también.
+4. **"Lotes conformados en esta sesión" solo mostraba el último —
+   confirmado en el código, causa real distinta a la asumida:** el
+   `setLotesConformados((prev) => [...prev, nuevo])` en sí acumulaba
+   bien — el problema es que es estado **local y efímero**: si la
+   pantalla se remonta (salir y volver a entrar a Destete, algo que
+   Expo Router puede hacer con pantallas del Stack) ese acumulador
+   vuelve a `[]`, aunque los lotes ya estén bien guardados en
+   `PECUARIO_LOTES`. **Fix:** la lista ahora se lee siempre de
+   `PECUARIO_LOTES` filtrado por `recoleccion_origen_id` (fuente real),
+   tanto al entrar/retomar Paso 2 como después de cada insert exitoso —
+   nunca depende solo de memoria local.
+
+## 9. Estado
+
+CERRADO en el backend/lógica de negocio (§6) y en el comportamiento de
+estado del Paso 2 (§8) — verificado `tsc --noEmit` limpio, 38/38 tests
+Zod, bundle real (`curl`) `HTTP 200`/`0 UnableToResolveError`. Pendiente
+únicamente la prueba manual final: repetir el flujo completo (un tercer
+parto de prueba si hace falta) y confirmar en dispositivo que el código
+sugerido nunca repite uno ya usado en la misma sesión, que el error se
+limpia al editar cualquier campo, y que el resumen final lista todos
+los lotes reales de la sesión.
