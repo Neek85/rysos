@@ -22,6 +22,7 @@ type Accion = {
     | '/pozas'
     | '/empadre/asignar-macho'
     | '/parto/registrar'
+    | '/destete/registrar'
     | { pathname: '/proximamente/[title]'; params: { title: string } }
   danger?: boolean
 }
@@ -32,7 +33,7 @@ type Accion = {
 // como columna real en PECUARIO_CONFIGURACION).
 const ACCIONES: Accion[] = [
   { label: 'Parto', icon: 'parto', route: '/parto/registrar' },
-  { label: 'Destete', icon: 'destete', route: { pathname: '/proximamente/[title]', params: { title: 'Destete' } } },
+  { label: 'Destete', icon: 'destete', route: '/destete/registrar' },
   { label: 'Pesaje', icon: 'pesaje', route: { pathname: '/proximamente/[title]', params: { title: 'Pesaje' } } },
   {
     label: 'Mortalidad',

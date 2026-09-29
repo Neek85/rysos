@@ -633,6 +633,48 @@ export const PartoRegistroSchema = z.object({
 })
 export type PartoRegistroInput = z.infer<typeof PartoRegistroSchema>
 
+// Destete (app Granja Valencia, specs/app_granja_valencia_destete.md) --
+// 2 fases sobre el backend real ya construido (PECUARIO_RECOLECCIONES_DESTETE
+// / PECUARIO_RECOLECCION_PARTOS / PECUARIO_LOTES, sin hotfixes, ver spec
+// §0). Nota: ya existían RecoleccionDestemteSchema/ConformarLoteDestemteSchema
+// más arriba en este archivo -- diseño especulativo de sync offline
+// (id/device_id/created_offline_at obligatorios, partos_ids como array
+// en un solo objeto), sin ningún consumidor real (confirmado por grep).
+// Estos 4 son distintos a propósito -- shape 1:1 con cada INSERT real
+// que hace esta pantalla, sin campos offline.
+export const RecoleccionDesteteSchema = z.object({
+  ID_Organizacion: z.string().min(1),
+  fecha_destete: z.string(),
+})
+export type RecoleccionDesteteInput = z.infer<typeof RecoleccionDesteteSchema>
+
+// Sin cantidad_incluida a propósito -- trg_recoleccion_partos_validar la
+// fija siempre al remanente completo de vw_pecuario_lactancia_restante,
+// nunca a lo que mande el cliente.
+export const RecoleccionPartoSchema = z.object({
+  ID_Organizacion: z.string().min(1),
+  recoleccion_id: z.string().uuid(),
+  parto_id: z.string().uuid(),
+})
+export type RecoleccionPartoInput = z.infer<typeof RecoleccionPartoSchema>
+
+// Dominio propio, separado de SEXO_CUY -- un lote destetado nunca es
+// 'mixto' (CHECK chk_lotes_destete_sexo_definido lo prohíbe cuando viene
+// de Destete), pero conceptualmente es un dominio distinto al sexo de un
+// reproductor individual.
+export const SEXO_LOTE_DESTETE = ['macho', 'hembra'] as const
+
+export const LoteDesteteSchema = z.object({
+  ID_Organizacion: z.string().min(1),
+  codigo_lote: z.string().trim().min(1, 'El código de lote es obligatorio.'),
+  poza_actual_id: z.string().uuid(),
+  cantidad_inicial: z.coerce.number().int().positive(),
+  sexo: z.enum(SEXO_LOTE_DESTETE),
+  recoleccion_origen_id: z.string().uuid(),
+  fecha_destete: z.string(),
+})
+export type LoteDesteteInput = z.infer<typeof LoteDesteteSchema>
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;
