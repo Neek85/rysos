@@ -17,7 +17,11 @@ import { Icon, type IconName } from '../../../components/ui/Icon'
 type Accion = {
   label: string
   icon: IconName
-  route: '/galpones-pozas' | '/pozas' | { pathname: '/proximamente/[title]'; params: { title: string } }
+  route:
+    | '/galpones-pozas'
+    | '/pozas'
+    | '/empadre/asignar-macho'
+    | { pathname: '/proximamente/[title]'; params: { title: string } }
   danger?: boolean
 }
 
@@ -40,7 +44,7 @@ const ACCIONES: Accion[] = [
   { label: 'Sanidad', icon: 'sanidad', route: { pathname: '/proximamente/[title]', params: { title: 'Sanidad' } } },
   { label: 'Insumos', icon: 'insumos', route: { pathname: '/proximamente/[title]', params: { title: 'Insumos' } } },
   { label: 'Compras', icon: 'compras', route: { pathname: '/proximamente/[title]', params: { title: 'Compras' } } },
-  { label: 'Empadre', icon: 'empadre', route: { pathname: '/proximamente/[title]', params: { title: 'Empadre' } } },
+  { label: 'Empadre', icon: 'empadre', route: '/empadre/asignar-macho' },
   { label: 'Lotes', icon: 'lotes', route: { pathname: '/proximamente/[title]', params: { title: 'Lotes' } } },
   { label: 'Pozas', icon: 'pozas', route: '/pozas' },
 ]

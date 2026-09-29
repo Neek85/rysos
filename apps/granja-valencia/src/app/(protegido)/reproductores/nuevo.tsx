@@ -8,6 +8,8 @@ import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
+import { Chip } from '../../../../components/ui/Chip'
+import { AdvertenciaBanner } from '../../../../components/ui/AdvertenciaBanner'
 
 const RAZAS = ['Andina', 'Perú', 'Inti', 'Otra'] as const
 
@@ -198,7 +200,7 @@ export default function AltaReproductorScreen() {
       <Text style={[styles.label, { color: colors.inkSoft }]}>Sexo</Text>
       <View style={styles.chipsRow}>
         {SEXO_CUY.map((valor) => (
-          <Chip key={valor} label={valor === 'hembra' ? 'Hembra' : 'Macho'} selected={sexo === valor} onPress={() => setSexo(valor)} colors={colors} />
+          <Chip key={valor} label={valor === 'hembra' ? 'Hembra' : 'Macho'} selected={sexo === valor} onPress={() => setSexo(valor)} />
         ))}
       </View>
 
@@ -220,7 +222,7 @@ export default function AltaReproductorScreen() {
       <Text style={[styles.label, { color: colors.inkSoft }]}>Raza</Text>
       <View style={styles.chipsRow}>
         {RAZAS.map((valor) => (
-          <Chip key={valor} label={valor} selected={raza === valor} onPress={() => setRaza(valor)} colors={colors} />
+          <Chip key={valor} label={valor} selected={raza === valor} onPress={() => setRaza(valor)} />
         ))}
       </View>
       {raza === 'Otra' && (
@@ -244,9 +246,9 @@ export default function AltaReproductorScreen() {
 
       <Text style={[styles.label, { color: colors.inkSoft }]}>Jaula asignada</Text>
       <View style={styles.chipsRow}>
-        <Chip label="Sin asignar" selected={jaulaId === null} onPress={() => setJaulaId(null)} colors={colors} />
+        <Chip label="Sin asignar" selected={jaulaId === null} onPress={() => setJaulaId(null)} />
         {pozas.map((p) => (
-          <Chip key={p.id} label={p.codigo_poza} selected={jaulaId === p.id} onPress={() => setJaulaId(p.id)} colors={colors} />
+          <Chip key={p.id} label={p.codigo_poza} selected={jaulaId === p.id} onPress={() => setJaulaId(p.id)} />
         ))}
       </View>
 
@@ -255,9 +257,9 @@ export default function AltaReproductorScreen() {
         <Text style={[styles.hint, { color: colors.inkFaint }]}>Sin madre identificada.</Text>
       ) : (
         <View style={styles.chipsRow}>
-          <Chip label="Sin madre identificada" selected={madreId === null} onPress={() => setMadreId(null)} colors={colors} />
+          <Chip label="Sin madre identificada" selected={madreId === null} onPress={() => setMadreId(null)} />
           {hembras.map((h) => (
-            <Chip key={h.id} label={h.codigo_arete} selected={madreId === h.id} onPress={() => setMadreId(h.id)} colors={colors} />
+            <Chip key={h.id} label={h.codigo_arete} selected={madreId === h.id} onPress={() => setMadreId(h.id)} />
           ))}
         </View>
       )}
@@ -267,32 +269,18 @@ export default function AltaReproductorScreen() {
         <Text style={[styles.hint, { color: colors.inkFaint }]}>Sin padre identificado.</Text>
       ) : (
         <View style={styles.chipsRow}>
-          <Chip label="Sin padre identificado" selected={padreId === null} onPress={() => setPadreId(null)} colors={colors} />
+          <Chip label="Sin padre identificado" selected={padreId === null} onPress={() => setPadreId(null)} />
           {machos.map((m) => (
-            <Chip key={m.id} label={m.codigo_arete} selected={padreId === m.id} onPress={() => setPadreId(m.id)} colors={colors} />
+            <Chip key={m.id} label={m.codigo_arete} selected={padreId === m.id} onPress={() => setPadreId(m.id)} />
           ))}
         </View>
       )}
 
-      {advertencias.length > 0 && (
-        <View style={[styles.banner, { backgroundColor: colors.amberSoft }]}>
-          {advertencias.map((a, i) => (
-            <Text key={i} style={[styles.bannerText, { color: colors.amber }]}>
-              ⚠ {a}
-            </Text>
-          ))}
-          <TouchableOpacity style={styles.checkRow} onPress={() => setEntiendoRiesgo((v) => !v)}>
-            <View
-              style={[
-                styles.checkbox,
-                { borderColor: colors.amber },
-                entiendoRiesgo && { backgroundColor: colors.amber },
-              ]}
-            />
-            <Text style={[styles.checkLabel, { color: colors.amber }]}>Entiendo el riesgo</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      <AdvertenciaBanner
+        advertencias={advertencias}
+        entiendoRiesgo={entiendoRiesgo}
+        onToggleEntiendoRiesgo={() => setEntiendoRiesgo((v) => !v)}
+      />
 
       {error && <Text style={[styles.error, { color: colors.danger }]}>{error}</Text>}
 
@@ -304,31 +292,6 @@ export default function AltaReproductorScreen() {
         {saving ? <ActivityIndicator color={colors.accentInk} /> : <Text style={[styles.buttonText, { color: colors.accentInk }]}>Guardar reproductor</Text>}
       </TouchableOpacity>
     </ScrollView>
-  )
-}
-
-function Chip({
-  label,
-  selected,
-  onPress,
-  colors,
-}: {
-  label: string
-  selected: boolean
-  onPress: () => void
-  colors: ReturnType<typeof useThemeColors>
-}) {
-  return (
-    <TouchableOpacity
-      style={[
-        styles.chip,
-        { borderColor: colors.border, backgroundColor: colors.surface },
-        selected && { backgroundColor: colors.accent, borderColor: colors.accent },
-      ]}
-      onPress={onPress}
-    >
-      <Text style={[styles.chipText, { color: colors.inkSoft }, selected && { color: colors.accentInk }]}>{label}</Text>
-    </TouchableOpacity>
   )
 }
 
@@ -351,13 +314,6 @@ const styles = StyleSheet.create({
   sugerirButton: { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 12 },
   sugerirText: { fontFamily: 'PublicSans_700Bold', fontSize: 13 },
   chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { borderWidth: 1.5, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 },
-  chipText: { fontFamily: 'PublicSans_600SemiBold', fontSize: 13 },
-  banner: { borderRadius: 12, padding: 12, marginTop: 16, gap: 8 },
-  bannerText: { fontFamily: 'PublicSans_600SemiBold', fontSize: 13 },
-  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  checkbox: { width: 18, height: 18, borderRadius: 4, borderWidth: 2 },
-  checkLabel: { fontFamily: 'PublicSans_700Bold', fontSize: 13 },
   error: { fontFamily: 'PublicSans_600SemiBold', fontSize: 13, marginTop: 12 },
   button: { borderRadius: 10, paddingVertical: 14, alignItems: 'center', marginTop: 20 },
   buttonDisabled: { opacity: 0.5 },

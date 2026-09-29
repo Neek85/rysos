@@ -591,6 +591,22 @@ export const ReproductorAltaSchema = z.object({
 })
 export type ReproductorAltaValues = z.infer<typeof ReproductorAltaSchema>
 
+// Empadre: "Asignar macho a jaula" (app Granja Valencia,
+// specs/app_granja_valencia_empadre.md) -- INSERT en
+// PECUARIO_HISTORIAL_MACHOS. jaula_actual_id/PECUARIO_RETIROS_MACHO_PENDIENTES
+// nunca se escriben desde el cliente -- los triggers reales
+// (trg_historial_macho_efectos + trg_cerrar_historial_macho_anterior)
+// se encargan.
+export const EmpadreAsignacionSchema = z.object({
+  ID_Organizacion: z.string().min(1),
+  macho_id: z.string().uuid(),
+  jaula_id: z.string().uuid(),
+  fecha_entrada: z.string(),
+  fecha_salida: z.string().nullable().optional(),
+  advertencia_confirmada: z.boolean().default(false),
+})
+export type EmpadreAsignacionValues = z.infer<typeof EmpadreAsignacionSchema>
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;
