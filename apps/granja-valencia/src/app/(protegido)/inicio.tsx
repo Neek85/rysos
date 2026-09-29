@@ -5,9 +5,9 @@
 // del mockup, specs/app_granja_valencia_pozas_reproductores.md) -- ya no
 // a galpones-pozas.tsx directo; esa pantalla sigue intacta, reubicada
 // como "+ Nueva poza / galpón" dentro del directorio.
-import { useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
-import { router } from 'expo-router'
+import { router, useFocusEffect } from 'expo-router'
 import { PoblacionResumenSchema } from '../../../../../lib/validations/pecuario'
 import { supabase } from '../../../lib/supabase/client'
 import { useProfile } from '../../../lib/supabase/useProfile'
@@ -56,8 +56,25 @@ export default function InicioScreen() {
   const [poblacionTotal, setPoblacionTotal] = useState<number | null>(null)
   const [reproductorasActivas, setReproductorasActivas] = useState<number | null>(null)
 
-  useEffect(() => {
+  // Fix (2026-09-29): antes era un useEffect([organizacion]) plano --
+  // Expo Router mantiene Inicio montado al navegar, así que volver acá
+  // con router.back() (ej. después de Registrar parto) NO remonta el
+  // componente ni cambia `organizacion`, y el fetch nunca se repetía --
+  // los stat-tiles quedaban con el valor de la primera vez que Inicio se
+  // montó, aunque la base ya tuviera el dato real actualizado
+  // (confirmado en vivo: vw_pecuario_poblacion_resumen ya devolvía el
+  // total correcto, el problema era 100% de refetch del cliente).
+  // useFocusEffect (re-exportado por expo-router, mismo hook de
+  // @react-navigation/native -- se usa ese import por consistencia con
+  // el resto de la app, que ya importa todo lo de routing desde
+  // 'expo-router') corre de nuevo cada vez que la pantalla gana foco,
+  // no solo al montar. reproductorasActivas comparte el mismo problema
+  // (mismo bloque de efecto, mismos datos que cambian en otra pantalla)
+  // así que se envuelve junto con población -- no es una tile aparte sin
+  // relación.
+  const cargarStats = useCallback(() => {
     if (!organizacion) return
+
     let cancelled = false
 
     supabase
@@ -90,6 +107,8 @@ export default function InicioScreen() {
       cancelled = true
     }
   }, [organizacion])
+
+  useFocusEffect(cargarStats)
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.bg }]} contentContainerStyle={styles.content}>
