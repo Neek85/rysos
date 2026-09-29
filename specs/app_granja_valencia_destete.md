@@ -125,10 +125,57 @@ sync offline, `id`/`device_id`/`created_offline_at` obligatorios,
 diseño distinto — quedan intactos, sin tocar, señalado acá para que no
 se confunda con duplicación accidental.
 
-## 6. Estado
+## 6. Hallazgo real de la primera prueba en dispositivo — `cantidad_actual` quedaba `NULL` (CORREGIDO)
 
-EN DISEÑO (2026-09-29) — pendiente de la prueba manual en dispositivo
-con la cuenta GRANJA-TEST: recolectar el parto real de H-001, conformar
-al menos 1 lote, confirmar `PECUARIO_LOTES` con `SELECT` real, y que un
-segundo intento de recolectar el mismo parto falla con el mensaje real
-del trigger ("no tiene lactancia pendiente de recolectar").
+La fila real creada por esta pantalla
+(`f3314c82-403d-46b8-9593-2caa78b91dfa`, `L-001`, `cantidad_inicial=3`)
+quedó con `cantidad_actual = NULL`. Confirmado en vivo, antes de tocar
+código:
+
+- `PECUARIO_LOTES.cantidad_actual` **no tiene ningún `DEFAULT` de
+  columna, y el único trigger real sobre esta tabla**
+  (`trg_conformar_lote_destete`) **solo valida `cantidad_inicial` contra
+  el remanente — nunca escribe `cantidad_actual`.** No hay nada que la
+  inicialice sola.
+- **No es un diseño correcto de "se llena después" — es un gap real,
+  con impacto de producción confirmado en vivo:** `vw_pecuario_seguimiento_lote`
+  usa `l.cantidad_actual` directo en `ganancia_total_kg_periodo` y `fcr`
+  (`... * (l.cantidad_actual)::numeric`); `vw_pecuario_ocupacion_poza` y,
+  a través de `vw_pecuario_lotes_etapa`, `vw_pecuario_poblacion_resumen`
+  la suman con `SUM(cantidad_actual)` — Postgres ignora los `NULL` en un
+  `SUM()`, así que el lote **desaparecía en silencio** de esos totales.
+  Confirmado con datos reales: `vw_pecuario_poblacion_resumen` para
+  GRANJA-TEST mostraba `total_recria = 0` y `total_poblacion = 2` (solo
+  los 2 reproductores) con un lote real de 3 hembras ya existente — los
+  3 gazapos recién destetados eran invisibles en "Población total" de
+  Inicio.
+
+**Fix aplicado** (`(protegido)/destete/registrar.tsx`): el insert a
+`PECUARIO_LOTES` ahora manda `cantidad_actual: cantidad_inicial`
+explícito, fuera del contrato Zod (`LoteDesteteSchema` no lo incluye —
+es un valor derivado al crear, no un campo de formulario, mismo criterio
+que `n_hembras_activas: 0` en el alta de poza de `galpones-pozas.tsx`).
+Verificado: `tsc --noEmit` limpio, bundle real (`curl`) `HTTP 200`, `0`
+`UnableToResolveError`.
+
+## 7. Prueba de rechazo del trigger — confirmada, sin forzar un segundo intento
+
+El parto ya recolectado (`91a5056c-5ce6-448e-b4e2-07f2cee469c0`)
+**ya no aparece en `vw_pecuario_lactancia_restante`** — consulta real
+contra esa vista para GRANJA-TEST devuelve **0 filas** (confirmado que
+`PECUARIO_RECOLECCION_PARTOS` tiene su fila real,
+`cantidad_incluida=3`). Como el Paso 1 de esta pantalla lista
+exactamente esa vista, el parto simplemente no vuelve a ofrecerse para
+recolectar — **esa ausencia es la prueba real de que el trigger/la vista
+previenen la doble recolección**, no un intento fallido forzado por
+SQL directo (tal como pedía esta tarea, no se forzó ese camino).
+
+## 8. Estado
+
+CERRADO en el backend/lógica de negocio — el hallazgo de `cantidad_actual`
+quedó corregido y verificado en vivo con datos reales, y el rechazo de
+recolección duplicada quedó confirmado sin necesidad de un segundo
+intento forzado. Pendiente únicamente: que Neyser repita la conformación
+de un segundo lote de prueba (no hace falta deshacer el existente) y
+confirme con un `SELECT` nuevo que esta vez `cantidad_actual` sale igual
+a `cantidad_inicial`.

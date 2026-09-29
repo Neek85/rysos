@@ -223,7 +223,18 @@ export default function RegistrarDesteteScreen() {
 
     setGuardandoLote(true)
     try {
-      const { error: insertError } = await supabase.from('PECUARIO_LOTES').insert(parsed.data)
+      // cantidad_actual no tiene default de columna ni trigger que la
+      // inicialice (confirmado en vivo, hallazgo real de la primera
+      // prueba: quedaba NULL, y vw_pecuario_seguimiento_lote/
+      // vw_pecuario_ocupacion_poza/vw_pecuario_poblacion_resumen la usan
+      // en SUM()/cálculos reales -- un lote con NULL quedaba invisible
+      // en "Población total" pese a existir. Mismo criterio que
+      // n_hembras_activas en el alta de poza (galpones-pozas.tsx): se
+      // manda explícito, fuera del contrato Zod (es un valor derivado
+      // al crear, no un campo que el usuario complete).
+      const { error: insertError } = await supabase
+        .from('PECUARIO_LOTES')
+        .insert({ ...parsed.data, cantidad_actual: parsed.data.cantidad_inicial })
       if (insertError) {
         // trg_conformar_lote_destete -- mensaje real tal cual, sin reescribirlo.
         setError(insertError.message)
