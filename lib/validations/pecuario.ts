@@ -804,6 +804,46 @@ export const VentaGuanoSchema = z.object({
 });
 export type VentaGuanoInput = z.infer<typeof VentaGuanoSchema>;
 
+// App Granja Valencia — Registrar mortalidad (specs/app_granja_valencia_mortalidad.md).
+// Nombre nuevo, sin tocar los existentes:
+// - MortalidadRegistroSchema ya existía (diseño especulativo de sync
+//   offline, id/device_id/created_offline_at obligatorios) -- cero
+//   consumidores reales (confirmado por grep), sin colisión de nombre
+//   forzada por esta tarea, se deja intacto y coexistiendo (mismo
+//   criterio que PesajeLoteSchema).
+// - MortalidadFotoSchema ya existía y SÍ tiene un consumidor real
+//   activo (tests/test_pecuario_mortalidad_fotos.py, que parsea este
+//   archivo de forma estática) y exige los mismos campos offline -- no
+//   se toca, se usa MortalidadFotoInsertSchema para el INSERT real.
+// trg_dar_baja_animal_por_mortalidad solo actúa si animal_id IS NOT
+// NULL (mismo gap que fn_dar_baja_animal_por_venta) -- si el origen es
+// un lote, el cliente hace el UPDATE explícito de cantidad_actual.
+export const MortalidadSchema = z.object({
+  ID_Organizacion: IdOrganizacionSchema,
+  poza_id: z.string().uuid().optional().nullable(),
+  lote_id: z.string().uuid().optional().nullable(),
+  animal_id: z.string().uuid().optional().nullable(),
+  fecha_evento: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  cantidad: z.number().int().positive(),
+  etapa: z.enum(['lactancia', 'recria', 'engorde', 'reproductor']),
+  causa: z.enum(['neumonia', 'distocia', 'aplastamiento', 'gastroenteritis', 'depredador', 'desconocido', 'otro']).default('desconocido'),
+  descripcion_sintomas: z.string().max(500).optional().nullable(),
+})
+  .refine((d) => !!d.animal_id !== (!!d.lote_id || !!d.poza_id), {
+    message: 'Debe indicar un animal identificado O un lote/poza, no ambos ni ninguno.', path: ['animal_id'],
+  })
+  .refine((d) => !d.animal_id || d.cantidad === 1, {
+    message: 'La mortalidad de un animal identificado es siempre de cantidad 1.', path: ['cantidad'],
+  });
+export type MortalidadInput = z.infer<typeof MortalidadSchema>;
+
+export const MortalidadFotoInsertSchema = z.object({
+  ID_Organizacion: IdOrganizacionSchema,
+  mortalidad_id: z.string().uuid(),
+  storage_path: z.string().min(1),
+});
+export type MortalidadFotoInsertInput = z.infer<typeof MortalidadFotoInsertSchema>;
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;
