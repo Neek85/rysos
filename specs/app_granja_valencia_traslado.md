@@ -210,3 +210,59 @@ Construido y verificado (`tsc --noEmit`, tests Zod, bundle real vía
 parcial, lote completo, reproductor). Pendiente la prueba manual final
 de Neyser en dispositivo real — no se considera "cerrado" hasta esa
 confirmación, mismo criterio que el resto de las pantallas de esta app.
+
+## 6. Hallazgo reportado (2026-09-30) — exclusión de origen en modo Reproductor
+
+Se reportó que, en modo "Reproductor identificado", la jaula actual del
+reproductor elegido (ej. M-001 en P-001) seguía apareciendo como destino
+válido, e incluso quedaba seleccionada por defecto — a diferencia del
+modo Lote, donde la exclusión sí funcionaba (confirmado con 2 capturas
+reales).
+
+**Investigado antes de escribir nada** (`git diff HEAD` +
+`git show HEAD:...registrar.tsx` contra el archivo en disco, sin
+diferencias): el código pusheado en el commit original de esta pantalla
+(`0e98d73`) **ya calculaba `origenJaulaId` de forma simétrica en ambos
+modos** desde el primer commit —
+
+```ts
+const origenJaulaId = modo === 'lote'
+  ? loteSeleccionado?.poza_actual_id ?? null
+  : animalSeleccionado?.jaula_actual_id ?? null
+const jaulasDestino = jaulas.filter((j) => j.id !== origenJaulaId)
+```
+
+— y `seleccionarAnimal()` ya limpiaba `destinoJaulaId` si coincidía con
+`r.jaula_actual_id`, igual que `seleccionarLote()` con `l.poza_actual_id`.
+**No existe una versión de esta pantalla donde el modo Reproductor no
+excluyera su origen** — la premisa exacta del reporte (falta el mismo
+criterio que en Lote) no coincide con el código real.
+
+**Evidencia en vivo, revisada como parte de la investigación:** el
+historial real de `PECUARIO_TRASLADOS` en GRANJA-TEST tiene 3 filas más
+que las 3 que se insertaron para verificar esta pantalla (las 3
+propias, `01:44-01:45`; 3 adicionales, `01:54-01:56`, consistentes con
+una prueba manual real en dispositivo). La fila de modo reproductor de
+esas 3 (`a4909d68...`) mueve a M-001 de H-001 (su origen real en ese
+momento, según `origen_jaula_id` resuelto por el trigger) a P-001 — un
+traslado válido a una jaula que **no era su origen**, no una violación
+de `chk_traslados_origen_destino_distintos`. Ninguna fila del historial
+muestra `origen_jaula_id = destino_jaula_id`.
+
+**No se encontró el bug descrito.** Posible explicación no confirmable
+desde este entorno: la prueba en dispositivo pudo haber corrido contra
+un bundle de Metro anterior a este commit (caché del cliente de Expo,
+sin un reload completo) — no hay forma de verificarlo desde aquí.
+**Pendiente de Neyser:** repetir la prueba después de forzar un reload
+completo de la app (no solo volver a foco), y si el comportamiento
+persiste, indicar el paso a paso exacto (qué reproductor, qué chips
+aparecían, en qué orden) para volver a investigar con esa evidencia
+concreta.
+
+**Reforzado igual, de forma defensiva:** se agregó un `useEffect` que
+limpia `destinoJaulaId` cada vez que coincide con `origenJaulaId`,
+cualquiera sea la causa (cubre un camino que ninguno de los dos
+`onPress` cubría: que `origenJaulaId` cambie por un refetch de
+`cargar()` sin que el usuario vuelva a tocar el chip de lote/animal).
+No cambia el comportamiento ya correcto — es una segunda capa sobre la
+misma invariante.

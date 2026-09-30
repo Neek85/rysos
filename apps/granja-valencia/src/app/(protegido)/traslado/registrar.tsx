@@ -7,7 +7,7 @@
 // chk_traslados_origen_destino_distintos) y, en modo lote parcial,
 // cantidad/codigo_lote_nuevo (con el mismo tope de UX que Pesaje,
 // aunque acá el trigger también lo rechaza si se pasa).
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { router, useFocusEffect } from 'expo-router'
 import { TrasladoSchema } from '../../../../../../lib/validations/pecuario'
@@ -134,6 +134,22 @@ export default function RegistrarTrasladoScreen() {
   // chk_traslados_origen_destino_distintos es real -- no se ofrece la
   // jaula/poza de origen como destino posible.
   const jaulasDestino = jaulas.filter((j) => j.id !== origenJaulaId)
+
+  // Refuerzo defensivo (hallazgo reportado en dispositivo real, modo
+  // Reproductor): destinoJaulaId y origenJaulaId ya se resuelven de
+  // forma simétrica en ambos modos (ver más arriba) y los onPress de
+  // "elegir lote"/"elegir animal" ya limpian destinoJaulaId cuando
+  // coincide con el origen -- pero ninguno de esos dos handlers cubre
+  // el caso de que origenJaulaId cambie por otra vía (ej. cargar()
+  // refresca jaula_actual_id del reproductor ya elegido tras volver a
+  // esta pantalla, sin que el usuario vuelva a tocar el chip). Este
+  // efecto es la fuente única de verdad: si destinoJaulaId llega a
+  // coincidir con origenJaulaId por cualquier camino, se limpia solo.
+  useEffect(() => {
+    if (destinoJaulaId && destinoJaulaId === origenJaulaId) {
+      setDestinoJaulaId(null)
+    }
+  }, [origenJaulaId, destinoJaulaId])
 
   async function sugerirCodigoLoteNuevo() {
     if (!organizacion) return
