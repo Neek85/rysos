@@ -25,6 +25,7 @@ export default function ProtegidoLayout() {
       <Stack.Screen name="parto/registrar" />
       <Stack.Screen name="destete/registrar" />
       <Stack.Screen name="pesaje/registrar" />
+      <Stack.Screen name="traslado/registrar" />
       <Stack.Screen name="proximamente/[title]" />
     </Stack>
   )

@@ -691,6 +691,49 @@ export const PesajeSchema = z.object({
 });
 export type PesajeInput = z.infer<typeof PesajeSchema>;
 
+// App Granja Valencia — Registrar traslado (specs/app_granja_valencia_traslado.md).
+// Nombre nuevo a propósito, NO TrasladoRegistroSchema: ese ya existe y
+// tiene un consumidor real activo (tests/test_pecuario_traslado_interno.py
+// ::TestZodContract, que parsea este archivo de forma estática y falla
+// si el nombre o sus 3 .refine() exactos cambian) -- no se toca. Además
+// exige id/device_id/created_offline_at (diseño de sync offline que
+// ninguna pantalla de esta app usa), así que tampoco encaja tal cual
+// para este INSERT online-first. origen_jaula_id y lote_nuevo_id no
+// están acá -- los resuelve trg_procesar_traslado del lado del servidor
+// (confirmado leyendo la función real).
+export const TrasladoSchema = z.object({
+  ID_Organizacion: IdOrganizacionSchema,
+  tipo_origen: z.enum(['lote', 'reproductor']),
+  lote_id: z.string().uuid().optional().nullable(),
+  animal_id: z.string().uuid().optional().nullable(),
+  destino_jaula_id: z.string().uuid(),
+  alcance: z.enum(['completo', 'parcial']).optional().nullable(),
+  cantidad: z.number().int().positive().optional().nullable(),
+  codigo_lote_nuevo: z.string().min(1).max(50).optional().nullable(),
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  motivo_traslado: z.enum(['enfermedad_aislamiento', 'recomposicion_poza', 'sobrepoblacion', 'otro']),
+  observaciones: z.string().max(500).optional().nullable(),
+})
+  .refine((d) => d.tipo_origen !== 'lote' || (d.lote_id != null && d.animal_id == null), {
+    message: 'Traslado de lote requiere lote_id y no debe traer animal_id', path: ['lote_id'],
+  })
+  .refine((d) => d.tipo_origen !== 'reproductor' || (d.animal_id != null && d.lote_id == null), {
+    message: 'Traslado de reproductor requiere animal_id y no debe traer lote_id', path: ['animal_id'],
+  })
+  .refine((d) => d.tipo_origen !== 'lote' || d.alcance != null, {
+    message: 'Traslado de lote requiere indicar alcance (completo/parcial)', path: ['alcance'],
+  })
+  .refine((d) => d.tipo_origen !== 'reproductor' || (d.alcance == null && d.cantidad == null && d.codigo_lote_nuevo == null), {
+    message: 'Traslado de reproductor no debe traer alcance/cantidad/codigo_lote_nuevo', path: ['alcance'],
+  })
+  .refine((d) => d.alcance !== 'parcial' || (d.cantidad != null && d.cantidad > 0 && !!d.codigo_lote_nuevo), {
+    message: 'Traslado parcial requiere cantidad > 0 y código del lote nuevo', path: ['cantidad'],
+  })
+  .refine((d) => d.alcance !== 'completo' || (d.cantidad == null && d.codigo_lote_nuevo == null), {
+    message: 'Traslado completo no debe traer cantidad ni código de lote nuevo', path: ['cantidad'],
+  });
+export type TrasladoInput = z.infer<typeof TrasladoSchema>;
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;
