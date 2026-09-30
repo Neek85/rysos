@@ -1062,6 +1062,76 @@
   merge a `main`. **Con este ítem, el roadmap completo de Pecuario Cuyes
   (mockup → backend, 10/10 ítems) queda cerrado.**
 
+- **(2026-09-30, cierre) App móvil Granja Valencia — Pesaje (control de
+  crecimiento del lote), CERRADA.** Redactado y ejecutado por Claude
+  (Cowork). Sin gate de segunda revisión (§4.1.2) — esta tarea no toca
+  SQL/RLS/migraciones/esquema, solo la app Expo y su contrato Zod.
+  `peso_promedio_g` es `GENERATED ALWAYS` en `PECUARIO_PESAJES`
+  (confirmado en vivo antes de escribir código) — se excluye del
+  `INSERT`. `ganancia_diaria_estimada_g` no es generada: la calcula el
+  cliente contra el pesaje anterior más reciente del mismo lote, y
+  queda `NULL` en el primer pesaje (sin ninguna línea base real en
+  `PECUARIO_CONFIGURACION` ni en filas existentes — documentado, no se
+  inventó una fórmula). **Bug real corregido el mismo día:** "Animales
+  muestreados" no tenía tope contra la cantidad real del lote (aceptó
+  una muestra de 3 en un lote con `cantidad_actual=2`) — sin ningún
+  `CHECK`/trigger real que lo prevenga en la base, la regla vive 100%
+  del lado del cliente (tope del `Stepper` + validación explícita antes
+  del `INSERT`). Verificado en vivo contra GRANJA-TEST y en dispositivo
+  real. `tsc --noEmit` limpio, Jest 44/44. Commits:
+  `7c9265c` (pantalla) → `25c46e4` (fix del tope de cantidad). Ver
+  `specs/app_granja_valencia_pesaje.md`. Sin merge a `main`.
+
+- **(2026-09-30, cierre) App móvil Granja Valencia — Traslado
+  (movimiento interno entre pozas/jaulas), CERRADA.** Redactado y
+  ejecutado por Claude (Cowork). Sin gate de segunda revisión (§4.1.2).
+  `trg_procesar_traslado` calcula `cantidad_actual` automáticamente en
+  los 3 escenarios reales (parcial, completo, reproductor) — el
+  cliente nunca lo escribe a mano, a diferencia del gap ya conocido en
+  Venta. Ambos modos del mockup ("Lote poblacional" y "Reproductor
+  identificado") incluidos desde el arranque. **Falso positivo
+  investigado y cerrado el mismo día:** se reportó que el destino
+  mostrado para M-001 en modo Reproductor excluía la jaula equivocada
+  — la causa real, confirmada con un panel de `DEBUG TEMPORAL` visible
+  en pantalla (ya retirado) más evidencia SQL en vivo, fue un bundle de
+  Metro cacheado en el cliente sin reload completo, no un bug de
+  código; la exclusión de origen ya funcionaba igual en ambos modos
+  desde el primer commit de la pantalla. Documentado como precedente
+  para el resto del roadmap en `specs/app_granja_valencia_traslado.md`
+  §8. Verificado en vivo los 3 escenarios contra GRANJA-TEST y en
+  dispositivo real. `tsc --noEmit` limpio, Jest 55/55. Commits:
+  `0e98d73` (pantalla) → `98b8eda`/`58cb861` (investigación e
+  instrumentación temporal del falso positivo) → `99033a3` (retiro del
+  panel de debug). Sin merge a `main`.
+
+- **(2026-09-30, cierre) App móvil Granja Valencia — Venta
+  (animales/pelado/guano), CERRADA.** Redactado y ejecutado por Claude
+  (Cowork). Sin gate de segunda revisión (§4.1.2). Commit `334e6e8`.
+  Contrato Zod nuevo `VentaAnimalSchema`/`VentaGuanoSchema` — sin tocar
+  `VentaRegistroSchema` ni `VentaSubproductoSchema` preexistentes, que
+  ya tienen consumidores reales activos (varios tests Python que
+  parsean el archivo de forma estática). Cierra el hallazgo abierto de
+  Pesaje: se agregó `.gt('cantidad_actual', 0)` al selector de lotes en
+  las 3 pantallas (Pesaje, Traslado, Venta) — `PECUARIO_LOTES.estado`
+  nunca cambia solo al agotarse un lote. Verificado en vivo contra
+  GRANJA-TEST y en dispositivo real las variantes del mockup (Carne,
+  Pelado por kg, Pelado por animal, Pie de cría, Reproductor de saca,
+  Guano), confirmado por SQL sin discrepancias. `tsc --noEmit` limpio,
+  Jest 69/69.
+
+  **Hallazgo de proceso, no de código, sin fix requerido:** al probar
+  "Reproductor identificado" en dispositivo se vendió por accidente a
+  H-001 (reservada para pruebas de Empadre/Parto) en vez de dar de alta
+  un reproductor nuevo para la prueba — confirmado por `PECUARIO_VENTAS`/
+  `PECUARIO_REPRODUCTORES` en vivo (`estado='vendido'`, misma mecánica
+  de `trg_dar_baja_animal_por_venta` ya verificada con M-001). No
+  representa ningún bug: el flujo funcionó de punta a punta tal como
+  debía. GRANJA-TEST quedó sin ningún reproductor activo como
+  consecuencia. **Decisión: no revertir por SQL** (organización de
+  prueba, no de producción) — cualquier tarea futura que necesite
+  reprobar Empadre/Parto/Traslado en modo Reproductor debe dar de alta
+  reproductores nuevos primero. Sin merge a `main`.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
