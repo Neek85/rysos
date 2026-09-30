@@ -386,6 +386,37 @@ export default function RegistrarTrasladoScreen() {
               ))}
             </View>
           )}
+
+          {/* DEBUG TEMPORAL -- quitar en el próximo commit de este mismo
+              hallazgo. No se encontró el bug leyendo el código (la
+              comparación es por id/uuid en todos los puntos revisados);
+              esto muestra los valores reales en memoria en el momento
+              exacto del filtro, para que Neyser los reporte tal cual
+              aparecen en su dispositivo -- sin esto, "no reproducible"
+              sería una suposición, no una confirmación real. */}
+          <View style={[styles.panel, { backgroundColor: colors.amberSoft }]}>
+            <Text style={{ fontSize: 11, fontWeight: '800', color: colors.amber }}>DEBUG TEMPORAL</Text>
+            <Text style={{ fontSize: 11, color: colors.ink }}>animalId: {animalId ?? '—'}</Text>
+            <Text style={{ fontSize: 11, color: colors.ink }}>
+              animalSeleccionado: {animalSeleccionado ? `${animalSeleccionado.codigo_arete} (id=${animalSeleccionado.id})` : '—'}
+            </Text>
+            <Text style={{ fontSize: 11, color: colors.ink }}>
+              animalSeleccionado.jaula_actual_id: {animalSeleccionado?.jaula_actual_id ?? '—'}
+            </Text>
+            <Text style={{ fontSize: 11, color: colors.ink }}>origenJaulaId: {origenJaulaId ?? '—'}</Text>
+            <Text style={{ fontSize: 11, color: colors.ink, marginTop: 4 }}>reproductores (id / codigo_arete / jaula_actual_id):</Text>
+            {reproductores.map((r) => (
+              <Text key={r.id} style={{ fontSize: 10, color: colors.inkSoft }}>
+                {r.id} / {r.codigo_arete} / {r.jaula_actual_id}
+              </Text>
+            ))}
+            <Text style={{ fontSize: 11, color: colors.ink, marginTop: 4 }}>jaulas (id / codigo_poza):</Text>
+            {jaulas.map((j) => (
+              <Text key={j.id} style={{ fontSize: 10, color: colors.inkSoft }}>
+                {j.id} / {j.codigo_poza}
+              </Text>
+            ))}
+          </View>
         </>
       )}
 
@@ -486,6 +517,7 @@ const styles = StyleSheet.create({
   sugerirButton: { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 12, marginTop: 4 },
   sugerirText: { fontFamily: 'PublicSans_700Bold', fontSize: 13 },
   chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  panel: { borderWidth: 1, borderRadius: 12, padding: 10, marginTop: 8, borderColor: 'transparent' },
   stepper: {
     flexDirection: 'row',
     alignItems: 'center',

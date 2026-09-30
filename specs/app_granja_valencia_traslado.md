@@ -266,3 +266,56 @@ cualquiera sea la causa (cubre un camino que ninguno de los dos
 `cargar()` sin que el usuario vuelva a tocar el chip de lote/animal).
 No cambia el comportamiento ya correcto — es una segunda capa sobre la
 misma invariante.
+
+## 7. Segunda vuelta (2026-09-30) — evidencia SQL real, hipótesis de cruce código/id investigada
+
+Neyser confirmó el bug con reload completo (no bundle cacheado) y con
+evidencia SQL directa: `M-001.jaula_actual_id` apunta a la poza real
+`P-001` (`id 12032199-...`) — y la reproductora **H-001** también vive
+en esa misma poza `P-001`. En dispositivo, al elegir M-001 los chips de
+destino mostraron `P-001` (incluso seleccionado) y `R-01`, con `H-001`
+excluida — la poza equivocada. Hipótesis a confirmar/descartar, tal
+como la planteó la tarea: un cruce por `codigo_arete`/`codigo_poza`
+(string) en vez de `id` (uuid) en algún punto, potenciado por la
+coincidencia de que existen una **reproductora** de código `H-001` y
+una **poza** de código `H-001` con el mismo string.
+
+**Releída línea por línea toda la cadena real** (fetch → estado →
+derivación → filtro → render) buscando específicamente cualquier cruce
+por `codigo_arete`/`codigo_poza`:
+
+- El fetch de `reproductores` selecciona `id, codigo_arete,
+  jaula_actual_id` en un `select()` plano, sin ningún `embed` de
+  PostgREST — `jaula_actual_id` llega tal cual está en la columna real.
+- `animalSeleccionado = reproductores.find((r) => r.id === animalId)`
+  — comparación por `id`, no por código.
+- `origenJaulaId = animalSeleccionado?.jaula_actual_id` — toma la
+  columna FK real, nunca un código.
+- `jaulasDestino = jaulas.filter((j) => j.id !== origenJaulaId)` —
+  comparación por `id`, no por `codigo_poza`.
+- El único lugar de todo el archivo que cruza por código
+  (`codigoPozaPorId`, un `Map<id, codigo_poza>`) se usa **solo** para
+  el label del chip de Lote (`L-004 (R-01)`) — nunca interviene en la
+  derivación de `origenJaulaId` ni en el filtro de destino, y no se
+  toca en modo Reproductor en ningún punto del código.
+
+**No se encontró el cruce por código sospechado en ninguno de los
+puntos revisados.** Siguiendo el punto 3 de la tarea (no cerrar como
+"no reproducible" sin un log real): se agregó un **panel de DEBUG
+TEMPORAL** en modo Reproductor (visible en pantalla, no en consola —
+así Neyser lo puede leer y reportar directamente sin herramientas de
+desarrollador) que muestra, en el momento exacto del filtro:
+`animalId`, `animalSeleccionado` completo, `animalSeleccionado.jaula_actual_id`,
+`origenJaulaId`, y el volcado crudo de los arrays `reproductores` y
+`jaulas` (`id / codigo_arete / jaula_actual_id` y `id / codigo_poza`
+respectivamente) tal como los tiene la pantalla en memoria en ese
+instante.
+
+**Pendiente de Neyser:** repetir la selección de M-001 con este panel
+visible y reportar los valores literales que muestra — eso confirma o
+descarta definitivamente si el problema está en los datos que llegan a
+la pantalla (fetch/RLS/caché de PostgREST) o en la derivación/render
+(en cuyo caso el panel mismo mostraría un `origenJaulaId` que no
+coincide con `animalSeleccionado.jaula_actual_id`, algo que el código
+revisado no debería poder producir). El panel se retira en el próximo
+commit de este mismo hallazgo, una vez confirmada la causa real.
