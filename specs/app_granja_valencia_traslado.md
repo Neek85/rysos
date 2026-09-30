@@ -207,9 +207,9 @@ pasa a apuntar a `/traslado/registrar`.
 
 Construido y verificado (`tsc --noEmit`, tests Zod, bundle real vía
 `curl`, prueba en vivo contra GRANJA-TEST de los 3 escenarios: lote
-parcial, lote completo, reproductor). Pendiente la prueba manual final
-de Neyser en dispositivo real — no se considera "cerrado" hasta esa
-confirmación, mismo criterio que el resto de las pantallas de esta app.
+parcial, lote completo, reproductor). **Actualización (2026-09-30):**
+la prueba manual final en dispositivo real de la exclusión de destino
+(ambos modos) quedó confirmada — ver §8 para el cierre completo.
 
 ## 6. Hallazgo reportado (2026-09-30) — exclusión de origen en modo Reproductor
 
@@ -319,3 +319,35 @@ la pantalla (fetch/RLS/caché de PostgREST) o en la derivación/render
 coincide con `animalSeleccionado.jaula_actual_id`, algo que el código
 revisado no debería poder producir). El panel se retira en el próximo
 commit de este mismo hallazgo, una vez confirmada la causa real.
+
+## 8. Cierre (2026-09-30) — confirmado: la exclusión de destino ya era correcta en ambos modos
+
+Con el panel de DEBUG TEMPORAL visible, Neyser repitió la selección de
+M-001 y confirmó que `origenJaulaId` coincide exactamente con
+`animalSeleccionado.jaula_actual_id` real (`P-001`), y que los chips de
+destino mostraron `H-001`/`R-01` — `P-001` correctamente excluido. La
+exclusión de origen en modo Reproductor **funciona igual que en modo
+Lote**, tal como el código siempre lo hizo desde el commit original de
+esta pantalla (`0e98d73`, ver §6). El panel de debug se retiró de
+`traslado/registrar.tsx` (junto con el estilo `panel`, que solo existía
+para ese panel) una vez confirmado.
+
+**Causa real del reporte inicial: un bundle de Metro cacheado en el
+cliente de Expo, sin un reload completo** — no un bug de código. Ni la
+exclusión de origen en sí (§6) ni el supuesto cruce `codigo_arete`/
+`codigo_poza` (§7) resultaron ser reales; ambas rondas de investigación
+llegaron a la misma conclusión por caminos distintos (lectura de código
++ evidencia de base en la primera, panel de debug en vivo en la
+segunda).
+
+**Precedente para el resto de este roadmap:** esta es la **segunda vez**
+que un reporte de bug en esta app resulta ser un bundle cacheado y no
+un problema real de código — la primera fue la de "Población total" en
+Inicio (`specs/app_granja_valencia_inicio.md`), pero **esa sí tenía una
+causa real** (falta de refetch en foco, corregida con `useFocusEffect`)
+además del componente de bundle stale. Esta de Traslado, en cambio, no
+tenía ninguna causa real subyacente — el código nunca estuvo roto.
+**Recomendación para reportes futuros en esta app:** antes de reportar
+algo como bug, forzar un reload completo del cliente de Expo (no solo
+volver a foco ni reabrir la app desde el multitasking) — hubiera evitado
+2 rondas completas de investigación en este caso.
