@@ -675,6 +675,22 @@ export const LoteDesteteSchema = z.object({
 })
 export type LoteDesteteInput = z.infer<typeof LoteDesteteSchema>
 
+// App Granja Valencia — Registrar pesaje (specs/app_granja_valencia_pesaje.md).
+// peso_promedio_g es GENERATED ALWAYS en la tabla real (confirmado en vivo,
+// NO asumido) -- se valida acá para feedback en pantalla pero se excluye
+// del payload del INSERT. ganancia_diaria_estimada_g NO es generada -- la
+// calcula el cliente (o queda null si no hay pesaje anterior del lote).
+export const PesajeSchema = z.object({
+  ID_Organizacion: IdOrganizacionSchema,
+  lote_id: z.string().uuid(),
+  fecha_pesaje: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  animales_muestreados: z.number().int().positive({ message: 'Debe muestrear al menos 1 animal' }),
+  peso_total_muestra_g: z.number().positive({ message: 'El peso debe ser mayor a 0' }),
+  peso_promedio_g: z.number().positive(),
+  ganancia_diaria_estimada_g: z.number().nullable(),
+});
+export type PesajeInput = z.infer<typeof PesajeSchema>;
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;

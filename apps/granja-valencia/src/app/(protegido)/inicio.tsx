@@ -23,6 +23,7 @@ type Accion = {
     | '/empadre/asignar-macho'
     | '/parto/registrar'
     | '/destete/registrar'
+    | '/pesaje/registrar'
     | { pathname: '/proximamente/[title]'; params: { title: string } }
   danger?: boolean
 }
@@ -34,7 +35,7 @@ type Accion = {
 const ACCIONES: Accion[] = [
   { label: 'Parto', icon: 'parto', route: '/parto/registrar' },
   { label: 'Destete', icon: 'destete', route: '/destete/registrar' },
-  { label: 'Pesaje', icon: 'pesaje', route: { pathname: '/proximamente/[title]', params: { title: 'Pesaje' } } },
+  { label: 'Pesaje', icon: 'pesaje', route: '/pesaje/registrar' },
   {
     label: 'Mortalidad',
     icon: 'mortalidad',
