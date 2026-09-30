@@ -25,6 +25,7 @@ type Accion = {
     | '/destete/registrar'
     | '/pesaje/registrar'
     | '/traslado/registrar'
+    | '/venta/registrar'
     | { pathname: '/proximamente/[title]'; params: { title: string } }
   danger?: boolean
 }
@@ -44,7 +45,7 @@ const ACCIONES: Accion[] = [
     danger: true,
   },
   { label: 'Traslado', icon: 'traslado', route: '/traslado/registrar' },
-  { label: 'Venta', icon: 'venta', route: { pathname: '/proximamente/[title]', params: { title: 'Venta' } } },
+  { label: 'Venta', icon: 'venta', route: '/venta/registrar' },
   { label: 'Sanidad', icon: 'sanidad', route: { pathname: '/proximamente/[title]', params: { title: 'Sanidad' } } },
   { label: 'Insumos', icon: 'insumos', route: { pathname: '/proximamente/[title]', params: { title: 'Insumos' } } },
   { label: 'Compras', icon: 'compras', route: { pathname: '/proximamente/[title]', params: { title: 'Compras' } } },

@@ -102,6 +102,10 @@ export default function RegistrarTrasladoScreen() {
         .from('PECUARIO_LOTES')
         .select('id, codigo_lote, poza_actual_id, cantidad_actual')
         .eq('ID_Organizacion', organizacion)
+        // cantidad_actual=0 no tiene nada que trasladar (hallazgo
+        // cerrado junto con Venta, ver
+        // specs/app_granja_valencia_venta.md §1).
+        .gt('cantidad_actual', 0)
         .order('created_at'),
       supabase
         .from('PECUARIO_REPRODUCTORES')

@@ -734,6 +734,76 @@ export const TrasladoSchema = z.object({
   });
 export type TrasladoInput = z.infer<typeof TrasladoSchema>;
 
+// App Granja Valencia — Registrar venta (specs/app_granja_valencia_venta.md).
+// Nombres nuevos a propósito, NI VentaRegistroSchema NI VentaSubproductoSchema:
+// ambos ya existen y tienen consumidores reales activos (varios tests en
+// tests/test_pecuario_venta_pelado_beneficiado.py y
+// tests/test_pecuario_venta_subproductos_guano.py parsean este archivo de
+// forma estática) -- no se tocan. Ambos exigen además
+// id/device_id/created_offline_at (diseño de sync offline que ninguna
+// pantalla de esta app usa), así que tampoco encajan tal cual para un
+// INSERT online-first real.
+//
+// VentaAnimalSchema mirror-ea exactamente las mismas reglas cruzadas
+// reales de VentaRegistroSchema (XOR lote_id/animal_id, cantidad=1 en
+// venta individual, base_precio coherente con tipo_salida) sin los
+// campos offline. rendimiento_carcasa_pct NO está acá -- es GENERATED,
+// nunca se manda. precio_total SÍ es obligatorio (columna NOT NULL
+// real, confirmado en vivo) -- pero su valor depende del camino
+// (ver spec §0): si hay precio_unitario o (base_precio='por_kg', que
+// siempre trae peso_total_kg+precio_kg), trg_calcular_precio_total_venta
+// lo recalcula igual y pisa lo que se mande; si precio_unitario es null
+// y base_precio='por_animal', el trigger NO toca precio_total -- el
+// valor que se manda acá es el que queda guardado tal cual (modo
+// "acordar un total directo", real y soportado, confirmado leyendo
+// fn_calcular_precio_total_venta).
+export const VentaAnimalSchema = z.object({
+  ID_Organizacion: IdOrganizacionSchema,
+  lote_id: z.string().uuid().optional().nullable(),
+  animal_id: z.string().uuid().optional().nullable(),
+  fecha_venta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  tipo_salida: z.enum(['carne', 'pie_cria', 'reproductor_saca', 'pelado_beneficiado']),
+  cantidad: z.number().int().positive(),
+  precio_unitario: z.number().nonnegative().optional().nullable(),
+  peso_total_kg: z.number().positive().optional().nullable(),
+  precio_total: z.number().nonnegative(),
+  comprador_nombre: z.string().max(150).optional().nullable(), // PII de un tercero: nunca a consola/log
+  base_precio: z.enum(['por_animal', 'por_kg']).default('por_animal'),
+  precio_kg: z.number().nonnegative().optional().nullable(),
+  peso_vivo_pre_beneficio_kg: z.number().positive().optional().nullable(),
+})
+  .refine((d) => !!d.animal_id !== !!d.lote_id, {
+    message: 'Debe indicar un animal identificado O un lote, no ambos ni ninguno.', path: ['animal_id'],
+  })
+  .refine((d) => !d.animal_id || d.cantidad === 1, {
+    message: 'La venta de un animal identificado es siempre de cantidad 1.', path: ['cantidad'],
+  })
+  .refine((d) => d.base_precio === 'por_animal' || d.tipo_salida === 'pelado_beneficiado', {
+    message: 'La base de precio "por kilogramo" solo aplica a ventas de tipo Pelado (beneficiado).', path: ['base_precio'],
+  })
+  .refine((d) => d.base_precio !== 'por_kg' || (d.peso_total_kg != null && d.precio_kg != null), {
+    message: 'Con base de precio "por kilogramo", el peso total pelado y el precio por kg son obligatorios.', path: ['precio_kg'],
+  })
+  .refine((d) => d.base_precio !== 'por_animal' || d.precio_kg == null, {
+    message: 'Con base de precio "por animal", no debe enviarse precio_kg.', path: ['precio_kg'],
+  });
+export type VentaAnimalInput = z.infer<typeof VentaAnimalSchema>;
+
+// Venta de subproductos (Guano) -- PECUARIO_VENTAS_SUBPRODUCTOS, tabla
+// independiente sin FK hacia lotes/reproductores/PECUARIO_VENTAS
+// (confirmado en el recon). Sin triggers reales sobre esta tabla.
+export const VentaGuanoSchema = z.object({
+  ID_Organizacion: IdOrganizacionSchema,
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  producto: z.literal('guano').default('guano'),
+  cantidad: z.number().positive(),
+  unidad: z.enum(['sacos', 'kg']),
+  precio_total: z.number().nonnegative().optional().nullable(),
+  galpon_id: z.string().uuid().optional().nullable(),
+  comprador_nombre: z.string().max(150).optional().nullable(), // PII de un tercero: nunca a consola/log
+});
+export type VentaGuanoInput = z.infer<typeof VentaGuanoSchema>;
+
 export type SanidadActividadInput = z.infer<typeof SanidadActividadSchema>;
 export type SanidadRegistroInput = z.infer<typeof SanidadRegistroSchema>;
 export type TrasladoRegistroInput = z.infer<typeof TrasladoRegistroSchema>;

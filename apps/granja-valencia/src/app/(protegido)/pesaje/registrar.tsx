@@ -80,6 +80,12 @@ export default function RegistrarPesajeScreen() {
       .from('PECUARIO_LOTES')
       .select('id, codigo_lote, cantidad_actual')
       .eq('ID_Organizacion', organizacion)
+      // cantidad_actual=0 (lote vendido/trasladado por completo) no
+      // tiene nada que pesar -- PECUARIO_LOTES.estado nunca cambia
+      // solo cuando un lote se agota, así que este filtro es la única
+      // forma real de excluirlo (hallazgo cerrado junto con Venta, ver
+      // specs/app_granja_valencia_venta.md §1).
+      .gt('cantidad_actual', 0)
       .order('created_at')
       .then(({ data }) => {
         setLotes((data ?? []) as LoteOption[])
