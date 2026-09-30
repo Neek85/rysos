@@ -1132,6 +1132,45 @@
   reprobar Empadre/Parto/Traslado en modo Reproductor debe dar de alta
   reproductores nuevos primero. Sin merge a `main`.
 
+- **(2026-09-30, cierre) App móvil Granja Valencia — Mortalidad (+
+  fotos), CERRADA.** Redactado y ejecutado por Claude (Cowork). Sin
+  gate de segunda revisión (§4.1.2) — sin SQL/RLS/esquema nuevo en esta
+  tarea, `PECUARIO_MORTALIDAD`/`PECUARIO_MORTALIDAD_FOTOS`/bucket
+  `evidencias_pecuario` ya estaban cerrados desde el roadmap de backend
+  (commit `5443d36`). Commit `f3f17cc`.
+
+  Gap real confirmado en el recon, mismo patrón exacto que Venta:
+  `trg_dar_baja_animal_por_mortalidad` solo actúa si `animal_id IS NOT
+  NULL` — el cliente hace el `UPDATE` explícito de `cantidad_actual`
+  cuando el origen es un lote. **Hallazgo real de nombre engañoso:**
+  `chk_mortalidad_individual_xor_poblacional` usa `OR` entre
+  `lote_id`/`poza_id`, no un XOR pese al nombre — la base permite ambos
+  a la vez. Se ajustó el test que asumía XOR, no la restricción de la
+  base (la base ya estaba bien, el error era la expectativa del test).
+  `estado_animal` sí tiene `'muerto'` → ambos modos ("Poblacional" /
+  "Reproductor identificado") incluidos desde el arranque, igual que
+  Traslado/Venta.
+
+  **Diseño confirmado on-device:** la etapa elegida decide si el
+  formulario pide un lote o una poza — en "Lactancia" o "Reproductor
+  (sin identificar)" todavía no existe lote (se arma recién en
+  Destete), así que pide poza en vez de lote.
+
+  Librería nueva: `expo-image-picker` vía `npx expo install`;
+  `base64-arraybuffer` necesitó `--legacy-peer-deps` por un conflicto
+  de peers preexistente del proyecto (`react-native-worklets`), ajeno
+  al paquete en sí.
+
+  **Verificado en dispositivo real:** cámara + subida de foto de
+  evidencia confirmada contra el bucket `evidencias_pecuario`
+  (`storage_path` real observado en vivo:
+  `GRANJA-TEST/mortalidad/262fd453-.../foto-1790740941150-0.jpg`, fila
+  correspondiente en `PECUARIO_MORTALIDAD_FOTOS`, objeto real de 55.9KB
+  en `storage.objects` — confirmado antes de escribir esta entrada, no
+  transcrito a ciegas). Los 3 escenarios de datos (lote, poza,
+  reproductor con baja automática) verificados por SQL contra
+  GRANJA-TEST. `tsc --noEmit` limpio, Jest 80/80. Sin merge a `main`.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
