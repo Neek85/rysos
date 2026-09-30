@@ -124,14 +124,22 @@ usado en `parto/registrar.tsx` y `destete/registrar.tsx` — no se extrajo a
 `components/ui/` en ninguna pantalla anterior, así que no se extrae acá
 tampoco por consistencia).
 
-- **Lote**: chips cargados desde `PECUARIO_LOTES` (`id, codigo_lote`) de la
-  organización, ordenados por `created_at`. No se filtra por
+- **Lote**: chips cargados desde `PECUARIO_LOTES` (`id, codigo_lote,
+  cantidad_actual`) de la organización, ordenados por `created_at`. **No
+  se filtra por `estado='activo'`** — corrección a una suposición de una
+  tarea posterior que asumía que sí se filtraba así: confirmado leyendo el
+  código real, la consulta nunca tuvo ese filtro (solo `ID_Organizacion`).
+  `PECUARIO_LOTES.estado` sí existe como columna real (varchar, sin
+  `CHECK`, todos los lotes actuales en `'activo'`), pero agregar ese
+  filtro queda fuera del alcance de esta tarea — se deja como hallazgo
+  abierto, no se decide unilateralmente. Tampoco se filtra por
   `cantidad_actual > 0` — un lote que llegó a 0 (vendido/trasladado
   completo) igual podría necesitar un pesaje de cierre; se deja sin filtrar
   y es una decisión de bajo riesgo, no bloqueante.
 - **Fecha**: input de texto `AAAA-MM-DD`, default hoy — mismo patrón que
   Destete (sin date-picker nativo en ninguna pantalla anterior).
-- **Animales muestreados**: `Stepper` min 1, default 1.
+- **Animales muestreados**: `Stepper` min 1, default 1, **`max` = la
+  `cantidad_actual` real del lote seleccionado** (ver §3.1).
 - **Peso total de la muestra (g)**: input numérico.
 - **Peso promedio (computed-box)**: `peso_total_muestra_g /
   animales_muestreados`, recalculado en vivo en cada cambio de cualquiera de
@@ -142,6 +150,39 @@ tampoco por consistencia).
   `{ ID_Organizacion, lote_id, fecha_pesaje, animales_muestreados,
   peso_total_muestra_g, ganancia_diaria_estimada_g }` — sin
   `peso_promedio_g` (columna generada, la excluye Postgres).
+
+## 3.1 Tope de `animales_muestreados` contra `cantidad_actual` — vive 100% en el cliente
+
+**Hallazgo real** (2026-09-29): la pantalla dejaba muestrear más animales
+que los que el lote realmente tiene (ej. un lote con `cantidad_actual=2`
+aceptaba `animales_muestreados=3`). Confirmado leyendo `PECUARIO_PESAJES`:
+no hay ningún `CHECK` ni trigger que compare `animales_muestreados` contra
+`PECUARIO_LOTES.cantidad_actual` — ni siquiera hay FK directa que permita
+un `CHECK` entre tablas sin trigger. Esta regla **no tiene ningún respaldo
+real en la base** y no puede tenerlo con un simple `CHECK` (requeriría un
+trigger dedicado, que no existe); por eso vive enteramente del lado del
+cliente, en dos capas independientes:
+
+1. **Tope del stepper**: `max` = `cantidad_actual` del lote elegido. No se
+   puede incrementar más allá con el botón "+". Al elegir un lote, si el
+   valor ya cargado supera la `cantidad_actual` del lote nuevo, se ajusta
+   hacia abajo a `min(valor_actual, cantidad_actual)` automáticamente
+   (cubre tanto la selección inicial como un cambio de lote a mitad de
+   captura).
+2. **Validación explícita antes de `INSERT`**: no se confía solo en el
+   tope del stepper (que es una restricción de UI, no del dato en sí) —
+   justo antes de guardar se vuelve a comparar `animales_muestreados` con
+   la `cantidad_actual` real del lote seleccionado. Si la excede, se
+   bloquea con el mensaje real `"No puedes muestrear más de los N
+   animales que tiene el lote."` (N = `cantidad_actual`), sin llegar a
+   tocar Supabase.
+
+Si `cantidad_actual` fuera `null` (no debería pasar — todo lote real que
+pasa por Destete lo manda explícito desde el fix de
+`specs/app_granja_valencia_destete.md` §6 — pero no hay `NOT NULL` a nivel
+de columna que lo garantice), ninguna de las dos capas aplica tope: se
+prefiere no bloquear con un dato ausente antes que inventar un límite
+falso.
 
 ## 4. Navegación
 

@@ -15,7 +15,7 @@ import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
 
-type LoteOption = { id: string; codigo_lote: string }
+type LoteOption = { id: string; codigo_lote: string; cantidad_actual: number | null }
 type PesajeAnterior = { fecha_pesaje: string; peso_promedio_g: number }
 
 function hoyISO() {
@@ -28,7 +28,17 @@ function diasEntre(anteriorISO: string, actualISO: string) {
   return Math.round((actual - anterior) / 86400000)
 }
 
-function Stepper({ value, onChange, min = 1 }: { value: number; onChange: (v: number) => void; min?: number }) {
+function Stepper({
+  value,
+  onChange,
+  min = 1,
+  max,
+}: {
+  value: number
+  onChange: (v: number) => void
+  min?: number
+  max?: number | null
+}) {
   const colors = useThemeColors()
   return (
     <View style={[styles.stepper, { borderColor: colors.border }]}>
@@ -41,7 +51,7 @@ function Stepper({ value, onChange, min = 1 }: { value: number; onChange: (v: nu
       <Text style={[styles.stepperValue, { color: colors.ink }]}>{value}</Text>
       <TouchableOpacity
         style={[styles.stepperButton, { backgroundColor: colors.surface2 }]}
-        onPress={() => onChange(value + 1)}
+        onPress={() => onChange(max != null ? Math.min(max, value + 1) : value + 1)}
       >
         <Text style={[styles.stepperButtonText, { color: colors.accentDim }]}>+</Text>
       </TouchableOpacity>
@@ -68,7 +78,7 @@ export default function RegistrarPesajeScreen() {
     setCargando(true)
     supabase
       .from('PECUARIO_LOTES')
-      .select('id, codigo_lote')
+      .select('id, codigo_lote, cantidad_actual')
       .eq('ID_Organizacion', organizacion)
       .order('created_at')
       .then(({ data }) => {
@@ -78,6 +88,24 @@ export default function RegistrarPesajeScreen() {
   }, [organizacion])
 
   useFocusEffect(cargar)
+
+  const loteSeleccionado = lotes.find((l) => l.id === loteId) ?? null
+  const maxAnimales = loteSeleccionado?.cantidad_actual ?? null
+
+  function seleccionarLote(l: LoteOption) {
+    setLoteId(l.id)
+    setError(null)
+    setGuardadoOk(false)
+    // Si el lote nuevo tiene menos animales que el valor ya ingresado
+    // (o que se venía de un lote anterior con más cabezas), se ajusta
+    // hacia abajo -- nunca se deja un valor que ya sabemos inválido para
+    // este lote (spec: PECUARIO_PESAJES no tiene ningún CHECK/trigger
+    // real que limite animales_muestreados contra cantidad_actual, así
+    // que esto vive 100% del lado del cliente).
+    if (l.cantidad_actual != null && animalesMuestreados > l.cantidad_actual) {
+      setAnimalesMuestreados(Math.max(1, l.cantidad_actual))
+    }
+  }
 
   const pesoMuestraNum = parseFloat(pesoMuestra)
   const pesoPromedio =
@@ -89,6 +117,14 @@ export default function RegistrarPesajeScreen() {
     setError(null)
     setGuardadoOk(false)
     if (!organizacion || !loteId || pesoPromedio === null) return
+
+    // No confiar solo en el tope del stepper -- valida de nuevo contra
+    // el dato real justo antes de guardar (cubre cualquier vía por la
+    // que animales_muestreados haya llegado a superar cantidad_actual).
+    if (maxAnimales != null && animalesMuestreados > maxAnimales) {
+      setError(`No puedes muestrear más de los ${maxAnimales} animales que tiene el lote.`)
+      return
+    }
 
     setGuardando(true)
     try {
@@ -171,11 +207,7 @@ export default function RegistrarPesajeScreen() {
               key={l.id}
               label={l.codigo_lote}
               selected={loteId === l.id}
-              onPress={() => {
-                setLoteId(l.id)
-                setError(null)
-                setGuardadoOk(false)
-              }}
+              onPress={() => seleccionarLote(l)}
             />
           ))}
         </View>
@@ -203,7 +235,11 @@ export default function RegistrarPesajeScreen() {
           setGuardadoOk(false)
         }}
         min={1}
+        max={maxAnimales}
       />
+      {maxAnimales != null && (
+        <Text style={[styles.hint, { color: colors.inkFaint }]}>Máximo disponible en este lote: {maxAnimales}</Text>
+      )}
 
       <Text style={[styles.label, { color: colors.inkSoft }]}>Peso total de la muestra (g)</Text>
       <TextInput
