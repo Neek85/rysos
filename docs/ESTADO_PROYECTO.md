@@ -1171,6 +1171,16 @@
   reproductor con baja automática) verificados por SQL contra
   GRANJA-TEST. `tsc --noEmit` limpio, Jest 80/80. Sin merge a `main`.
 
+- **(2026-09-30) App móvil Granja Valencia — Sanidad (registrar +
+  configurar actividades), IMPLEMENTADA, pendiente de prueba en
+  dispositivo.** Claude Code. Sin SQL/RLS/esquema nuevo. Alcance real de
+  Sanidad = toda la granja o un galpón (no lote/poza/reproductor);
+  catálogo vacío en GRANJA-TEST. Zod nuevo `SanidadActividadCrearSchema`/
+  `SanidadRegistroCrearSchema`; los schemas offline previos no se tocaron.
+  `tsc` limpio, Jest 88/88, pytest de Sanidad 22/22. **Riesgo abierto:**
+  la RLS no distingue rol — "Actividades (admin)" solo se oculta en la UI
+  (ver `AI_STATE.md`). Spec: `specs/app_granja_valencia_sanidad.md`.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

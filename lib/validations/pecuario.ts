@@ -410,6 +410,33 @@ export const SanidadRegistroSchema = z.object({
   created_offline_at: z.string().datetime(),
 });
 
+// App móvil Granja Valencia — Sanidad (specs/app_granja_valencia_sanidad.md).
+// SanidadActividadSchema/SanidadRegistroSchema (arriba) exigen id/device_id/
+// created_offline_at (diseño de sync offline, único consumidor real:
+// tests/test_pecuario_sanidad_actividades.py, que parsea este archivo de forma
+// estática) — no se tocan. Estos dos son el contrato de INSERT directo con
+// sesión real, mismo criterio que MortalidadSchema/TrasladoSchema. La guarda
+// galpon_id según alcance sigue viviendo en el trigger de la base; la UI la
+// repite en JS (spec §2).
+export const SanidadActividadCrearSchema = z.object({
+  ID_Organizacion: IdOrganizacionSchema,
+  nombre: z.string().trim().min(1, 'El nombre de la actividad es requerido').max(100),
+  alcance: z.enum(['granja', 'galpon']),
+  frecuencia_dias: z.number().int({ message: 'La frecuencia debe ser un número entero de días' }).positive({ message: 'La frecuencia debe ser mayor a 0 días' }),
+});
+export type SanidadActividadCrearInput = z.infer<typeof SanidadActividadCrearSchema>;
+
+export const SanidadRegistroCrearSchema = z.object({
+  ID_Organizacion: IdOrganizacionSchema,
+  actividad_id: z.string().uuid(),
+  galpon_id: z.string().uuid().optional().nullable(),
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  producto_usado: z.string().max(150).optional().nullable(),
+  responsable: z.string().max(150).optional().nullable(),
+  observaciones: z.string().max(500).optional().nullable(),
+});
+export type SanidadRegistroCrearInput = z.infer<typeof SanidadRegistroCrearSchema>;
+
 // ---------------------------------------------------------------------
 // Traslado interno entre pozas/jaulas (Pecuario Cuyes) — 2026-09-24.
 // "poza" y "jaula" son la misma tabla en el esquema real (PECUARIO_JAULAS)

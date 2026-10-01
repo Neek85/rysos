@@ -13,6 +13,18 @@ entradas puntuales de "esto bloqueó, acá está la causa real".
 > raíz determinada todavía) de las tablas centrales completamente
 > vacías, y el estado más reciente.
 
+
+## 2026-09-30 — Sanidad (app móvil): "Actividades (admin)" sin respaldo de RLS por rol
+
+`PECUARIO_ACTIVIDADES_SANIDAD` tiene una sola policy `FOR ALL TO authenticated`
+scoped por `ID_Organizacion` (migración `20260923130000`, su encabezado ya lo
+advertía). La pantalla de Sanidad oculta el modo admin con `rol === 'admin'`
+(`useProfile`), pero eso es solo UI: un usuario autenticado de rol no-admin de
+la misma organización puede insertar/editar actividades llamando a la API.
+No se creó migración (la tarea lo prohibía sin gate). **Pendiente:** policy de
+INSERT/UPDATE con `auth_role() = 'admin'` — requiere segunda revisión de
+seguridad (§4.1.2) y test de aislamiento por rol.
+
 ## 2026-09-09 — RESUELTO: fotos de evidencia no cargaban en Mapa WebGIS ni Consola QC — causa real confirmada en vivo, no una hipótesis
 
 **Tarea:** parte 2/3 del prompt de "revertir aprobado + fotos + botón
