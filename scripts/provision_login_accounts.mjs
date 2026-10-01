@@ -121,6 +121,14 @@ const CUENTAS = [
     modo: 'password',
     password_env: 'PASSWORD_GRANJA_TEST',
   },
+  {
+    email: 'dneyser5+tecnico@gmail.com',
+    nombre_completo: 'Neyser Diaz Maldonado (cuenta de prueba técnico)',
+    rol: 'tecnico_campo',
+    id_organizacion: 'GRANJA-TEST',
+    modo: 'password',
+    password_env: 'PASSWORD_GRANJA_TEST_TECNICO',
+  },
 ].map((c) => CuentaAProvisionar.parse(c))
 
 // ── Buscar un auth.users existente por email (sin getUserByEmail) ─────
