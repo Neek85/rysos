@@ -40,6 +40,38 @@ el INSERT directo no. Candidato a un ADR futuro (WITH CHECK con `EXISTS` por
 FK, o triggers de validación) — probablemente transversal a otras tablas de
 Pecuario con el mismo patrón.
 
+
+## 2026-10-01 — RESUELTO: `fn_crear_insumo_con_stock_inicial` no validaba organización ni rol (guarda con `CURRENT_USER = 'postgres'` dentro de SECURITY DEFINER)
+
+Detectado por `tests/test_pecuario_insumos_rls_y_rpc.py`: la RPC aceptaba
+llamadas de `tecnico_campo`, `auditor_qc` y de un admin con la organización de
+otra organización (HTTP 204), y una llamada con la anon key llegaba hasta el
+INSERT. Causa: en una función `SECURITY DEFINER`, `CURRENT_USER` es el dueño
+(`postgres`), así que la guarda `... OR CURRENT_USER = 'postgres'` se saltaba
+siempre. Sin daño real (0 filas en `PECUARIO_INSUMOS`, los tests limpian lo
+que crean). Corregido y aplicado por Neyser:
+`20261001231500_fix_rpc_crear_insumo_guarda_real.sql` (único bypass:
+`auth.role() = 'service_role'`) y `20261001230000_revoke_execute_publico_insumos.sql`
+(EXECUTE solo para `authenticated`/`service_role`). Verificado en vivo: cuerpo
+sin `CURRENT_USER`, ACL sin `PUBLIC`/`anon`, test 20/20.
+
+## 2026-10-01 — BACKLOG (auditoría aparte, NO corregido): funciones SECURITY DEFINER invocables por `anon`/`PUBLIC`
+
+Auditoría de solo lectura de `pg_proc` (funciones `SECURITY DEFINER` de `public`
+que no son triggers). Ninguna otra usa el bypass `CURRENT_USER = 'postgres'`,
+pero tres tienen `EXECUTE` para `PUBLIC` y `anon` (y las ejecuta el dueño,
+saltándose RLS):
+- `exportar_esquema_ryzos()` — devuelve tablas, columnas, claves foráneas e
+  índices de todo el esquema; cualquiera con la anon key puede pedirlo.
+- `fn_jaula_tiene_otro_macho_activo(p_jaula_id, p_macho_id_excluir)` — boolean
+  sobre `PECUARIO_REPRODUCTORES` por id de jaula; el recorte leído de su cuerpo
+  no muestra filtro por organización (revisar el cuerpo completo).
+- `fn_son_parientes(animal_a, animal_b, generaciones)` — recorre la genealogía
+  de `PECUARIO_REPRODUCTORES` por id; mismo caveat.
+Pendiente: leer los cuerpos completos, decidir si revocar `EXECUTE` a
+`PUBLIC`/`anon` y/o validar organización. Los triggers `SECURITY DEFINER` con
+`PUBLIC` EXECUTE no son invocables como RPC (retornan `trigger`).
+
 ## 2026-09-09 — RESUELTO: fotos de evidencia no cargaban en Mapa WebGIS ni Consola QC — causa real confirmada en vivo, no una hipótesis
 
 **Tarea:** parte 2/3 del prompt de "revertir aprobado + fotos + botón

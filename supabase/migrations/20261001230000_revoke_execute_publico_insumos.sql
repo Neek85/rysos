@@ -1,0 +1,56 @@
+-- Migración: Endurece el permiso de ejecución de fn_crear_insumo_con_stock_inicial
+-- (alta atómica de insumo + stock inicial, app móvil Granja Valencia).
+--
+-- Hallazgo: verificación de solo lectura del 2026-10-01 contra la base real
+-- (Claude Code CLI, ADR-042) sobre la migración
+-- 20261001223000_fix_rls_insumos_y_galpon_movimientos.sql. El ACL de la función
+-- quedó {=X/postgres, postgres=X, anon=X, authenticated=X, service_role=X}:
+-- EXECUTE para PUBLIC y para anon, por los permisos por defecto de Postgres/
+-- Supabase para funciones nuevas (la migración original solo hizo GRANT a
+-- authenticated; nunca revocó lo heredado).
+-- Revisión de seguridad: Claude (Cowork), Arquitecto Senior RYZOS, 2026-10-01 —
+-- gate de la Sección 4.1.2 del documento maestro, cubierto en el mismo flujo
+-- (tarea redactada y revisada por Claude).
+--
+-- Riesgo real: CORRECCIÓN (2026-10-01, tests/test_pecuario_insumos_rls_y_rpc.py).
+-- La primera versión de este header decía "bajo y NO explotable hoy"; es FALSO.
+-- La guarda interna de la función se salta SIEMPRE:
+--   IF NOT (auth.role() = 'service_role' OR CURRENT_USER = 'postgres') THEN ...
+-- Dentro de una función SECURITY DEFINER cuyo dueño es postgres, CURRENT_USER
+-- es 'postgres' para cualquier llamador, así que el bloque que valida
+-- organización y rol nunca se ejecuta. Comprobado en vivo: un tecnico_campo, un
+-- auditor_qc y un admin pasando la organización de OTRA organización recibieron
+-- 204 (insumo + movimiento creados; los tests los borraron), y una llamada con
+-- la anon key llegó hasta el INSERT (falló solo por la FK de una organización
+-- inexistente, 23503, no por permisos). Es decir: con esta migración sola,
+-- quien tenga la anon key deja de poder llamarla, pero cualquier usuario
+-- AUTENTICADO sigue pudiendo crear insumos en cualquier organización. El REVOKE
+-- es necesario pero NO suficiente: hace falta además corregir el cuerpo de la
+-- función (por ejemplo sin el atajo CURRENT_USER = 'postgres', que solo tiene
+-- sentido en RLS donde CURRENT_USER es el rol que consulta). Eso es una
+-- migración aparte (CREATE OR REPLACE) y debe pasar por el gate 4.1.2.
+-- Defensa en profundidad: aun con el cuerpo corregido, una función SECURITY
+-- DEFINER que escribe no debe ser invocable por quien nunca podría usarla.
+--
+-- Alcance: solo quita EXECUTE a PUBLIC y a anon. authenticated (que mantiene el
+-- GRANT explícito de la migración original, y es el rol que usa la app con
+-- sesión real) y service_role no se tocan.
+--
+-- Se revoca a PUBLIC y a anon por separado a propósito: en Supabase anon tiene
+-- un GRANT explícito propio además del implícito de PUBLIC, y REVOKE FROM PUBLIC
+-- no quita el explícito.
+--
+-- Idempotente: REVOKE no falla si el privilegio ya no existe. Se nombra la
+-- función sin lista de argumentos porque es la única con ese nombre (Postgres
+-- resuelve el nombre sin ambigüedad; si algún día hubiera una sobrecarga, esta
+-- sentencia fallaría con "no es único" en lugar de revocar en la equivocada).
+--
+-- Depende de 20261001223000_fix_rls_insumos_y_galpon_movimientos.sql (crea la
+-- función); por eso su timestamp es posterior.
+-- Plan de reversión:
+--   GRANT EXECUTE ON FUNCTION fn_crear_insumo_con_stock_inicial TO PUBLIC;
+--   GRANT EXECUTE ON FUNCTION fn_crear_insumo_con_stock_inicial TO anon;
+--   (solo si hubiera una razón real para reabrirlo; hoy no existe ninguna).
+
+REVOKE EXECUTE ON FUNCTION fn_crear_insumo_con_stock_inicial FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION fn_crear_insumo_con_stock_inicial FROM anon;
