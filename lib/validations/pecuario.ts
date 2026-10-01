@@ -437,6 +437,59 @@ export const SanidadRegistroCrearSchema = z.object({
 });
 export type SanidadRegistroCrearInput = z.infer<typeof SanidadRegistroCrearSchema>;
 
+// App móvil Granja Valencia — Insumos (specs/app_granja_valencia_insumos.md).
+// InsumoSchema/MovimientoInsumoSchema (v2/v4, arriba) exigen id/device_id/
+// created_offline_at y InsumoSchema tiene consumidores reales
+// (tests/test_pecuario_validations_v4.mjs) — no se tocan. Estos schemas son el
+// contrato de la pantalla; no llevan id/device_id/created_offline_at (los
+// genera la base o el RPC).
+//
+// - InsumoCrearSchema: fila de catálogo, sin stock_inicial (no es columna).
+// - MovimientoInsumoCrearSchema: INSERT directo de una entrada/salida.
+//   galpon_id es el alcance principal; poza_id/lote_id son detalle opcional y
+//   la base permite ambos a la vez (sin CHECK XOR), así que el contrato no
+//   inventa una exclusión. Que el stock quede negativo NO es error de
+//   contrato: es solo un aviso de UI (spec §4).
+// - InsumoAltaConStockInicialSchema: payload de la RPC atómica
+//   fn_crear_insumo_con_stock_inicial (migración 20261001223000, pendiente de
+//   aplicar al escribir esto). insumo_id/movimiento_id son UUID del cliente.
+//   La RPC fija la fecha del movimiento inicial en CURRENT_DATE.
+export const InsumoCrearSchema = z.object({
+  ID_Organizacion: IdOrganizacionSchema,
+  nombre: z.string().trim().min(1, 'El nombre del insumo es requerido').max(150),
+  categoria: z.enum(['alimento', 'medicamento', 'vitamina', 'sanitario', 'material', 'equipo', 'otro']).default('otro'),
+  unidad_medida: z.enum(['kg', 'g', 'litro', 'ml', 'unidad', 'saco_50kg', 'saco_40kg']).default('unidad'),
+  stock_minimo: z.number().nonnegative({ message: 'El stock mínimo no puede ser negativo' }).optional().nullable(),
+  activo: z.boolean().default(true),
+});
+export type InsumoCrearInput = z.infer<typeof InsumoCrearSchema>;
+
+export const MovimientoInsumoCrearSchema = z.object({
+  ID_Organizacion: IdOrganizacionSchema,
+  insumo_id: z.string().uuid(),
+  tipo_movimiento: z.enum(['entrada', 'salida']),
+  cantidad: z.number().positive({ message: 'La cantidad debe ser mayor a 0' }),
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato debe ser YYYY-MM-DD'),
+  galpon_id: z.string().uuid().optional().nullable(),
+  poza_id: z.string().uuid().optional().nullable(),
+  lote_id: z.string().uuid().optional().nullable(),
+  observaciones: z.string().max(500).optional().nullable(),
+});
+export type MovimientoInsumoCrearInput = z.infer<typeof MovimientoInsumoCrearSchema>;
+
+export const InsumoAltaConStockInicialSchema = InsumoCrearSchema.extend({
+  insumo_id: z.string().uuid(),
+  stock_inicial: z.number().nonnegative({ message: 'El stock inicial no puede ser negativo' }).optional().nullable(),
+  movimiento_id: z.string().uuid().optional().nullable(),
+  galpon_id: z.string().uuid().optional().nullable(),
+  device_id: z.string().min(1).optional().nullable(),
+  created_offline_at: z.string().datetime().optional().nullable(),
+}).refine((d) => !(d.stock_inicial != null && d.stock_inicial > 0) || !!d.movimiento_id, {
+  message: 'movimiento_id es obligatorio cuando se indica un stock inicial mayor a 0 (mismo criterio que la RPC).',
+  path: ['movimiento_id'],
+});
+export type InsumoAltaConStockInicialInput = z.infer<typeof InsumoAltaConStockInicialSchema>;
+
 // ---------------------------------------------------------------------
 // Traslado interno entre pozas/jaulas (Pecuario Cuyes) — 2026-09-24.
 // "poza" y "jaula" son la misma tabla en el esquema real (PECUARIO_JAULAS)
