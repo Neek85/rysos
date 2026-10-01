@@ -14,16 +14,17 @@ entradas puntuales de "esto bloqueó, acá está la causa real".
 > vacías, y el estado más reciente.
 
 
-## 2026-09-30 — Sanidad (app móvil): "Actividades (admin)" sin respaldo de RLS por rol
+## 2026-09-30 — RESUELTO (migración creada, pendiente de aplicación manual): Sanidad (app móvil) sin RLS por rol
 
-`PECUARIO_ACTIVIDADES_SANIDAD` tiene una sola policy `FOR ALL TO authenticated`
-scoped por `ID_Organizacion` (migración `20260923130000`, su encabezado ya lo
-advertía). La pantalla de Sanidad oculta el modo admin con `rol === 'admin'`
-(`useProfile`), pero eso es solo UI: un usuario autenticado de rol no-admin de
-la misma organización puede insertar/editar actividades llamando a la API.
-No se creó migración (la tarea lo prohibía sin gate). **Pendiente:** policy de
-INSERT/UPDATE con `auth_role() = 'admin'` — requiere segunda revisión de
-seguridad (§4.1.2) y test de aislamiento por rol.
+`PECUARIO_ACTIVIDADES_SANIDAD`/`PECUARIO_SANIDAD_REGISTROS` tenían una sola
+policy `FOR ALL TO authenticated` scoped por `ID_Organizacion`, sin distinguir
+rol — "Actividades (admin)" solo se ocultaba en la UI. Cerrado en
+`supabase/migrations/20260930202402_fix_rls_sanidad_por_rol.sql` (gate §4.1.2
+cubierto por Claude/Cowork): catálogo → INSERT/UPDATE/DELETE solo `admin`;
+registros → INSERT `admin`/`tecnico_campo`, UPDATE/DELETE solo `admin`; SELECT
+abierto a la organización. **NO aplicada** — la corre Neyser a mano en Studio
+tras revisar el archivo. Pendiente después de aplicarla: test de aislamiento
+por rol (no existe todavía).
 
 ## 2026-09-09 — RESUELTO: fotos de evidencia no cargaban en Mapa WebGIS ni Consola QC — causa real confirmada en vivo, no una hipótesis
 
