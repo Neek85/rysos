@@ -101,7 +101,8 @@ A partir de 2026-09-02, RYZOS se trabaja con más de una IA en el rol de "Arquit
 4. **Ninguna migración SQL se aplica automáticamente contra la base real, sin importar qué herramienta la redactó:** el archivo se crea en `supabase/migrations/`, pero la aplicación final contra producción siempre es un paso manual del usuario, posterior a la revisión de seguridad cuando aplique.
 5. **Bitácora compartida:** `docs/ESTADO_PROYECTO.md`, `AI_STATE.md`, `CLAUDE.md`, `docs/adr/*.md` y `specs/*.md` son la fuente de verdad que todas las IAs/herramientas leen al arrancar cualquier tarea -- no un documento exclusivo de una sola herramienta. Toda tarea cerrada actualiza `docs/ESTADO_PROYECTO.md` en el mismo commit o en el inmediato siguiente -- nunca queda para "después".
 6. **Trazabilidad:** una entrada de `docs/ESTADO_PROYECTO.md` sobre una tarea hecha bajo este protocolo menciona qué IA/herramienta la redactó y cuál dio el visto bueno de seguridad, cuando aplique (literal, sin parafrasear).
-
+7. **Alcance de `supabase db query --linked` (ADR-042):** el uso de solo lectura de este mecanismo (consultas `SELECT` contra `pg_policies`, `information_schema`, `pg_catalog`, etc., sin `-f <archivo>`) está
+permitido libremente para cualquier IA/herramienta, sin aprobación previa. Cualquier uso que escriba (`INSERT`/`UPDATE`/`DELETE`/DDL, con o sin `-f <archivo>`) sigue sujeto sin excepción al punto 4 de esta misma sección — declarado explícitamente antes de ejecutarse, nunca después, con confirmación humana previa. Ver `docs/adr/ADR-042-supabase-db-query-linked-alcance-lectura.md`.
 ---
 
 ## 5. REGLAS INVIOLABLES DE CÓDIGO Y SEGURIDAD
