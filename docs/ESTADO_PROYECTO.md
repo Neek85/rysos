@@ -1171,15 +1171,50 @@
   reproductor con baja automática) verificados por SQL contra
   GRANJA-TEST. `tsc --noEmit` limpio, Jest 80/80. Sin merge a `main`.
 
-- **(2026-09-30) App móvil Granja Valencia — Sanidad (registrar +
-  configurar actividades), IMPLEMENTADA, pendiente de prueba en
-  dispositivo.** Claude Code. Sin SQL/RLS/esquema nuevo. Alcance real de
-  Sanidad = toda la granja o un galpón (no lote/poza/reproductor);
-  catálogo vacío en GRANJA-TEST. Zod nuevo `SanidadActividadCrearSchema`/
-  `SanidadRegistroCrearSchema`; los schemas offline previos no se tocaron.
-  `tsc` limpio, Jest 88/88, pytest de Sanidad 22/22. **Riesgo abierto:**
-  la RLS no distingue rol — "Actividades (admin)" solo se oculta en la UI
-  (ver `AI_STATE.md`). Spec: `specs/app_granja_valencia_sanidad.md`.
+- **(2026-10-01, cierre) App móvil Granja Valencia — Sanidad (registrar +
+  configurar actividades), CERRADA.** Pantalla 7 del punto 7 del orden de
+  implementación. Commits: `ae961c4` (pantalla), `41e873a` (migración de
+  RLS por rol, `20260930202402_fix_rls_sanidad_por_rol.sql`), `fcb1b45`
+  (test de aislamiento por rol,
+  `tests/test_pecuario_sanidad_rls_por_rol.py`). Spec:
+  `specs/app_granja_valencia_sanidad.md`.
+
+  **Hallazgo de seguridad real:** `PECUARIO_ACTIVIDADES_SANIDAD` y
+  `PECUARIO_SANIDAD_REGISTROS` tenían una única política RLS `ALL`
+  filtrada solo por `ID_Organizacion`, sin distinguir rol — cualquier
+  usuario autenticado de la organización podía escribir el catálogo de
+  sanidad vía API, pese a que la UI lo oculta a no-admin. Corregido:
+  catálogo solo-admin para INSERT/UPDATE/DELETE; registros con INSERT
+  para admin + `tecnico_campo`, UPDATE/DELETE solo admin; SELECT abierto
+  a los tres roles de la organización.
+
+  Redactado y revisado por: Claude (Cowork), Arquitecto Senior RYZOS —
+  gate de la Sección 4.1.2 cubierto en el mismo flujo (la misma IA
+  redactó y revisó).
+
+  **Nota de arquitectura para futuras tareas:** `GRANJA-TEST` y
+  `GRANJA-VALENCIA` son dos organizaciones dentro del mismo (único)
+  proyecto Supabase `jhtocgxlozfuzullrtol` — no hay staging separado a
+  nivel de RLS/base de datos. Una migración de políticas aplicada contra
+  la base real queda vigente para todas las organizaciones al instante.
+  Sin riesgo de negocio en este caso: `GRANJA-VALENCIA` no tenía
+  actividad real en Sanidad al aplicar la migración (0 filas en ambas
+  tablas, confirmado en vivo).
+
+  **Test de aislamiento:** 17 tests (4 estáticos + 13 en vivo con
+  sesiones reales de admin/`tecnico_campo`/`auditor_qc`, sin usar
+  `service_role` para simular usuarios), cubriendo bloqueo de catálogo
+  para `tecnico_campo`, acceso completo de admin, aislamiento cruzado de
+  organización y solo-lectura de `auditor_qc`.
+
+  **Suite completa:** 850 passed, 15 failed, 8 skipped — los 15 fallos
+  confirmados preexistentes y no relacionados (verificado con `git stash
+  -u` del trabajo de la sesión + corrida comparativa).
+
+  **Pendiente (no bloquea el cierre):** el cambio suelto en
+  `docs/RYZOS_ORQUESTADOR_V3.1.md` (ADR-042, sin commitear desde antes de
+  esta tarea) y el de `scripts/provision_login_accounts.mjs` (cuenta de
+  prueba `tecnico_campo`), ambos a criterio de Neyser.
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
