@@ -203,7 +203,7 @@ BEGIN
     IF p_id_organizacion IS DISTINCT FROM auth_org_id() THEN
       RAISE EXCEPTION 'No autorizado: organización no coincide con la sesión autenticada';
     END IF;
-    IF auth_role() <> 'admin' THEN
+    IF auth_role() IS DISTINCT FROM 'admin' THEN
       RAISE EXCEPTION 'No autorizado: solo admin puede crear insumos';
     END IF;
   END IF;
@@ -221,6 +221,15 @@ BEGIN
   );
 
   IF p_stock_inicial IS NOT NULL AND p_stock_inicial > 0 THEN
+    IF p_galpon_id IS NOT NULL THEN
+      IF NOT EXISTS (
+        SELECT 1 FROM "PECUARIO_GALPONES" g
+        WHERE g.id = p_galpon_id AND g."ID_Organizacion" = p_id_organizacion
+      ) THEN
+        RAISE EXCEPTION 'El galpón indicado no pertenece a la organización';
+      END IF;
+    END IF;
+
     INSERT INTO "PECUARIO_INSUMOS_MOVIMIENTOS" (
       id, "ID_Organizacion", insumo_id, tipo_movimiento, cantidad, fecha, galpon_id,
       observaciones, device_id, created_offline_at

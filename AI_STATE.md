@@ -26,6 +26,20 @@ abierto a la organización. **NO aplicada** — la corre Neyser a mano en Studio
 tras revisar el archivo. Pendiente después de aplicarla: test de aislamiento
 por rol (no existe todavía).
 
+
+## 2026-10-01 — BACKLOG (no bloquea): policy de INSERT de `PECUARIO_INSUMOS_MOVIMIENTOS` no valida que las FKs sean de la misma organización
+
+Hallazgo del review de `20261001223000_fix_rls_insumos_y_galpon_movimientos.sql`
+(preexistente, no introducido por esa migración, fuera de su alcance). La
+policy de INSERT solo comprueba `"ID_Organizacion" = auth_org_id()` y el rol;
+`insumo_id`, `poza_id`, `lote_id` y `galpon_id` solo tienen FK de existencia,
+así que un `admin`/`tecnico_campo` puede referenciar filas de otra organización
+(integridad entre organizaciones, impacto bajo). La función
+`fn_crear_insumo_con_stock_inicial` sí valida `galpon_id` contra la organización;
+el INSERT directo no. Candidato a un ADR futuro (WITH CHECK con `EXISTS` por
+FK, o triggers de validación) — probablemente transversal a otras tablas de
+Pecuario con el mismo patrón.
+
 ## 2026-09-09 — RESUELTO: fotos de evidencia no cargaban en Mapa WebGIS ni Consola QC — causa real confirmada en vivo, no una hipótesis
 
 **Tarea:** parte 2/3 del prompt de "revertir aprobado + fotos + botón
