@@ -93,6 +93,23 @@ el 2026-10-03). Si es por datos, esos tests dependen de que la base no esté vac
 y pueden volver a fallar. Pendiente: leer por qué fallaban originalmente y
 confirmar qué los hizo pasar.
 
+
+## 2026-10-03 — BACKLOG (no bloquea): `device_id` / `created_offline_at` no distinguyen "guardado offline" de "guardado online" en la app móvil
+
+En la pantalla de Compras, `device_id` queda siempre vacío y `created_offline_at`
+se llena siempre con la hora del dispositivo al guardar, haya o no conexión real:
+la app no tiene detección de conectividad ni una librería de identificador de
+dispositivo instalada (ni `netinfo` ni `expo-application`/`expo-device`). Revisado
+después en el código: Insumos hace lo mismo solo en el alta con stock inicial (RPC
+`fn_crear_insumo_con_stock_inicial`: `created_offline_at` con la hora del
+dispositivo, `device_id` en NULL); sus INSERT directos (movimientos y alta sin
+stock inicial) y Sanidad no envían ninguna de las dos columnas, así que quedan en
+NULL. Las dos columnas pierden así su sentido semántico (deberían distinguir
+"se guardó offline" de "se guardó online"). No es un problema de seguridad ni de
+integridad de datos — solo de trazabilidad futura. Pendiente de revisar cuando se
+implemente `SYNC_QUEUE` o detección real de conectividad (ver masterprompt §6).
+No bloquea el cierre de Compras.
+
 ## 2026-09-09 — RESUELTO: fotos de evidencia no cargaban en Mapa WebGIS ni Consola QC — causa real confirmada en vivo, no una hipótesis
 
 **Tarea:** parte 2/3 del prompt de "revertir aprobado + fotos + botón
