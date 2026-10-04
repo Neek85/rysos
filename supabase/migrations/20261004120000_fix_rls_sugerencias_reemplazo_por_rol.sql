@@ -122,19 +122,18 @@ CREATE POLICY "rls_delete_pecuario_sugerencias_reemplazo"
 -- ============================================================
 -- resuelta_en queda deliberadamente fuera de esta lista — la pone
 -- trg_sugerencia_reemplazo_resuelta_en (BEFORE UPDATE ya existente, sin
--- tocar acá) cuando estado cambia. Bypass de service_role para
--- correcciones administrativas legítimas (scripts/migraciones futuras),
--- nunca CURRENT_USER = 'postgres' — este trigger no es SECURITY DEFINER,
--- así que CURRENT_USER ya refleja a quien realmente ejecuta el UPDATE,
--- pero se evita ese patrón de todos modos para no repetir la ambigüedad
--- que causó el incidente de Insumos (ver roadmap §2.17).
+-- tocar acá) cuando estado cambia. Bypass de service_role (API) y de
+-- CURRENT_USER = 'postgres' (sesión directa en Studio, que conecta como
+-- postgres) — a diferencia del incidente de Insumos (roadmap §2.17), acá es
+-- seguro: este trigger NO es SECURITY DEFINER, así que CURRENT_USER refleja
+-- siempre a quien realmente ejecuta el UPDATE, nunca al dueño de una función.
 
 CREATE OR REPLACE FUNCTION fn_sugerencia_reemplazo_bloquear_cambio_campos()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $function$
 BEGIN
-  IF auth.role() = 'service_role' THEN
+  IF auth.role() = 'service_role' OR CURRENT_USER = 'postgres' THEN
     RETURN NEW;
   END IF;
 
