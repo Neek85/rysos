@@ -1216,10 +1216,10 @@
   esta tarea) y el de `scripts/provision_login_accounts.mjs` (cuenta de
   prueba `tecnico_campo`), ambos a criterio de Neyser.
 
-- **(2026-10-04, cierre) App móvil Granja Valencia — Insumos (lista de
+- **(2026-10-03, cierre) App móvil Granja Valencia — Insumos (lista de
   stock, registrar movimiento, alta con stock inicial), CERRADA.** Segunda
   pantalla del punto 7 del orden de implementación (backend aplicado el
-  2026-10-01; pantalla y verificación on-device el 2026-10-04). Commits:
+  2026-10-01; pantalla y verificación on-device el 2026-10-03). Commits:
   `17db1e5` (RLS por rol + columna `galpon_id` + función atómica, con los 2
   fixes de NULL-safety y validación de organización ya incluidos), `bc5e297`
   (versión inicial de esa migración, superada por `17db1e5`),
@@ -1259,8 +1259,10 @@
   Redactado y revisado por: Claude (Cowork), Arquitecto Senior RYZOS — gate de
   la Sección 4.1.2 cubierto en el mismo flujo.
 
-  **Verificación:** suite completa sin regresiones en cada etapa (870 passed
-  tras el incidente de seguridad, mismos 15 fallos preexistentes de siempre).
+  **Verificación:** suite completa verificada tras Sanidad y tras el incidente
+  de seguridad (850 passed → 870 passed, mismos 15 fallos preexistentes); las
+  etapas de spec y pantalla se verificaron con tsc y Jest (97/97), no con
+  pytest completo.
   Verificación on-device de ambos roles confirmada por Neyser en el chat de la
   tarea: admin con alta con y sin stock inicial, movimiento, y salida con stock
   negativo (guarda con aviso, sin bloqueo); `tecnico_campo` sin acceso a "Nuevo
