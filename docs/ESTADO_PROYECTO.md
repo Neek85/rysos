@@ -1332,6 +1332,88 @@
   **Cierre:** con esto, el punto 7 del roadmap (Sanidad, Insumos, Compras)
   queda completo.
 
+- **(2026-10-04) Punto 8 de la app Granja Valencia (Reemplazo/descarte) —
+  tramo de BACKEND de RLS cerrado; el punto 8 NO está cerrado.** Solo se cerró
+  la RLS por rol de `PECUARIO_PARTOS` y `PECUARIO_SUGERENCIAS_REEMPLAZO`.
+  **Faltan:** la spec de la pantalla (`specs/pecuario_reglas_reemplazo_reproductoras.md`
+  la citan comentarios y migraciones, pero no existe en el repo), el ajuste del
+  contrato Zod (ya existe `SugerenciaReemplazoAccionSchema`, pensado para una
+  Server Action web), la pantalla de la app y la verificación on-device.
+
+  **Qué se cerró:** antes, las dos tablas tenían una única policy `ALL` sin
+  distinguir rol, filtrada solo por `ID_Organizacion`; la de Sugerencias,
+  además, era `TO public` (no `TO authenticated` como el resto de las tablas
+  pecuarias; inofensivo en la práctica porque `auth_org_id()` es NULL para
+  `anon`, pero corregido de paso).
+
+  **Migraciones y commits** (sin aplicar hasta que Neyser las corrió en
+  Studio):
+  `20261004130000_fix_rls_partos_por_rol.sql` (`c681c2db…eaaede18`, 141
+  líneas, commit `1656609`) y
+  `20261004120000_fix_rls_sugerencias_reemplazo_por_rol.sql` (`e9ddb89e…3e52dd9f`,
+  158 líneas, commit `2d707d9`). Aplicadas por Neyser en Studio en el orden
+  Partos → Sugerencias. **Por qué ese orden:** si Sugerencias se aplicaba
+  primero, quedaba una ventana en la que un `auditor_qc` todavía podía insertar
+  un parto (la RLS vieja de Partos se lo permitía) y el trigger
+  `trg_partos_evaluar_sugerencia_reemplazo` —que no es `SECURITY DEFINER` y
+  corre con los permisos de quien registra el parto— fallaba contra la nueva
+  RLS de Sugerencias con un error confuso en una tabla distinta. Con Partos
+  primero, el auditor queda bloqueado ya en el parto.
+
+  **Reglas:** SELECT abierto a los 3 roles de la organización; INSERT/UPDATE
+  `admin` + `tecnico_campo`; DELETE solo `admin`. En Partos, INSERT/UPDATE
+  validan además que `poza_id` y `macho_id` (cuando viene) pertenezcan a la
+  misma organización del parto, con todas las referencias calificadas
+  (`"PECUARIO_PARTOS".poza_id`, `"PECUARIO_PARTOS".macho_id`,
+  `"PECUARIO_PARTOS"."ID_Organizacion"`); `madre_id` no se duplica en la policy
+  porque ya lo valida `trg_partos_validar_madre`. En Sugerencias, el trigger
+  `trg_sugerencia_reemplazo_bloquear_cambio_campos` (BEFORE UPDATE) permite
+  cambiar solo `estado` (y `resuelta_en`, que la fija
+  `trg_sugerencia_reemplazo_resuelta_en`): rechaza cualquier cambio de
+  `reproductor_id`, `motivo`, `parto_id`, `detalle`, `ID_Organizacion` o
+  `creada_en`, incluso para `admin`. Su bypass es `auth.role() = 'service_role'
+  OR CURRENT_USER = 'postgres'` (API con service_role, y sesión directa en
+  Studio, que conecta como `postgres`). **Por qué ese bypass es seguro acá y
+  no en el incidente de Insumos:** este trigger NO es `SECURITY DEFINER`, así
+  que `CURRENT_USER` refleja siempre a quien realmente ejecuta el `UPDATE`,
+  nunca al dueño de una función; el atajo solo sería peligroso si alguna
+  función `SECURITY DEFINER` de dueño `postgres` actualizara esta tabla
+  (verificado: hoy ninguna lo hace).
+
+  **Hallazgos:** (1) `auditor_qc` podía insertar, editar y borrar partos
+  (`PECUARIO_PARTOS` con policy `ALL` por organización, sin rol), lo que además
+  habría hecho fallar de forma confusa un parto que dispara una sugerencia una
+  vez restringida Sugerencias. (2) Fragilidad de scoping: en el borrador de la
+  migración de Partos (commit `7c6349a`), las políticas INSERT **y** UPDATE
+  tenían `poza_id`/`macho_id` sin calificar dentro de los `EXISTS`; hoy
+  `PECUARIO_JAULAS` no tiene `poza_id` ni `PECUARIO_REPRODUCTORES` tiene
+  `macho_id`, así que no era un bug activo, pero una columna futura con ese
+  nombre habría vuelto la validación una tautología silenciosa. Corregida antes
+  de aplicar (commit `1656609`). (3) El trigger de bloqueo de columnas
+  rechazaba toda edición hecha desde Studio (donde `auth.role()` es NULL);
+  se agregó el bypass de `postgres` (commit `2d707d9`). (4) Gap de integridad
+  de datos, fuera de RLS: `PECUARIO_PARTOS.macho_id` no valida que el
+  reproductor sea macho (a diferencia de `madre_id`, que sí valida
+  `trg_partos_validar_madre`); anotado como backlog en `AI_STATE.md`.
+
+  **Tests** (commit `ef903ad`): `tests/test_pecuario_partos_rls.py`, 20 passed
+  (3 estáticos + 17 en vivo), y `tests/test_pecuario_sugerencias_reemplazo_rls.py`,
+  18 passed (3 estáticos + 15 en vivo); 69 subtests entre ambos. Sesiones reales
+  de `admin`, `tecnico_campo` y `auditor_qc`. Suite completa: **7 failed, 934
+  passed, 8 skipped**, con las mismas 7 fallas preexistentes de siempre.
+  Verificado contra `pg_policies` (lectura, ADR-042) que lo aplicado en Studio
+  coincide con lo commiteado: las 8 policies, `TO authenticated`, sin
+  `rls_all_*` residual, cuerpo del trigger de bloqueo idéntico al commiteado.
+  Sin residuos en la base tras la corrida (`PECUARIO_PARTOS`: 3 filas, todas de
+  GRANJA-TEST como antes; `PECUARIO_SUGERENCIAS_REEMPLAZO`: 0). **Limitación:**
+  el bypass de `CURRENT_USER = 'postgres'` no es simulable por API (requiere
+  una sesión directa en Studio); solo lo cubren el chequeo estático y un
+  control positivo con `service_role`.
+
+  **Trazabilidad (protocolo 4.1):** redactadas y revisadas por Claude (Cowork);
+  la CLI encontró la fragilidad de scoping y el gap del bypass en Studio;
+  Neyser las aplicó manualmente.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
