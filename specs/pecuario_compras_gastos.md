@@ -291,7 +291,8 @@ Diseño original de esta sección, ya reflejado en la migración de arriba:
   por rol, solo por sistema de cría/identificación individual; evaluar si
   vale la pena agregar un selector de rol al login del simulador para
   validar esto con más fidelidad antes de construir la app real.
-- Cuando se decida construir esto de verdad: escribir la migración, el
-  trigger de auto-Entrada, la política RLS de `PECUARIO_INSUMOS` y el
-  contrato Zod — siguiendo el mismo flujo de siempre (spec → migración →
-  Zod → Claude Code CLI → aplicación manual en Studio).
+- ~~Cuando se decida construir esto de verdad: escribir la migración, el
+  trigger de auto-Entrada, la política RLS y el contrato Zod.~~ **Resuelto:**
+  migración, trigger, RLS por rol y contrato Zod están aplicados (ver §4 y
+  §4.1). Lo único que faltaba era la pantalla de la app móvil
+  (`apps/granja-valencia/src/app/(protegido)/compras/index.tsx`).
