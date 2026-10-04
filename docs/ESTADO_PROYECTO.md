@@ -1216,6 +1216,59 @@
   esta tarea) y el de `scripts/provision_login_accounts.mjs` (cuenta de
   prueba `tecnico_campo`), ambos a criterio de Neyser.
 
+- **(2026-10-04, cierre) App móvil Granja Valencia — Insumos (lista de
+  stock, registrar movimiento, alta con stock inicial), CERRADA.** Segunda
+  pantalla del punto 7 del orden de implementación (backend aplicado el
+  2026-10-01; pantalla y verificación on-device el 2026-10-04). Commits:
+  `17db1e5` (RLS por rol + columna `galpon_id` + función atómica, con los 2
+  fixes de NULL-safety y validación de organización ya incluidos), `bc5e297`
+  (versión inicial de esa migración, superada por `17db1e5`),
+  `20261001230000_revoke_execute_publico_insumos.sql` y
+  `20261001231500_fix_rpc_crear_insumo_guarda_real.sql` (incidente de
+  seguridad, ver abajo), `c73351f` (ambas migraciones del incidente + test de
+  aislamiento RLS/RPC), `8eb73f7` (spec y contratos), `fc3496f` (pantalla).
+  Spec: `specs/app_granja_valencia_insumos.md`.
+
+  **Hallazgo de seguridad real #1 (antes de construir la pantalla):**
+  `PECUARIO_INSUMOS` y `PECUARIO_INSUMOS_MOVIMIENTOS` tenían una única
+  política RLS `ALL` sin distinguir rol, igual que Sanidad. Corregido: catálogo
+  solo-admin; movimientos `admin` + `tecnico_campo` INSERT / solo-admin
+  UPDATE-DELETE; SELECT abierto a la organización.
+
+  **Hallazgo de seguridad real #2, más grave, encontrado por el propio test de
+  aislamiento (no por revisión de texto):** la función `SECURITY DEFINER`
+  `fn_crear_insumo_con_stock_inicial` tenía una guarda que usaba `CURRENT_USER
+  = 'postgres'` como parte del bypass de autorización — ese patrón es válido
+  dentro de una política RLS (donde `CURRENT_USER` es el rol que consulta)
+  pero NO dentro de una función `SECURITY DEFINER` (donde `CURRENT_USER` es
+  siempre el dueño de la función, sin importar quién la llame). Resultado: la
+  validación de organización/rol nunca se ejecutaba para nadie. Comprobado en
+  vivo: `tecnico_campo`, `auditor_qc`, y un admin pasando la organización de
+  otro tenant, los tres pudieron crear insumos vía la RPC. Corregido
+  eliminando el atajo y dejando el bypass solo con `auth.role() =
+  'service_role'`; verificado rojo→verde contra el test antes de aplicar.
+  Redactado y revisado por Claude (Cowork) — error de origen de la propia
+  revisión de Cowork, documentado sin minimizarlo.
+
+  **Auditoría de alcance (sin corregir, en backlog):**
+  `exportar_esquema_ryzos()`, `fn_jaula_tiene_otro_macho_activo()` y
+  `fn_son_parientes()` son invocables por `anon`/`PUBLIC` con permisos del
+  dueño — candidatas a revisión aparte; `exportar_esquema_ryzos()` es la más
+  urgente. Detalle en `AI_STATE.md`.
+
+  Redactado y revisado por: Claude (Cowork), Arquitecto Senior RYZOS — gate de
+  la Sección 4.1.2 cubierto en el mismo flujo.
+
+  **Verificación:** suite completa sin regresiones en cada etapa (870 passed
+  tras el incidente de seguridad, mismos 15 fallos preexistentes de siempre).
+  Verificación on-device de ambos roles confirmada por Neyser en el chat de la
+  tarea: admin con alta con y sin stock inicial, movimiento, y salida con stock
+  negativo (guarda con aviso, sin bloqueo); `tecnico_campo` sin acceso a "Nuevo
+  insumo" en la UI y con movimiento registrado con éxito.
+
+  **Pendiente (no bloquea el cierre de Insumos):** Compras (tercera pantalla
+  del punto 7) y la auditoría de las 3 funciones del backlog de seguridad.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
