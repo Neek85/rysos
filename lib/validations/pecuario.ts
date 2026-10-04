@@ -620,6 +620,22 @@ export const SugerenciaReemplazoAccionSchema = z.object({
   ID_Organizacion: IdOrganizacionSchema,
 });
 
+// App Granja Valencia -- pantalla Reemplazo/descarte
+// (specs/app_granja_valencia_reemplazo.md). SugerenciaReemplazoAccionSchema
+// (arriba) NO se modifica: tests/test_pecuario_reglas_reemplazo.py exige su
+// cuerpo exacto. Este schema lo extiende con el único valor que escribe el
+// cliente: `estado`. El UPDATE directo es
+//   .update({ estado }).eq('reproductor_id', ...).eq('ID_Organizacion', ...)
+//   .eq('estado', 'pendiente').select('id')
+// y pasa a `confirmada`/`ignorada` TODAS las sugerencias pendientes de ese
+// reproductor (acción en bloque). 'pendiente' no es un valor válido acá: volver
+// a pendiente no es una acción de la app (no hay "deshacer"). `resuelta_en` y
+// `PECUARIO_REPRODUCTORES.proposito='descarte'` los escribe la base (triggers),
+// nunca el cliente.
+export const SugerenciaReemplazoResolverSchema = SugerenciaReemplazoAccionSchema.extend({
+  estado: z.enum(['confirmada', 'ignorada']),
+});
+
 // Alta de Galpones/Pozas (app Granja Valencia,
 // specs/app_granja_valencia_galpones_jaulas.md §3) -- primera pantalla de
 // escritura de la app, contrato compartido (no exclusivo de la app) por
@@ -945,3 +961,4 @@ export type VentaSubproductoInput = z.infer<typeof VentaSubproductoSchema>;
 export type RecoleccionDestemteInput = z.infer<typeof RecoleccionDestemteSchema>;
 export type ConformarLoteDestemteInput = z.infer<typeof ConformarLoteDestemteSchema>;
 export type SugerenciaReemplazoAccionInput = z.infer<typeof SugerenciaReemplazoAccionSchema>;
+export type SugerenciaReemplazoResolverInput = z.infer<typeof SugerenciaReemplazoResolverSchema>;

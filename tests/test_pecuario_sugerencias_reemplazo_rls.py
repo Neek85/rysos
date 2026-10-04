@@ -278,6 +278,66 @@ class TestSugerenciasReemplazoRlsLive(unittest.TestCase):
                 self.assertEqual(res.status_code, 200, res.text)
                 self.assertEqual(self._fila(T_REP, repro)["proposito"], "descarte")
 
+    # ---- UPDATE en bloque por reproductor: la forma exacta de la spec de la pantalla
+    # (specs/app_granja_valencia_reemplazo.md). El test de arriba actualiza por id de
+    # sugerencia; la pantalla usa .eq('reproductor_id').eq('ID_Organizacion').eq('estado','pendiente').select('id')
+
+    def _resolver_en_bloque(self, token, reproductor_id, estado, org=ORG):
+        return httpx.patch(
+            f"{SUPABASE_URL}/rest/v1/{T_SUG}",
+            headers={**_session_headers(token), **JSON, "Prefer": "return=representation"},
+            params={"reproductor_id": f"eq.{reproductor_id}", "ID_Organizacion": f"eq.{org}", "estado": "eq.pendiente", "select": "id"},
+            json={"estado": estado}, timeout=30,
+        )
+
+    def _animal_con_dos_sugerencias(self):
+        repro = self._hembra(ORG)
+        s1 = self._seed(T_SUG, {"ID_Organizacion": ORG, "reproductor_id": repro, "motivo": "max_partos_alcanzado", "detalle": "TEST detalle 1"})
+        s2 = self._seed(T_SUG, {"ID_Organizacion": ORG, "reproductor_id": repro, "motivo": "camada_chica_parto_temprano", "detalle": "TEST detalle 2"})
+        return repro, s1, s2
+
+    def test_resolver_en_bloque_confirmar_resuelve_todas_y_repetir_devuelve_cero_filas(self):
+        for rol, token in self._por_cada_rol_escritor():
+            with self.subTest(rol=rol):
+                repro, s1, s2 = self._animal_con_dos_sugerencias()
+                otra, otro_repro = self._sugerencia(ORG)  # otro animal: NO debe tocarse
+                res = self._resolver_en_bloque(token, repro, "confirmada")
+                self.assertEqual(res.status_code, 200, res.text)
+                self.assertEqual({r["id"] for r in res.json()}, {s1, s2}, "debe devolver las 2 sugerencias pendientes del animal")
+                for s in (s1, s2):
+                    fila = self._fila(T_SUG, s)
+                    self.assertEqual(fila["estado"], "confirmada")
+                    self.assertIsNotNone(fila["resuelta_en"])
+                self.assertEqual(self._fila(T_REP, repro)["proposito"], "descarte")
+                self.assertEqual(self._fila(T_SUG, otra)["estado"], "pendiente", "otro animal no debe cambiar")
+                # Segunda llamada con el mismo filtro: ya no hay pendientes => 0 filas (la UI muestra
+                # "Estas sugerencias ya fueron resueltas"), sin error y sin tocar nada.
+                res2 = self._resolver_en_bloque(token, repro, "ignorada")
+                self.assertEqual(res2.status_code, 200, res2.text)
+                self.assertEqual(res2.json(), [])
+                self.assertEqual(self._fila(T_SUG, s1)["estado"], "confirmada", "una resuelta no se puede reabrir con el mismo filtro")
+
+    def test_resolver_en_bloque_ignorar_resuelve_todas_sin_tocar_el_proposito(self):
+        for rol, token in self._por_cada_rol_escritor():
+            with self.subTest(rol=rol):
+                repro, s1, s2 = self._animal_con_dos_sugerencias()
+                res = self._resolver_en_bloque(token, repro, "ignorada")
+                self.assertEqual(res.status_code, 200, res.text)
+                self.assertEqual({r["id"] for r in res.json()}, {s1, s2})
+                for s in (s1, s2):
+                    fila = self._fila(T_SUG, s)
+                    self.assertEqual(fila["estado"], "ignorada")
+                    self.assertIsNotNone(fila["resuelta_en"])
+                self.assertEqual(self._fila(T_REP, repro)["proposito"], "reproductor", "ignorar no debe marcar descarte")
+
+    def test_resolver_en_bloque_auditor_no_resuelve_nada(self):
+        s, repro = self._sugerencia(ORG_DEMO)
+        res = self._resolver_en_bloque(self.auditor, repro, "confirmada", org=ORG_DEMO)
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json(), [], "auditor_qc no debe actualizar ninguna fila")
+        self.assertEqual(self._fila(T_SUG, s)["estado"], "pendiente")
+        self.assertEqual(self._fila(T_REP, repro)["proposito"], "reproductor")
+
     def test_update_auditor_bloqueado(self):
         s, repro = self._sugerencia(ORG_DEMO)
         self._patch(self.auditor, s, {"estado": "confirmada"})
