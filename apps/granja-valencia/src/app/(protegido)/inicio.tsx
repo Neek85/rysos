@@ -9,6 +9,8 @@ import { useCallback, useState } from 'react'
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { router, useFocusEffect } from 'expo-router'
 import { PoblacionResumenSchema } from '../../../../../lib/validations/pecuario'
+import { leerSugerenciasPendientes } from '../../../lib/reemplazo/datos'
+import { contarAnimales, textoDesglose, tituloTarjeta, type FilaSugerencia } from '../../../lib/reemplazo/logica'
 import { supabase } from '../../../lib/supabase/client'
 import { useProfile } from '../../../lib/supabase/useProfile'
 import { useThemeColors } from '../../../theme/useThemeColors'
@@ -30,6 +32,7 @@ type Accion = {
     | '/sanidad/registrar'
     | '/insumos'
     | '/compras'
+    | '/reemplazo'
     | { pathname: '/proximamente/[title]'; params: { title: string } }
   danger?: boolean
 }
@@ -63,6 +66,9 @@ export default function InicioScreen() {
   const { organizacion } = useProfile()
   const [poblacionTotal, setPoblacionTotal] = useState<number | null>(null)
   const [reproductorasActivas, setReproductorasActivas] = useState<number | null>(null)
+  // Sugerencias de reemplazo pendientes: MISMA función de lectura que /reemplazo
+  // (lib/reemplazo/datos.ts), así el número de la tarjeta y la lista no discrepan.
+  const [sugerencias, setSugerencias] = useState<FilaSugerencia[]>([])
 
   // Fix (2026-09-29): antes era un useEffect([organizacion]) plano --
   // Expo Router mantiene Inicio montado al navegar, así que volver acá
@@ -111,6 +117,13 @@ export default function InicioScreen() {
         setReproductorasActivas(count ?? 0)
       })
 
+    // Dentro del mismo useFocusEffect: al volver de /reemplazo (o de Parto, que
+    // puede generar una sugerencia) la tarjeta se actualiza sin remontar Inicio.
+    leerSugerenciasPendientes(organizacion).then(({ filas, error }) => {
+      if (cancelled) return
+      setSugerencias(error ? [] : filas) // ante un error se muestra el estado vacío de siempre
+    })
+
     return () => {
       cancelled = true
     }
@@ -145,9 +158,26 @@ export default function InicioScreen() {
 
       <View>
         <Text style={[styles.sectionLabel, { color: colors.inkFaint }]}>Alertas</Text>
-        <Text style={[styles.hint, { color: colors.inkFaint }]}>
-          No hay tareas ni sugerencias pendientes por ahora.
-        </Text>
+        {sugerencias.length > 0 ? (
+          <View style={[styles.alertaRow, { backgroundColor: colors.amberSoft }]}>
+            <View style={styles.alertaTexto}>
+              <Text style={[styles.alertaTitulo, { color: colors.ink }]}>
+                {tituloTarjeta(contarAnimales(sugerencias))}
+              </Text>
+              <Text style={[styles.alertaDetalle, { color: colors.amber }]}>{textoDesglose(sugerencias)}</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.alertaBoton, { backgroundColor: colors.surface }]}
+              onPress={() => router.push('/reemplazo' as never)}
+            >
+              <Text style={[styles.alertaBotonTexto, { color: colors.accentDim }]}>Ver lista</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <Text style={[styles.hint, { color: colors.inkFaint }]}>
+            No hay tareas ni sugerencias pendientes por ahora.
+          </Text>
+        )}
       </View>
 
       <View>
@@ -247,5 +277,35 @@ const styles = StyleSheet.create({
   actionLabel: {
     fontFamily: 'PublicSans_700Bold',
     fontSize: 13,
+  },
+  alertaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingLeft: 12,
+    paddingRight: 10,
+  },
+  alertaTexto: {
+    flex: 1,
+  },
+  alertaTitulo: {
+    fontFamily: 'PublicSans_700Bold',
+    fontSize: 13,
+  },
+  alertaDetalle: {
+    fontFamily: 'PublicSans_700Bold',
+    fontSize: 11,
+    marginTop: 1,
+  },
+  alertaBoton: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  alertaBotonTexto: {
+    fontFamily: 'PublicSans_800ExtraBold',
+    fontSize: 12,
   },
 })
