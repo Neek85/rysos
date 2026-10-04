@@ -285,7 +285,8 @@ export const CompraSchema = z.object({
   insumo_id: z.string().uuid().optional().nullable(),
   cantidad: z.number().positive().optional().nullable(),
   galpon_id: z.string().uuid().optional().nullable(),
-  costo_insumo: z.number().nonnegative().optional().nullable(),
+  // positive (no nonnegative) a nivel de contrato: una compra real paga algo > 0; la base permite costo_insumo >= 0 (chk_compras_rama_por_concepto) para no bloquear casos legítimos de costo 0 a nivel de fila — la restricción más estricta es deliberadamente solo de este formulario.
+  costo_insumo: z.number().positive().optional().nullable(),
   flete: z.number().nonnegative().optional().nullable(), // opcional -- sin default acá ni en la base (fix 20260922120000: la base tenía DEFAULT 0 sin condicionar a la rama, violaba chk_compras_rama_por_concepto en servicio_otro; monto_total ya hace COALESCE(flete,0) al calcular)
   // Rama "servicio_otro"
   categoria_gasto: z.enum(['combustible', 'mantenimiento_reparaciones', 'servicio_veterinario_tecnico', 'mano_obra', 'otro']).optional().nullable(),
@@ -293,7 +294,7 @@ export const CompraSchema = z.object({
   monto_servicio: z.number().nonnegative().optional().nullable(),
   // Comunes
   comprobante: z.string().max(100).optional().nullable(),
-  device_id: z.string().min(1).optional().nullable(), // offline aún sin confirmar para esta pantalla, ver spec §5
+  device_id: z.string().min(1).optional().nullable(), // offline confirmado (2026-10-04): mismo patrón que Insumos — UUID v4 generado en el cliente vía expo-crypto, device_id/created_offline_at se completan cuando se guarda sin conexión.
   created_offline_at: z.string().datetime().optional().nullable(),
 }).refine((data) => {
   if (data.concepto === 'insumo') {

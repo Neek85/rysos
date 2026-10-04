@@ -1,10 +1,12 @@
 # Spec — Compras / gastos de la granja, separados del kardex de Insumos (Pecuario Cuyes)
 
-**Estado: validado en el simulador (mockup), NO construido todavía.** No hay
-migración ni cambio de esquema para esta spec — se documenta acá para no
-perder la decisión tomada mientras se valida con Neyser y con los técnicos
-de Granja Valencia, antes de pasar a diseñar/aplicar nada contra la base
-real.
+**Estado (actualizado 2026-10-04): backend aplicado y verificado; falta
+solo la pantalla de la app móvil.** La tabla `PECUARIO_COMPRAS`, el trigger de
+entrada automática de stock (ahora con `galpon_id`), la RLS por rol y el test
+de aislamiento (`tests/test_pecuario_compras_rls.py`) están aplicados en la
+base real. Esta spec nació como validación del simulador (mockup); las
+secciones 1 a 3.3 describen decisiones e historia que siguen vigentes tal
+cual, y la §4 refleja lo que ya existe.
 
 ## 1. Contexto
 
@@ -184,27 +186,29 @@ esperados, con Litro/ml/Unidad correctamente excluidos de la conversión
 
 ## 4. Lo que falta construir (cuando se decida pasar de mockup a backend)
 
-**Migración y contrato Zod redactados 2026-09-22, NO aplicados todavía
-contra la base real:**
+**Migración y contrato Zod redactados 2026-09-22, APLICADOS en la base
+real** (más el fix de RLS/trigger de `20261001234500`, commit `5ccb9e5`, ver
+§4.1):
 `supabase/migrations/20260922110000_pecuario_compras_gastos.sql`
 (`PECUARIO_COMPRAS`, trigger `fn_compra_genera_entrada_insumo`, RLS) +
-`CompraSchema` en `lib/validators/pecuario.ts`. Decisiones tomadas al
-redactar (no estaban explícitas antes):
+`CompraSchema` en `lib/validations/pecuario.ts` (ruta correcta; no existe
+`lib/validators/`). Decisiones tomadas al redactar (no estaban explícitas
+antes):
 
 - El nombre final es `PECUARIO_COMPRAS` (no `GASTOS`).
 - `monto_total` es una columna **generada** (`GENERATED ALWAYS ... STORED`,
   mismo patrón que `PECUARIO_PESAJES.peso_promedio_g`), no un trigger —
   costo_insumo + flete para la rama insumo, `monto_servicio` directo para
   la rama servicio_otro. Nunca se escribe a mano ni puede desincronizarse.
-- **Gap de granularidad documentado, no resuelto en esta migración:**
-  `PECUARIO_COMPRAS` guarda `galpon_id` (destino a nivel de galpón), pero
-  `PECUARIO_INSUMOS_MOVIMIENTOS` solo tiene `poza_id`/`lote_id` (no
-  `galpon_id`) — el movimiento que el trigger genera automáticamente
-  queda sin ese dato (`poza_id`/`lote_id` en NULL). No se amplió el
-  esquema de Movimientos para resolver esto ahora; es información que
-  hoy simplemente no viaja de una tabla a la otra.
-- Sigue exactamente igual de pendiente lo de la Sección 5 (offline,
-  restricción de alta de insumo por rol) — ver ahí.
+- **Gap de granularidad — CERRADO (2026-10, `20261001234500`):** en la
+  migración original `PECUARIO_COMPRAS` guardaba `galpon_id` pero
+  `PECUARIO_INSUMOS_MOVIMIENTOS` solo tenía `poza_id`/`lote_id`, así que el
+  movimiento automático quedaba sin galpón. Esa tabla ya tiene `galpon_id`
+  (migración de Insumos `20261001223000`) y el trigger ahora lo copia desde
+  la compra (ver §4.1). `poza_id`/`lote_id` siguen en NULL en la entrada
+  automática.
+- La Sección 5 ya no deja pendiente lo de offline (resuelto); sigue abierta
+  solo la pregunta sobre ocultar "Nuevo insumo" en el simulador.
 
 Diseño original de esta sección, ya reflejado en la migración de arriba:
 
@@ -238,20 +242,49 @@ Diseño original de esta sección, ya reflejado en la migración de arriba:
   las apps móviles nuevas (donde sí habrá auth DNI+PIN / usuario interno
   con rol), la política RLS por rol sí aplica de lleno.
 - Contrato Zod: cuando `concepto = 'insumo'`, `insumo_id`/`cantidad`/
-  `galpon_id`/`costo_insumo` obligatorios, `flete` opcional (default 0);
+  `galpon_id`/`costo_insumo` obligatorios, `flete` opcional (NULL por
+  defecto: el `DEFAULT 0` original de la columna se eliminó con el fix
+  `20260922120000`, porque violaba el CHECK de la rama `servicio_otro`);
   cuando `concepto = 'servicio_otro'`, `categoria_gasto`/`descripcion`/
-  `monto_total` obligatorios.
+  `monto_servicio` obligatorios (`monto_total` es la columna generada: nunca
+  se envía desde el cliente).
 - Reporte de gastos por categoría, y de flete acumulado vs. costo de
   insumo (probable pieza futura del Panel de indicadores) — no se diseña
   todavía, queda anotado como posible próximo paso una vez que haya datos
   reales de Compras.
 
+## 4.1. Estado aplicado (2026-10-04)
+
+- **RLS por rol (`20261001234500_fix_rls_compras_y_galpon_trigger.sql`,
+  commit `5ccb9e5`):** ya no es el patrón `FOR ALL` único. Son 4 políticas
+  separadas: SELECT abierto a los 3 roles de la organización (admin,
+  tecnico_campo, auditor_qc); INSERT/UPDATE/DELETE solo `admin`. INSERT y
+  UPDATE validan además que `insumo_id` y `galpon_id` (cuando vienen)
+  pertenezcan a la MISMA organización de la compra. El primer borrador de esa
+  validación tenía un error de scoping (`ID_Organizacion` sin calificar dentro
+  de los `EXISTS` se resolvía contra la tabla de la subconsulta y era siempre
+  verdadero); se corrigió calificando con `"PECUARIO_COMPRAS"."ID_Organizacion"`
+  antes de aplicar. Incidente documentado en `AI_STATE.md`.
+- **Trigger `fn_compra_genera_entrada_insumo`:** copia `NEW.galpon_id` a la
+  entrada que genera en `PECUARIO_INSUMOS_MOVIMIENTOS`. Sigue siendo solo
+  `AFTER INSERT`: editar o borrar una compra después no corrige ni revierte la
+  entrada generada.
+- **Verificado:** `tests/test_pecuario_compras_rls.py` (4 estáticos + 17 en
+  vivo con sesiones reales de admin, tecnico_campo y auditor_qc, incluido el
+  caso de insumo/galpón de otra organización rechazado y el `galpon_id` de la
+  entrada automática) y `tests/test_pecuario_compras_gastos.py`.
+- **Decisión 2026-10-04:** `costo_insumo` es `.positive()` a nivel de contrato
+  Zod (no a nivel de base, que sigue permitiendo `>= 0`), replicando la
+  intención original del mockup de que una compra de insumo paga un costo
+  real.
+
 ## 5. Pendiente
 
-- Confirmar si esta pantalla se necesita también desde la app de campo
-  (offline) o si por ahora alcanza con el flujo del dashboard web/técnico
-  en oficina — afecta si `PECUARIO_COMPRAS` necesita `device_id` y
-  soporte de `SYNC_QUEUE` desde el día uno.
+- ~~Confirmar si esta pantalla se necesita también desde la app de campo
+  (offline).~~ **Resuelto (2026-10-04):** sí, mismo patrón que Insumos — UUID
+  v4 generado en el cliente (`expo-crypto`) y `device_id`/`created_offline_at`
+  cuando se guarda sin conexión. `PECUARIO_COMPRAS` ya tiene las columnas
+  `device_id`, `created_offline_at` y `synced_at`; no hace falta migración.
 - Confirmar si "Nuevo insumo" debe directamente ocultarse de la
   navegación para roles no-admin en el simulador (hoy solo lleva un
   aviso de texto) — se dejó así porque el simulador todavía no tiene login
