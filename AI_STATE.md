@@ -72,6 +72,27 @@ Pendiente: leer los cuerpos completos, decidir si revocar `EXECUTE` a
 `PUBLIC`/`anon` y/o validar organización. Los triggers `SECURITY DEFINER` con
 `PUBLIC` EXECUTE no son invocables como RPC (retornan `trigger`).
 
+
+## 2026-10-03 — PENDIENTE DE INVESTIGAR (no bloquea): `test_pecuario_panel_indicadores.py` pasó de fallar a pasar sin cambios de código propios
+
+En la suite completa corrida tras el test de RLS de Compras, los 8 casos de
+`tests/test_pecuario_panel_indicadores.py::TestPanelIndicadoresLive` que fallaban
+en las corridas anteriores (`test_aislamiento_cruzado_las_10_vistas` en 3 vistas
+— `vw_pecuario_reproduccion_mes`, `vw_pecuario_incidencia_patologias`,
+`vw_pecuario_ventas_mes` —, `test_incidencia_patologias_agrupa_por_causa`,
+`test_indicadores_sanitarios_mes_suma_mortalidad_lactancia`,
+`test_pesos_promedio_destete_mes`, `test_reproduccion_mes_suma_partos_y_crias_vivas`
+y `test_ventas_mes_suma_cantidad_monto_y_kg`) ahora pasan. Resultado de la suite:
+15 failed / 870 passed → 7 failed / 896 passed; los 7 restantes son los mismos
+preexistentes de siempre. Ningún cambio del ciclo de Compras toca esos tests ni
+esas vistas: `tests/test_pecuario_compras_rls.py` solo siembra y borra filas con
+prefijo `TEST-COM-`. **Hipótesis sin confirmar:** cambió el estado de la base
+entre corridas (datos o vistas), posiblemente por actividad real como las pruebas
+de Insumos en el celular (hay movimientos reales de stock en GRANJA-TEST creados
+el 2026-10-03). Si es por datos, esos tests dependen de que la base no esté vacía
+y pueden volver a fallar. Pendiente: leer por qué fallaban originalmente y
+confirmar qué los hizo pasar.
+
 ## 2026-09-09 — RESUELTO: fotos de evidencia no cargaban en Mapa WebGIS ni Consola QC — causa real confirmada en vivo, no una hipótesis
 
 **Tarea:** parte 2/3 del prompt de "revertir aprobado + fotos + botón
