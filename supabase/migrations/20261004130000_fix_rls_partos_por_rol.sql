@@ -33,12 +33,20 @@
 -- Validación cruzada de organización en INSERT/UPDATE: poza_id (NOT NULL)
 -- y macho_id (nullable) no se validaban contra la organización en ningún
 -- lado — solo tenían la FK de existencia, sin comprobar que la poza o el
--- macho fueran de la misma organización que el parto. Se agrega acá,
--- calificando explícitamente la fila externa como
--- "PECUARIO_PARTOS"."ID_Organizacion" en los EXISTS — lección directa del
+-- macho fueran de la misma organización que el parto. Se agrega acá, con
+-- TODAS las referencias calificadas explícitamente (tanto
+-- "PECUARIO_PARTOS"."ID_Organizacion" como "PECUARIO_PARTOS".poza_id /
+-- "PECUARIO_PARTOS".macho_id dentro de cada EXISTS) — lección directa del
 -- incidente de scoping de Compras (roadmap §2.18): una referencia sin
 -- calificar dentro de un EXISTS correlacionado resuelve contra la tabla
--- del propio subquery, no contra la fila externa.
+-- del propio subquery si esta tuviera una columna con el mismo nombre.
+-- Hoy ni PECUARIO_JAULAS tiene poza_id ni PECUARIO_REPRODUCTORES tiene
+-- macho_id (confirmado contra information_schema antes de aplicar), así
+-- que sin calificar no sería un bug activo — pero si alguna migración
+-- futura agregara una columna con ese nombre a esas tablas, la validación
+-- se volvería una tautología silenciosa sin que nada lo avisara. Calificar
+-- todo de entrada evita depender de que esa coincidencia de nombres se
+-- mantenga para siempre.
 --
 -- Deliberadamente NO se valida acá: madre_id — ya lo hace el trigger
 -- existente trg_partos_validar_madre (BEFORE INSERT OR UPDATE, no
@@ -79,11 +87,13 @@ CREATE POLICY "rls_insert_pecuario_partos"
       AND auth_role() IN ('admin', 'tecnico_campo')
       AND EXISTS (
         SELECT 1 FROM "PECUARIO_JAULAS" j
-        WHERE j.id = poza_id AND j."ID_Organizacion" = "PECUARIO_PARTOS"."ID_Organizacion"
+        WHERE j.id = "PECUARIO_PARTOS".poza_id
+          AND j."ID_Organizacion" = "PECUARIO_PARTOS"."ID_Organizacion"
       )
-      AND (macho_id IS NULL OR EXISTS (
+      AND ("PECUARIO_PARTOS".macho_id IS NULL OR EXISTS (
         SELECT 1 FROM "PECUARIO_REPRODUCTORES" r
-        WHERE r.id = macho_id AND r."ID_Organizacion" = "PECUARIO_PARTOS"."ID_Organizacion"
+        WHERE r.id = "PECUARIO_PARTOS".macho_id
+          AND r."ID_Organizacion" = "PECUARIO_PARTOS"."ID_Organizacion"
       ))
     )
     OR auth.role() = 'service_role'
@@ -106,11 +116,13 @@ CREATE POLICY "rls_update_pecuario_partos"
       AND auth_role() IN ('admin', 'tecnico_campo')
       AND EXISTS (
         SELECT 1 FROM "PECUARIO_JAULAS" j
-        WHERE j.id = poza_id AND j."ID_Organizacion" = "PECUARIO_PARTOS"."ID_Organizacion"
+        WHERE j.id = "PECUARIO_PARTOS".poza_id
+          AND j."ID_Organizacion" = "PECUARIO_PARTOS"."ID_Organizacion"
       )
-      AND (macho_id IS NULL OR EXISTS (
+      AND ("PECUARIO_PARTOS".macho_id IS NULL OR EXISTS (
         SELECT 1 FROM "PECUARIO_REPRODUCTORES" r
-        WHERE r.id = macho_id AND r."ID_Organizacion" = "PECUARIO_PARTOS"."ID_Organizacion"
+        WHERE r.id = "PECUARIO_PARTOS".macho_id
+          AND r."ID_Organizacion" = "PECUARIO_PARTOS"."ID_Organizacion"
       ))
     )
     OR auth.role() = 'service_role'

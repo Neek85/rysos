@@ -110,6 +110,22 @@ integridad de datos — solo de trazabilidad futura. Pendiente de revisar cuando
 implemente `SYNC_QUEUE` o detección real de conectividad (ver masterprompt §6).
 No bloquea el cierre de Compras.
 
+
+## 2026-10-04 — BACKLOG (no bloquea): `PECUARIO_PARTOS.macho_id` no valida que el reproductor referenciado sea macho
+
+Ninguna policy ni trigger comprueba hoy que el reproductor al que apunta
+`PECUARIO_PARTOS.macho_id` sea efectivamente de sexo macho — solo existe la FK de
+existencia hacia `PECUARIO_REPRODUCTORES`. A diferencia de `madre_id`, donde
+`trg_partos_validar_madre` (BEFORE INSERT OR UPDATE) sí comprueba que exista, que
+sea de la misma organización y que sea hembra. (La pertenencia de `macho_id` a la
+misma organización la cierra la migración de RLS de Partos,
+`20261004130000_fix_rls_partos_por_rol.sql`, pendiente de aplicar.) No es un gap
+de RLS/organización sino de integridad de datos, fuera del alcance de esa
+migración. Candidato a una tarea aparte: un CHECK/trigger en la base (p. ej.
+extender `trg_partos_validar_madre` con un chequeo equivalente para `macho_id`),
+o validación en el contrato Zod del lado cliente (`PartoRegistroSchema` no puede
+comprobarlo solo, porque requiere consultar el sexo del reproductor).
+
 ## 2026-09-09 — RESUELTO: fotos de evidencia no cargaban en Mapa WebGIS ni Consola QC — causa real confirmada en vivo, no una hipótesis
 
 **Tarea:** parte 2/3 del prompt de "revertir aprobado + fotos + botón
