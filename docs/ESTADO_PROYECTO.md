@@ -1271,6 +1271,67 @@
   **Pendiente (no bloquea el cierre de Insumos):** Compras (tercera pantalla
   del punto 7) y la auditoría de las 3 funciones del backlog de seguridad.
 
+- **(2026-10-03, cierre) App móvil Granja Valencia — Compras (gastos de la
+  granja: insumo con stock / servicio u otro gasto), CERRADA.** Tercera y
+  última pantalla del punto 7 del roadmap de la app Granja Valencia (Sanidad,
+  Insumos, Compras). Con esto, el punto 7 queda completo. Spec:
+  `specs/pecuario_compras_gastos.md`.
+
+  **Backend:** `PECUARIO_COMPRAS` ya existía desde 2026-09-22 (con un fix de
+  `flete` del 2026-09-23). Para esta tarea se cerró el gap de RLS (única
+  política `ALL` sin distinguir rol) y se corrigió el trigger de auto-Entrada
+  para que copie `galpon_id`. Decisión: solo `admin` puede
+  INSERT/UPDATE/DELETE (ni siquiera `tecnico_campo`, a diferencia de
+  Sanidad/Insumos); SELECT abierto a los 3 roles. Migración
+  `20261001234500_fix_rls_compras_y_galpon_trigger.sql`, commit `5ccb9e5`.
+  Redactada y revisada por Claude (Cowork), gate de la Sección 4.1.2 cubierto
+  en el mismo flujo (como consta en el header de la migración).
+
+  **Incidente de seguridad real:** un `EXISTS` correlacionado en las cláusulas
+  `WITH CHECK` de INSERT/UPDATE usaba una referencia a `ID_Organizacion` sin
+  calificar, que Postgres resolvía contra la tabla del propio subquery en vez
+  de la fila externa de `PECUARIO_COMPRAS` — dejaba sin efecto la validación
+  cruzada de organización (tautología). Encontrado y corregido antes de
+  cualquier commit (nunca llegó a aplicarse ni a commitearse con el bug).
+  Corrección: calificar la fila externa como
+  `"PECUARIO_COMPRAS"."ID_Organizacion"` en las 4 ocurrencias.
+
+  **Test de aislamiento:** `tests/test_pecuario_compras_rls.py`, 21 passed + 26
+  subtests, commit `c29a90d`. Cubre SELECT/INSERT/UPDATE/DELETE por rol, el
+  caso específico del bug de scoping (rechazado correctamente tras el fix), y
+  que el trigger copia `galpon_id`.
+
+  **Suite completa sin regresiones:** 7 failed, 896 passed (eran 15 failed,
+  870 passed al cerrar Insumos) — los 7 son subconjunto exacto de los 15
+  preexistentes. Hallazgo aparte sin relación: 8 tests de
+  `test_pecuario_panel_indicadores.py` que fallaban antes ahora pasan, sin que
+  el trabajo de Compras los haya tocado — anotado en `AI_STATE.md` como
+  pendiente de investigar, no bloqueante.
+
+  **Spec y contrato:** `specs/pecuario_compras_gastos.md` actualizada a la
+  realidad aplicada; `CompraSchema`/`CompraInput` existentes (sin necesidad de
+  un schema nuevo) con `costo_insumo` pasado a `.positive()` a nivel de
+  contrato (la base sigue en `>= 0`). Commit `2e10117`.
+
+  **Pantalla construida:**
+  `apps/granja-valencia/src/app/(protegido)/compras/index.tsx`, commit
+  `c58f12f`, 5 archivos, 572 inserciones. Listado abierto a los 3 roles, alta
+  solo `admin` (cosmético en UI, real en RLS), costo total calculado y de solo
+  lectura, mismo patrón offline-first que Insumos (UUID v4 cliente vía
+  `expo-crypto`).
+
+  **Verificación on-device (2026-10-03):** `admin` registró 3 compras (insumo
+  sin flete, servicio, insumo con flete) con los montos/costos unitarios
+  correctos; `tecnico_campo` ve el listado sin el botón de alta; `auditor_qc`
+  no es parte de esta app (aclarado por Neyser, opera desde el dashboard web).
+  Confirmado por SQL real de solo lectura que los 2 movimientos de entrada
+  generados tienen el `galpon_id` correcto, cantidades correctas, y que la
+  compra de servicio no generó movimiento — primera confirmación del fix del
+  trigger fuera de los tests.
+
+  **Cierre:** con esto, el punto 7 del roadmap (Sanidad, Insumos, Compras)
+  queda completo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
