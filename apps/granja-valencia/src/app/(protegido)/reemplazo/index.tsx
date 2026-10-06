@@ -17,6 +17,7 @@ import {
   mensajeDialogo,
   mensajeExito,
   puedeResolver,
+  subtituloLista,
   tituloGrupo,
   type AccionResolver,
   type AnimalSugerido,
@@ -95,11 +96,7 @@ export default function ReemplazoScreen() {
       <BackToInicioButton />
       <Text style={[styles.title, { color: colors.ink }]}>Sugeridas para reemplazo</Text>
       <Text style={[styles.subtitle, { color: colors.inkSoft }]}>
-        {totalAnimales > 0
-          ? `${totalAnimales} reproductora${totalAnimales === 1 ? '' : 's'} agrupadas por jaula — ${
-              puedeActuar ? 'revisá y confirmá o ignorá cada una' : 'solo lectura'
-            }`
-          : 'No hay reproductoras sugeridas para reemplazo por ahora.'}
+        {subtituloLista(totalAnimales, puedeActuar)}
       </Text>
 
       {error && (

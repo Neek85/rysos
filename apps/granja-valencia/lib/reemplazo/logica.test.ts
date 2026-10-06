@@ -6,6 +6,7 @@ import {
   mensajeDialogo,
   mensajeExito,
   puedeResolver,
+  subtituloLista,
   textoDesglose,
   tituloGrupo,
   tituloTarjeta,
@@ -136,6 +137,28 @@ describe('agruparPorJaula', () => {
 
   test('sin filas devuelve lista vacía', () => {
     expect(agruparPorJaula([])).toEqual([])
+  })
+})
+
+describe('subtituloLista (concordancia singular/plural)', () => {
+  test('1 animal: reproductora y agrupada en singular', () => {
+    expect(subtituloLista(1, true)).toBe('1 reproductora agrupada por jaula — revisá y confirmá o ignorá cada una')
+    expect(subtituloLista(1, true)).not.toMatch(/agrupadas|reproductoras/)
+  })
+
+  test('N animales: plural', () => {
+    expect(subtituloLista(2, true)).toBe('2 reproductoras agrupadas por jaula — revisá y confirmá o ignorá cada una')
+    expect(subtituloLista(11, true)).toMatch(/^11 reproductoras agrupadas por jaula/)
+  })
+
+  test('sin animales: estado vacío de la spec', () => {
+    expect(subtituloLista(0, true)).toBe('No hay reproductoras sugeridas para reemplazo por ahora.')
+    expect(subtituloLista(0, false)).toBe('No hay reproductoras sugeridas para reemplazo por ahora.')
+  })
+
+  test('solo lectura para quien no puede resolver, también concordando', () => {
+    expect(subtituloLista(1, false)).toBe('1 reproductora agrupada por jaula — solo lectura')
+    expect(subtituloLista(3, false)).toBe('3 reproductoras agrupadas por jaula — solo lectura')
   })
 })
 

@@ -87,6 +87,19 @@ export function tituloTarjeta(n: number): string {
   return n === 1 ? '1 reproductora sugerida para reemplazo' : `${n} reproductoras sugeridas para reemplazo`
 }
 
+/**
+ * Subtítulo de /reemplazo, con concordancia en singular y plural
+ * ("1 reproductora agrupada por jaula" / "N reproductoras agrupadas por jaula").
+ * Sin animales: el estado vacío de la spec. A quien no puede resolver se le indica
+ * que es solo lectura.
+ */
+export function subtituloLista(totalAnimales: number, puedeActuar: boolean): string {
+  if (totalAnimales === 0) return 'No hay reproductoras sugeridas para reemplazo por ahora.'
+  const una = totalAnimales === 1
+  const cabecera = `${totalAnimales} reproductora${una ? '' : 's'} agrupada${una ? '' : 's'} por jaula`
+  return `${cabecera} — ${puedeActuar ? 'revisá y confirmá o ignorá cada una' : 'solo lectura'}`
+}
+
 /** Junta las filas por animal (una fila por reproductor_id, con todas sus sugerencias). */
 export function agruparPorAnimal(filas: FilaSugerencia[]): AnimalSugerido[] {
   const porAnimal = new Map<string, AnimalSugerido>()
