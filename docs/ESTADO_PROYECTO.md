@@ -1414,6 +1414,67 @@
   la CLI encontró la fragilidad de scoping y el gap del bypass en Studio;
   Neyser las aplicó manualmente.
 
+- **(2026-10-06, cierre) App móvil Granja Valencia — pantalla de
+  Reemplazo/descarte (punto 8 del roadmap), CERRADA.** Completa el punto 8
+  junto con el tramo de backend de RLS ya registrado en la entrada del
+  2026-10-04 (`PECUARIO_PARTOS` y `PECUARIO_SUGERENCIAS_REEMPLAZO`, commit
+  `6f4352c`). Solo cliente: sin SQL ni migraciones nuevas en esta tarea.
+
+  **Spec y contrato** (commit `f9cb90d`): `specs/app_granja_valencia_reemplazo.md`
+  y `SugerenciaReemplazoResolverSchema` en `lib/validations/pecuario.ts`
+  (extiende `SugerenciaReemplazoAccionSchema`, que no se tocó porque un test
+  Python exige su cuerpo exacto, con `estado: 'confirmada' | 'ignorada'`).
+  Decisión de lectura validada con sesiones reales: consultar la TABLA con
+  embed anidado (reproductor → jaula → galpón, `!inner`) y no la vista
+  `vw_pecuario_sugerencias_reemplazo`, que no excluye vendidos ni descartados.
+
+  **Pantalla** (commit `a07bd77`):
+  `apps/granja-valencia/src/app/(protegido)/reemplazo/index.tsx`,
+  `lib/reemplazo/datos.ts` (una sola función de lectura compartida entre Inicio
+  y la lista) y `lib/reemplazo/logica.ts` (agrupar por jaula, contar animales
+  distintos, desglose por motivo, textos), con tests Jest propios; tarjeta de
+  Alertas en Inicio ("N reproductora(s) sugerida(s) para reemplazo", con
+  desglose por motivo y botón "Ver lista"). Acción en BLOQUE por reproductor
+  (UPDATE de `estado` sobre todas sus sugerencias pendientes), con diálogo de
+  confirmación que avisa que no se puede deshacer; sin escritura offline.
+  Botones visibles solo para `admin` y `tecnico_campo` (cosmético; la barrera
+  real es la RLS).
+
+  **Corrección** (commit `4096d68`): el subtítulo de `/reemplazo` decía "1
+  reproductora agrupadas por jaula"; ahora concuerda en singular
+  (`subtituloLista` en `lib/reemplazo/logica.ts`, con tests para 0, 1 y N).
+
+  **Verificación de código:** `tsc --noEmit` limpio, Jest completo de la app
+  132/132, bundle por ruta servido por Metro con HTTP 200 y 0
+  `UnableToResolveError`, y los tests Python
+  `tests/test_pecuario_reglas_reemplazo.py` y
+  `tests/test_pecuario_sugerencias_reemplazo_rls.py` (49 passed, incluidos los
+  3 tests en vivo de la forma en bloque del UPDATE con sesión real).
+
+  **Verificación en dispositivo (2026-10-06, GRANJA-TEST):** con la cuenta
+  `admin` se ignoró H-002 y, con la cuenta `tecnico_campo`, se confirmó H-003.
+  Resultado confirmado por SQL de solo lectura: H-002 con sugerencia
+  `ignorada` (`resuelta_en` no nulo), `proposito = 'reproductor'` y estado
+  `activo`; H-003 con sugerencia `confirmada` (`resuelta_en` no nulo),
+  `proposito = 'descarte'` y estado `activo`. Eran 2 filas en total en
+  `PECUARIO_SUGERENCIAS_REEMPLAZO`, todas de GRANJA-TEST (ninguna de otra
+  organización), y H-003 es el único reproductor en descarte en toda la base.
+
+  **Pendientes conocidos (no bloquean el cierre):**
+  - El bloque con dos motivos a la vez en un mismo animal no se probó en
+    dispositivo (sí lo cubre el test automatizado en vivo).
+  - El texto del diálogo de ignorar, "por ninguno de sus motivos", suena raro
+    cuando el animal tiene un solo motivo.
+  - El copy está en voseo ("revisá", "confirmá", "ignorá") sin una decisión
+    tomada para toda la app.
+  - La tarjeta "Reproductoras activas" de Inicio no baja al descartar: cuenta
+    por `estado = 'activo'` y el descarte cambia `proposito`, no `estado`.
+
+  **Trazabilidad (protocolo 4.1):** Redactado y revisado por Claude (Cowork),
+  Arquitecto Senior RYZOS. La CLI encontró observaciones durante el recon (se
+  resolvieron). Neyser aplicó las migraciones en Supabase Studio y verificó en
+  dispositivo.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
