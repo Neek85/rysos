@@ -305,3 +305,31 @@ explícito de `PUBLIC`/`anon`/`authenticated` + `GRANT` único a
 `service_role`, consumidas exclusivamente vía
 `lib/actions/padronReadActions.js`. Confirmado en vivo: `anon` recibe
 `42501 permission denied` al intentar llamarlas.
+
+## Permisos de clientes tras las migraciones de seguridad (APLICADAS el 2026-10-08)
+
+Estado verificado por catálogos (`supabase db query --linked`, solo lectura; ADR-043 y
+su addendum). Aplicadas a mano por Neyser en Supabase Studio:
+`20261008090000`, `20261008091000`, `20261008092000`, `20261008093000`.
+
+- **`USUARIOS_LOGIN`** (vista sobre `USUARIOS`): sin ningún privilegio para `anon`,
+  `authenticated` ni `PUBLIC`; solo `postgres` y `service_role`. Antes tenía `arwdDxtm` para
+  `anon`/`authenticated`. La tabla `USUARIOS` conserva su RLS (políticas solo para
+  `authenticated`) y no cambió.
+- **Vistas de `public`** (27 de dueño `postgres`, sin contar `USUARIOS_LOGIN`):
+  `anon` y `authenticated` conservan `SELECT` y `MAINTAIN`; ya no tienen
+  `INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER`. `MAINTAIN` no lo revocó la migración
+  (no aplica a vistas simples; ver ADR-043). `postgres` y `service_role` sin cambios.
+  `geometry_columns`/`geography_columns` (extensión PostGIS) no se tocaron.
+- **`CONFIGURACION_REPORTES_ORG`, `MENU_APP`, `METADATOS_CAMPOS`**: RLS **activada**, sin
+  políticas, sin privilegios para `anon`/`authenticated`/`PUBLIC` (solo `postgres` y
+  `service_role`). Ningún código del repo las usa.
+- **`spatial_ref_sys`** (PostGIS, dueña `supabase_admin`): sin RLS y con escritura abierta
+  (`INSERT/UPDATE/DELETE/TRUNCATE`) para `anon` y `authenticated`; `PUBLIC` tiene `SELECT`.
+  Pendiente de soporte de Supabase (`postgres` no es miembro de `supabase_admin`).
+- **Resultado global:** 72 tablas de `public` con RLS y 1 sin RLS (`spatial_ref_sys`).
+- **`pg_default_acl`** sin cambios: tablas y vistas nuevas de `public` siguen naciendo con
+  `arwdDxtm` para `anon`/`authenticated`/`service_role`, y las funciones con `EXECUTE`.
+- Tests de catálogo: `tests/test_seguridad_vistas_sin_escritura.py` y
+  `tests/test_seguridad_tablas_funciones.py` (9 pasan; el caso de `spatial_ref_sys` solo
+  informa "pendiente: soporte de Supabase").

@@ -1159,3 +1159,14 @@ Sin contrato Zod (solo lectura, sin Server Actions de Pecuario en este
 repo). Verificado en vivo: 25/25 tests propios, suite completa
 `5 failed, 840 passed, 8 skipped, 28 warnings, 84 subtests passed in
 1454.51s`, los 5 fallos ya catalogados y sin relación.
+
+## Permisos de vistas y funciones tras las migraciones de seguridad (APLICADAS el 2026-10-08)
+
+Verificado por catálogos. Las vistas `vw_pecuario_*` conservan `SELECT` (y `MAINTAIN`) para
+`authenticated` y `anon`, y ya no tienen `INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER`
+para clientes; esto cierra la escritura a través de `vw_pecuario_lotes_etapa` (vista
+auto-actualizable sin `WITH CHECK OPTION`). Funciones: `exportar_esquema_ryzos()`,
+`fn_jaula_tiene_otro_macho_activo(uuid,uuid)` y `fn_son_parientes(uuid,uuid,integer)` ya no
+tienen `EXECUTE` para `anon` ni `PUBLIC`; `authenticated` y `service_role` lo conservan
+(`ACL = {postgres, authenticated, service_role}`). La app Expo llama las dos `fn_*` por
+`rpc` con sesión `authenticated`. Detalle: `schema_live_core.md` y ADR-043.

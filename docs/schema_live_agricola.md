@@ -340,3 +340,16 @@ Para el historial completo posterior (2026-08-19 en adelante — más de 40
 migraciones), leer `supabase/migrations/*.sql` en orden por nombre de
 archivo (prefijo `YYYYMMDD[HHMMSS]_`), o `docs/adr/INDEX.md` para el ADR
 asociado a cada cambio relevante.
+
+## Permisos de las vistas web/QC tras las migraciones de seguridad (APLICADAS el 2026-10-08)
+
+Verificado por catálogos. `view_eudr_dashboard_aprobados`, `vw_monitoreo_eudr_aprobado`,
+`vw_monitoreo_poligonos`, `vw_monitoreo_puntos` y `vw_monitoreo_web` siguen con `SELECT` para
+`anon` y `authenticated` (el dashboard web las lee con la llave anon y depende de que
+corran como `postgres`); ya no tienen `INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER`
+para clientes. `vw_parcelas_web` y `vw_socios_web` (`security_invoker`) igual: solo
+`SELECT`/`MAINTAIN`. `SOCIO_CERTIFICACIONES` conserva su política de lectura anon
+(`id_organizacion IS NOT NULL`) porque `lib/padronCsv.js:203,1409` la lee con la llave
+anon; `CERTIFICACIONES_CATALOGO` y `PRODUCTOS` también. Las políticas anon de
+`AGENCIAS_CERTIFICADORAS`, `ORGANIZACION_CERTIFICACIONES`, `ORGANIZACION_PRODUCTOS` y
+`PARCELA_CERTIFICACIONES` pasaron a `USING (false)`. Detalle: `schema_live_core.md` y ADR-043.

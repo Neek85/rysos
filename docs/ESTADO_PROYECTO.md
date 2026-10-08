@@ -1476,7 +1476,7 @@
   dispositivo.
 
 - **(2026-10-07) Seguridad — vistas sin escritura / `USUARIOS_LOGIN`
-  (redactadas, NO aplicadas).** Redactó Claude (Cowork) a partir de una auditoría
+  (APLICADAS por Neyser en Studio el 2026-10-08).** Redactó Claude (Cowork) a partir de una auditoría
   de catálogos de solo lectura (2026-10-07, sin sondas de escritura, sin leer
   filas de `USUARIOS`/`USUARIOS_LOGIN`). Hallazgo: `USUARIOS_LOGIN` (vista sin
   filtro, dueña `postgres`) deja a `anon`/`authenticated` leer y escribir DNI,
@@ -1510,7 +1510,7 @@
   seguridad pendiente de que Neyser aplique y de este test.
 
 - **(2026-10-07) Seguridad — tablas sin RLS / lectura anon / funciones
-  (redactadas, NO aplicadas).** Redactó Claude (Cowork); copiadas sin cambios por
+  (APLICADAS por Neyser en Studio el 2026-10-08).** Redactó Claude (Cowork); copiadas sin cambios por
   Claude Code CLI (sha256 verificados). Archivos:
   `supabase/migrations/20261008092000_seguridad_tablas_sin_rls_sin_acceso_cliente.sql`
   (`ed597dce…08ec`) y `20261008093000_seguridad_lectura_anon_y_funciones.sql`
@@ -1534,6 +1534,42 @@
   soporte de Supabase (`postgres` no es miembro de `supabase_admin`). **Tarea futura:**
   mover las lecturas anon de `SOCIO_CERTIFICACIONES` (`lib/padronCsv.js:203,1409`) a una
   Server Action y cerrar su política. Revisión de seguridad pendiente de la aplicación.
+
+- **(2026-10-08, cierre) Seguridad — 4 migraciones APLICADAS por Neyser en Studio y
+  verificadas.** `20261008090000` (`USUARIOS_LOGIN`), `20261008091000` (vistas sin
+  escritura), `20261008092000` (tablas sin RLS) y `20261008093000` (lectura anon y
+  funciones), descritas en las dos entradas de arriba (ADR-043 y su addendum). Las
+  redactó y les dio el visto bueno de seguridad Claude (Cowork); las aplicó Neyser a mano
+  en Supabase Studio; **verificadas por catálogo por el CLI y por Neyser en Studio**.
+  **Verificado por Neyser en Studio:** 0 vistas con escritura abierta ni `USUARIOS_LOGIN`
+  con acceso; 0 tablas heredadas sin RLS o con acceso; las 4 políticas anon en `false`; las
+  3 funciones con `anon = false` y `authenticated = true`; `spatial_ref_sys` SIGUE con
+  escritura abierta para `anon` y `authenticated` (esperado). Prueba manual de Neyser:
+  dashboard web (mapa y QC), lista de socios y Asignar macho en la app Expo funcionan.
+  **Verificado por el CLI (solo lectura):** los dos tests de catálogo
+  (`tests/test_seguridad_vistas_sin_escritura.py`, `tests/test_seguridad_tablas_funciones.py`)
+  dan 9 passed, 1 warning ("pendiente: soporte de Supabase", caso de `spatial_ref_sys`).
+  Contra los snapshots previos (`~/ryzos_scratch/seguridad_antes*`): `USUARIOS_LOGIN` y las
+  3 tablas propias pasaron de `arwdDxtm` a ningún privilegio para `anon`/`authenticated`;
+  27 vistas pasaron de `arwdDxtm` a `SELECT` + `MAINTAIN`; las 4 políticas anon cambiaron
+  solo su `USING` a `false` (mismo nombre, comando y rol); las 3 funciones perdieron
+  `EXECUTE` para `PUBLIC` y `anon`; `postgres`, `service_role`, `pg_default_acl`,
+  `geometry_columns`/`geography_columns` y `spatial_ref_sys` sin cambios; entre las
+  funciones `SECURITY DEFINER` solo cambiaron esas 3. Tablas de `public`: 72 con RLS, 1 sin
+  RLS (`spatial_ref_sys`). Límite: no hay snapshot previo del resto de las tablas y
+  funciones, así que "ningún otro objeto cambió" se confirma solo para lo cubierto por los
+  snapshots y por `pg_default_acl`.
+  **Observación:** las 27 vistas conservan `MAINTAIN` para `anon`/`authenticated` (la
+  migración no lo revocaba y el test no lo cubre); el contrato decía "solo `SELECT`".
+  Sin efecto práctico conocido en vistas simples; decidir si se revoca.
+  **Pendientes:** (1) `spatial_ref_sys` — escritura abierta para `anon`/`authenticated`;
+  requiere soporte de Supabase (`postgres` no es miembro de `supabase_admin`); (2) mover
+  las lecturas anon de `SOCIO_CERTIFICACIONES` (`lib/padronCsv.js:203,1409`) a una Server
+  Action y entonces cerrar su política; (3) `pg_default_acl` sigue dando permisos totales a
+  objetos nuevos y `EXECUTE` a `PUBLIC` en funciones nuevas; (4) revisión de logs de acceso
+  a `USUARIOS_LOGIN` (la vista estuvo abierta a `anon` hasta el 2026-10-08); (5)
+  `exportar_esquema_ryzos()` para `authenticated` (conserva `EXECUTE`; decidir si se
+  revoca); (6) decidir si `USUARIOS`/`USUARIOS_LOGIN` siguen vivas o se eliminan.
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
