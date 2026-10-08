@@ -1571,6 +1571,32 @@
   `exportar_esquema_ryzos()` para `authenticated` (conserva `EXECUTE`; decidir si se
   revoca); (6) decidir si `USUARIOS`/`USUARIOS_LOGIN` siguen vivas o se eliminan.
 
+- **(2026-10-07) Huso horario Lima - Migración 1 (redactada, NO aplicada).**
+  Redactó Claude (Cowork); copiada sin cambios por Claude Code CLI (sha256 `86ef7165…9763`
+  verificado). Revisión de seguridad pendiente. Problema: la base corre en UTC y 8 vistas
+  Pecuario usan `CURRENT_DATE`; entre las 19:00 y las 24:00 de Lima el mes, los 12 meses y
+  los 56 días desde el destete se calculan con un día de adelanto. La migración crea
+  `fn_fecha_operativa(timestamptz)` y `fn_hoy_operativo()` (sql, STABLE, sin DEFINER/SET;
+  EXECUTE solo `anon`, `authenticated`, `service_role`), reescribe 8 vistas con `CREATE OR
+  REPLACE VIEW` (conserva ACL y COMMENT) y agrega `animales_vendidos_mes` al final de
+  `vw_pecuario_ventas_mes`. Archivos: `supabase/migrations/20261008100000_huso_horario_lima_vistas_pecuario.sql`,
+  reversa `supabase/rollbacks/20261008100000_huso_horario_lima_rollback.sql` (conserva la columna
+  nueva; los `DROP FUNCTION` van comentados), `tests/test_pecuario_huso_horario.py`,
+  `specs/pecuario_huso_horario_lima.md`, `plans/pecuario_huso_horario_ejecucion.md`, `tzdata`
+  en `requirements.txt`. Snapshot previo en `~/ryzos_scratch/huso_antes/` (13 definiciones,
+  `SELECT *` de las 8 vistas, comentarios, ACL, hora UTC/Lima).
+  **Pruebas antes de aplicar:** 15 pasan y 3 se saltan ("migración 20261008100000 no
+  aplicada": las dos de funciones y d1). Pasan los estáticos (migración y reversa), la lectura
+  con `anon`/`authenticated` más el aislamiento cruzado, y d0 (siembra y limpieza en
+  GRANJA-TEST, verificada). Las d. con base solo discriminan el error antiguo entre las 19:00
+  y las 24:00 de Lima; fuera de esa ventana lo cubre a.+b.
+  **Qué falta:** (1) revisión de seguridad; (2) aplicación manual por Neyser en Studio y
+  re-correr el test (idealmente de noche, hora de Lima); (3) Migración 2 (defaults
+  `CURRENT_DATE` de Pecuario y 3 funciones); (4) app Expo: helper único de "hoy" (`hoyISO()`
+  está copiada en 10 pantallas); (5) tests existentes que asumen UTC o `date.today()`
+  (panel, Empadre, etapa_automatica, poblacion_vistas); (6) `docs/schema_live_*.md` después de
+  aplicar.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
