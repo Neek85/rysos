@@ -16,8 +16,9 @@ solo cuando la vista ya existe (aplicada a mano en Supabase Studio) --
 import os
 import time
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -135,13 +136,11 @@ class TestVistaEtapaLive(unittest.TestCase):
             httpx.delete(f"{SUPABASE_URL}/rest/v1/{table}", headers=_service_headers(), params={field: f"eq.{value}"}, timeout=30)
 
     def _crear_lote(self, org, dias_desde_destete, etapa="recria", estado="activo"):
-        # UTC, no la fecha local de la máquina que corre el test -- Postgres
-        # evalúa CURRENT_DATE en UTC (confirmado en vivo), y cerca de la
-        # medianoche UTC una fecha local (ej. UTC-5) puede ir un día
-        # "atrás" de la fecha real de la base, corriendo el cálculo de
-        # dias_para_engorde un día entero.
-        hoy_utc = datetime.now(timezone.utc).date()
-        fecha_destete = (hoy_utc - timedelta(days=dias_desde_destete)).isoformat()
+        # Fecha de Lima, no UTC ni la hora local de la máquina -- desde la
+        # Migración 20261008100000 la vista usa fn_hoy_operativo() (America/Lima);
+        # antes evaluaba CURRENT_DATE en UTC y este test usaba UTC.
+        hoy_lima = datetime.now(ZoneInfo("America/Lima")).date()
+        fecha_destete = (hoy_lima - timedelta(days=dias_desde_destete)).isoformat()
         res = httpx.post(
             f"{SUPABASE_URL}/rest/v1/PECUARIO_LOTES",
             headers={**_service_headers(), "Content-Type": "application/json", "Prefer": "return=representation"},

@@ -333,3 +333,11 @@ su addendum). Aplicadas a mano por Neyser en Supabase Studio:
 - Tests de catálogo: `tests/test_seguridad_vistas_sin_escritura.py` y
   `tests/test_seguridad_tablas_funciones.py` (9 pasan; el caso de `spatial_ref_sys` solo
   informa "pendiente: soporte de Supabase").
+
+## Huso horario operativo (America/Lima) en la base (APLICADO el 2026-10-08)
+
+Detalle por módulo en `schema_live_pecuario.md` (sección "Huso horario operativo"). Resumen verificado
+por catálogo: existen `public.fn_fecha_operativa(timestamptz)` y `public.fn_hoy_operativo()` (sql, STABLE,
+sin DEFINER/SET; EXECUTE para `anon`, `authenticated`, `service_role`); la base sigue en `TimeZone=UTC`.
+Fuera de Pecuario, `EUDR_MONITOREO.fecha_monitoreo` y `PRECIOS_PRODUCTO.vigente_desde` conservan
+`DEFAULT CURRENT_DATE` (UTC); no se tocaron.

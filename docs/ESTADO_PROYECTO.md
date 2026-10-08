@@ -1571,7 +1571,7 @@
   `exportar_esquema_ryzos()` para `authenticated` (conserva `EXECUTE`; decidir si se
   revoca); (6) decidir si `USUARIOS`/`USUARIOS_LOGIN` siguen vivas o se eliminan.
 
-- **(2026-10-07) Huso horario Lima - Migración 1 (redactada, NO aplicada).**
+- **(2026-10-07) Huso horario Lima - Migración 1 (APLICADA por Neyser en Studio el 2026-10-08).**
   Redactó Claude (Cowork); copiada sin cambios por Claude Code CLI (sha256 `86ef7165…9763`
   verificado). Revisión de seguridad pendiente. Problema: la base corre en UTC y 8 vistas
   Pecuario usan `CURRENT_DATE`; entre las 19:00 y las 24:00 de Lima el mes, los 12 meses y
@@ -1596,6 +1596,35 @@
   está copiada en 10 pantallas); (5) tests existentes que asumen UTC o `date.today()`
   (panel, Empadre, etapa_automatica, poblacion_vistas); (6) `docs/schema_live_*.md` después de
   aplicar.
+
+- **(2026-10-08, cierre) Huso horario Lima - Migraciones 1 y 2 APLICADAS por Neyser en
+  Studio el 2026-10-08.** `20261008100000` (funciones, 8 vistas, `animales_vendidos_mes`) y
+  `20261008110000` (15 defaults `date` de `PECUARIO_*`, 3 funciones y
+  `vw_pecuario_retiros_macho_pendientes`). Las redactó y les dio el visto bueno de seguridad
+  Claude (Cowork); las aplicó Neyser a mano; verificadas por catálogo y por tests por el CLI.
+  Neyser verificó 7 controles de catálogo (true, 0, 0, 15, 0, 1, 0).
+  **Verificado por el CLI (solo lectura + siembra en GRANJA-TEST con limpieza verificada):**
+  `tests/test_pecuario_huso_horario.py` 18 passed (funciones con `anon` y `authenticated`,
+  lectura de las 8 vistas, aislamiento, bordes del mes y de los 56 días) a las 21:37 de Lima
+  (02:37 UTC del día siguiente: dentro de la ventana 19:00-24:00, donde se distingue el error
+  antiguo); `tests/test_pecuario_huso_horario_defaults.py` 15 passed (estáticos, catálogo:
+  0 defaults `CURRENT_DATE` en `PECUARIO_*`, 15 con `fn_hoy_operativo()`, funciones con los mismos
+  `prosecdef`/`proconfig`, triggers presentes; y un parto, un lote y un stock inicial sin fecha
+  reciben el hoy de Lima) a las 21:45 de Lima; `test_seguridad_vistas_sin_escritura.py` 4 passed
+  (ACL de las vistas intacto). Archivos nuevos: migración 2 (sha256 `83795e24…fd65`), reversa
+  `supabase/rollbacks/20261008110000_huso_horario_lima_rollback.sql`. Tests existentes alineados
+  con la fecha de Lima (solo el "hoy"): `test_pecuario_panel_indicadores.py:80`,
+  `test_pecuario_empadre_asignacion_macho.py:382`, `test_pecuario_etapa_automatica.py:139-144`,
+  `test_pecuario_poblacion_vistas.py:271,443`. **No se corrieron en vivo** esas 4 suites: siembran
+  en GRANJA-VALENCIA o COOP-AROMAS-VALLE (organizaciones reales); solo se comprobó la sintaxis y
+  sus casos estáticos (36 passed). Corrida pendiente cuando el panel pase a una organización de
+  prueba. `docs/schema_live_pecuario.md` y `schema_live_core.md` actualizados.
+  **Pendientes:** (1) helper de "hoy" en la app Expo (`hoyISO()` en UTC, copiada en 10
+  pantallas); (2) mover el panel de indicadores (y Empadre/poblacion_vistas) a una organización
+  de prueba (`ORG-TEST-PANEL`, con revisión de Cowork); (3) `EUDR_MONITOREO.fecha_monitoreo` y
+  `PRECIOS_PRODUCTO.vigente_desde` (default `CURRENT_DATE` de otros módulos); (4) vistas SUPERADA
+  (`desinfeccion_estado`, `limpieza_galpon_estado`); (5) `MAINTAIN` en las vistas (ver entrada de
+  seguridad).
 
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 

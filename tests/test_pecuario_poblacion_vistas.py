@@ -34,8 +34,9 @@ fallar la suite.
 import os
 import time
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -268,7 +269,7 @@ class TestPoblacionVistasLive(unittest.TestCase):
             headers={**_service_headers(), "Content-Type": "application/json", "Prefer": "return=representation"},
             json={
                 "ID_Organizacion": org, "poza_id": poza_id, "etapa": etapa,
-                "cantidad": cantidad, "fecha_evento": datetime.now(timezone.utc).date().isoformat(),
+                "cantidad": cantidad, "fecha_evento": datetime.now(ZoneInfo("America/Lima")).date().isoformat(),
             },
             timeout=30,
         )
@@ -440,7 +441,7 @@ class TestPoblacionVistasLive(unittest.TestCase):
 
     def test_lote_recria_con_mas_de_56_dias_cuenta_en_engorde(self):
         jaula = self._crear_jaula()
-        fecha_vieja = (datetime.now(timezone.utc).date() - timedelta(days=60)).isoformat()
+        fecha_vieja = (datetime.now(ZoneInfo("America/Lima")).date() - timedelta(days=60)).isoformat()
 
         antes = self._get_resumen_org()
         self._crear_lote(jaula, cantidad=7, etapa="recria", fecha_destete=fecha_vieja)

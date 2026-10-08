@@ -33,6 +33,7 @@ import os
 import time
 import unittest
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -379,7 +380,7 @@ class TestEmpadreAsignacionMachoLive(unittest.TestCase):
         self.assertEqual(resuelto.status_code, 200, resuelto.text)
 
         import datetime
-        hoy = datetime.date.today().isoformat()
+        hoy = datetime.datetime.now(ZoneInfo("America/Lima")).date().isoformat()  # fn_hoy_operativo() (Lima), no UTC ni la hora local de la máquina
         self.assertEqual(self._get_historial(historial_id)["fecha_salida"], hoy)
         self.assertIsNone(self._get_reproductor(macho)["jaula_actual_id"])
         self.assertEqual(self._get_vista_pendiente(pendiente["id"])["estado"], "resuelto")

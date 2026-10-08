@@ -1170,3 +1170,32 @@ auto-actualizable sin `WITH CHECK OPTION`). Funciones: `exportar_esquema_ryzos()
 tienen `EXECUTE` para `anon` ni `PUBLIC`; `authenticated` y `service_role` lo conservan
 (`ACL = {postgres, authenticated, service_role}`). La app Expo llama las dos `fn_*` por
 `rpc` con sesión `authenticated`. Detalle: `schema_live_core.md` y ADR-043.
+
+## Huso horario operativo (America/Lima) — Migraciones 1 y 2 APLICADAS (2026-10-08)
+
+Aplicadas a mano por Neyser en Supabase Studio: `20261008100000` y `20261008110000`.
+Verificado por catálogo (solo lectura) y por tests en vivo:
+
+- **Funciones** `public.fn_fecha_operativa(timestamptz) -> date` y `public.fn_hoy_operativo() -> date`:
+  `LANGUAGE sql`, `STABLE`, sin `SECURITY DEFINER` ni `SET`, dueño `postgres`,
+  `EXECUTE` para `anon`, `authenticated`, `service_role` (y `postgres`); sin `PUBLIC`.
+  Devuelven la fecha de calendario en Lima (UTC−5 fijo).
+- **15 defaults** de columnas `date` de `PECUARIO_*` = `fn_hoy_operativo()` (antes `CURRENT_DATE`):
+  COMPRAS.fecha, CONTROL_SANITARIO.fecha, HISTORIAL_MACHOS.fecha_entrada, INSUMOS_MOVIMIENTOS.fecha,
+  LIMPIEZA_GALPON.fecha, LOTES.fecha_destete, MORTALIDAD.fecha_evento, PARTOS.fecha_parto,
+  PESAJES.fecha_pesaje, RECOLECCIONES_DESTETE.fecha_destete, SANIDAD_REGISTROS.fecha,
+  TRASLADOS.fecha, TRATAMIENTOS.fecha, VENTAS.fecha_venta, VENTAS_SUBPRODUCTOS.fecha.
+  Quedan con `CURRENT_DATE` solo `EUDR_MONITOREO.fecha_monitoreo` y `PRECIOS_PRODUCTO.vigente_desde`
+  (otros módulos).
+- **Vistas** (usan `fn_hoy_operativo()` en vez de `CURRENT_DATE`; mismas columnas y ACL): `lotes_etapa`,
+  `reproduccion_mes`, `intervalo_partos`, `reemplazo_reproductoras_anual`, `indicadores_sanitarios_mes`,
+  `incidencia_patologias`, `pesos_promedio_mes`, `ventas_mes` y `retiros_macho_pendientes`.
+  `vw_pecuario_ventas_mes` tiene una columna nueva al final: `animales_vendidos_mes integer` (suma de
+  `cantidad` sin el valor vestigial `guano`); `monto_total_mes` sigue sin incluir `PECUARIO_VENTAS_SUBPRODUCTOS`.
+- **Funciones con la fecha de Lima** (mismos atributos que antes): `fn_cerrar_historial_macho_anterior()`
+  (DEFINER, `search_path=public`), `fn_crear_insumo_con_stock_inicial(...12 args)` (DEFINER,
+  `search_path=public`; la entrada de stock inicial usa `fn_hoy_operativo()`) y
+  `trg_resolver_retiro_macho_pendiente()` (INVOKER, sin SET; conserva el HOTFIX 2026-09-26).
+- Sin cambios: `vw_pecuario_desinfeccion_estado` y `vw_pecuario_limpieza_galpon_estado` (SUPERADA, `now()`).
+- Tests: `tests/test_pecuario_huso_horario.py` (18 pasan) y `tests/test_pecuario_huso_horario_defaults.py`
+  (15 pasan), corridos a las 21:37 y 21:45 hora de Lima (ventana 19:00–24:00, donde se distingue el error antiguo).

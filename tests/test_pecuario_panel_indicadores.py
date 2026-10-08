@@ -40,8 +40,9 @@ sin fallar la suite.
 import os
 import time
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -77,7 +78,7 @@ ORG_A = "GRANJA-VALENCIA"     # organización real, mismo criterio que el resto 
 ORG_B = "ORG-TEST-DEMO"       # "otra organización" para el aislamiento cruzado
 ADMIN_EMAIL = "admin-demo@ryzos-demo.test"  # cuenta admin de ORG_B, ya usada en el resto de la suite
 
-TODAY = date.today()
+TODAY = datetime.now(ZoneInfo("America/Lima")).date()  # hoy operativo (Lima), igual que fn_hoy_operativo() en las vistas
 
 
 def _service_headers():
