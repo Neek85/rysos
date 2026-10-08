@@ -1475,6 +1475,40 @@
   resolvieron). Neyser aplicó las migraciones en Supabase Studio y verificó en
   dispositivo.
 
+- **(2026-10-07) Seguridad — vistas sin escritura / `USUARIOS_LOGIN`
+  (redactadas, NO aplicadas).** Redactó Claude (Cowork) a partir de una auditoría
+  de catálogos de solo lectura (2026-10-07, sin sondas de escritura, sin leer
+  filas de `USUARIOS`/`USUARIOS_LOGIN`). Hallazgo: `USUARIOS_LOGIN` (vista sin
+  filtro, dueña `postgres`) deja a `anon`/`authenticated` leer y escribir DNI,
+  teléfono, email, rol y firma de todos los usuarios; y las 28 vistas de
+  `postgres` tienen `arwdDxtm` para `anon`/`authenticated` por `pg_default_acl`
+  (caso confirmado: `vw_pecuario_lotes_etapa`, sin `WITH CHECK OPTION`).
+  **Archivos (commit sin aplicar):** `supabase/migrations/20261008090000_seguridad_usuarios_login_sin_acceso_cliente.sql`
+  (sha256 `f1b2074c…4bf0`) y `20261008091000_seguridad_vistas_sin_escritura_cliente.sql`
+  (sha256 `ff093656…4f3a`), copiadas sin modificar; reversa en
+  `supabase/rollbacks/20261008090000_seguridad_rollback.sql` (fuera de
+  `migrations/`; reabre la fuga); test permanente
+  `tests/test_seguridad_vistas_sin_escritura.py`; `docs/adr/ADR-043-vistas-sin-escritura-cliente.md`.
+  Snapshot previo (ACL por grantee, `pg_default_acl`, auto-actualizabilidad)
+  fuera del repo en `~/ryzos_scratch/seguridad_antes/`.
+  **Estado del test ANTES de aplicar:** 2 fallan y 2 pasan, como se espera. Fallan
+  `test_a` (56 combinaciones vista/rol con escritura: 28 vistas × `anon` y
+  `authenticated`) y `test_b` (`USUARIOS_LOGIN` concede todo a `anon` y
+  `authenticated`); pasan los dos de `test_d` (la web conserva `SELECT` para
+  `anon` en las 4 vistas EUDR; `authenticated` en las `vw_pecuario_*`). No están
+  marcados xfail: el rojo desaparece al aplicar las dos migraciones.
+  **Pendiente (Neyser):** aplicar en Supabase Studio, en orden `…090000` y luego
+  `…091000`; reejecutar el test y esperar 4/4 verdes. Decisiones pendientes:
+  (1) confirmar que nada externo (p. ej. AppSheet) usa `USUARIOS_LOGIN` con
+  `anon`/`authenticated`; (2) si `USUARIOS`/`USUARIOS_LOGIN` siguen vivas o se
+  eliminan; (3) tareas aparte, no cubiertas: 4 tablas sin RLS con permisos
+  totales para `anon` (`CONFIGURACION_REPORTES_ORG`, `MENU_APP`,
+  `METADATOS_CAMPOS`, `spatial_ref_sys`) y 4 políticas de `SELECT` permisivas
+  de `anon` (`id_organizacion IS NOT NULL`). Riesgo residual: `pg_default_acl`
+  sigue dando todos los permisos a objetos nuevos; lo vigila el test.
+  **Trazabilidad (protocolo 4.1):** redactado por Claude (Cowork); revisión de
+  seguridad pendiente de que Neyser aplique y de este test.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
