@@ -58,7 +58,7 @@
 -- ROLLBACK: supabase/rollbacks/20261009090000_org_test_panel_rollback.sql
 --
 -- APLICACION: MANUAL por Neyser en Supabase Studio. El CLI NO aplica nada.
--- Redacto: Claude (Cowork) / Claude Code CLI. Revision de seguridad: pendiente.
+-- Redactó: Claude Code CLI (Claude Sonnet 5.5). Visto bueno de seguridad: Claude (Cowork), 2026-10-09.
 -- =====================================================================
 
 BEGIN;

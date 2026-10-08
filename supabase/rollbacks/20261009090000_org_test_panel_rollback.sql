@@ -19,6 +19,7 @@
 --
 -- NO TOCA: privilegios, RLS, politicas, usuarios.
 -- IDEMPOTENTE: si la fila ya no existe, no hace nada. Transaccional.
+-- Redactó: Claude Code CLI (Claude Sonnet 5.5). Visto bueno de seguridad: Claude (Cowork), 2026-10-09.
 -- APLICACION MANUAL por Neyser en Supabase Studio.
 -- =====================================================================
 
