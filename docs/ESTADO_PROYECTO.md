@@ -1509,6 +1509,32 @@
   **Trazabilidad (protocolo 4.1):** redactado por Claude (Cowork); revisión de
   seguridad pendiente de que Neyser aplique y de este test.
 
+- **(2026-10-07) Seguridad — tablas sin RLS / lectura anon / funciones
+  (redactadas, NO aplicadas).** Redactó Claude (Cowork); copiadas sin cambios por
+  Claude Code CLI (sha256 verificados). Archivos:
+  `supabase/migrations/20261008092000_seguridad_tablas_sin_rls_sin_acceso_cliente.sql`
+  (`ed597dce…08ec`) y `20261008093000_seguridad_lectura_anon_y_funciones.sql`
+  (`dbba57b4…5d2d`); reversa `supabase/rollbacks/20261008092000_seguridad_rollback.sql`;
+  tests `tests/test_seguridad_tablas_funciones.py`; addendum en
+  `docs/adr/ADR-043-vistas-sin-escritura-cliente.md`; snapshot previo en
+  `~/ryzos_scratch/seguridad_antes2/`. **Dependencias ocultas (paso 3, solo lectura):**
+  sin vistas, funciones, políticas, CHECK, triggers ni defaults que dependan de las 7
+  tablas, salvo `agregar_campo_y_metadato` (sin EXECUTE para clientes) y FK internas; las 3
+  funciones no tienen invocadores dentro de la base y solo las usa la app Expo con sesión
+  `authenticated` (conservan EXECUTE). Nombres de política y de función de las migraciones
+  = vivos (coinciden exactamente).
+  **Estado de los tests ANTES de aplicar:** en `test_seguridad_tablas_funciones.py` fallan
+  a. (3 tablas sin RLS y con permisos), b. (4 políticas anon abiertas) y d. (3 funciones con
+  EXECUTE para anon/PUBLIC), con mensaje "migración … no aplicada"; pasan c. (lecturas con
+  lector real siguen abiertas) y e. (`spatial_ref_sys`: informa un `UserWarning` "pendiente:
+  soporte de Supabase", no falla). Con los de ADR-043: 5 fallan y 4 pasan, como se espera.
+  **Pendiente (Neyser):** confirmar que nada externo (AppSheet / `backend-inspecciones`)
+  usa `CONFIGURACION_REPORTES_ORG`, `MENU_APP` ni `METADATOS_CAMPOS` con `anon` o sesión;
+  aplicar en Studio (orden: …090000, …091000, …092000, …093000); `spatial_ref_sys` requiere
+  soporte de Supabase (`postgres` no es miembro de `supabase_admin`). **Tarea futura:**
+  mover las lecturas anon de `SOCIO_CERTIFICACIONES` (`lib/padronCsv.js:203,1409`) a una
+  Server Action y cerrar su política. Revisión de seguridad pendiente de la aplicación.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

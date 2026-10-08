@@ -79,3 +79,53 @@ Una auditoría de solo lectura de catálogos (2026-10-07, `supabase db query
 - Las vistas siguen corriendo como `postgres` y saltándose la RLS al leer; solo
   las filtra a mano `auth_org_id()` (19 de 26). `vw_monitoreo_*` es abierta por
   diseño.
+
+## Addendum (2026-10-07) — tablas heredadas, lectura anon sin lector y 3 funciones
+
+Reconocimiento de solo lectura posterior (`seguridad_tablas.md`) y verificación de
+dependencias ocultas antes de aplicar. Migraciones redactadas por Claude (Cowork),
+copiadas sin cambios (sha256 verificados), **NO aplicadas**:
+
+- `20261008092000_seguridad_tablas_sin_rls_sin_acceso_cliente.sql`:
+  `CONFIGURACION_REPORTES_ORG`, `MENU_APP`, `METADATOS_CAMPOS` pasan a RLS activada, sin
+  políticas, sin privilegios para `PUBLIC`/`anon`/`authenticated` (solo `postgres` y
+  `service_role`). `spatial_ref_sys` (PostGIS, dueña `supabase_admin`): intento de quitar
+  solo la escritura a `anon`/`authenticated`, sin tocar `SELECT`; **best effort**: no
+  aborta.
+- `20261008093000_seguridad_lectura_anon_y_funciones.sql`: las 4 políticas `SELECT` de
+  `anon` sin lector (`AGENCIAS_CERTIFICADORAS`, `ORGANIZACION_CERTIFICACIONES`,
+  `ORGANIZACION_PRODUCTOS`, `PARCELA_CERTIFICACIONES`) pasan a `USING (false)`; y
+  `exportar_esquema_ryzos()`, `fn_jaula_tiene_otro_macho_activo(uuid,uuid)` y
+  `fn_son_parientes(uuid,uuid,integer)` pierden `EXECUTE` para `PUBLIC` y `anon`
+  (`authenticated` y `service_role` lo conservan: la app Expo las llama por `rpc` con
+  sesión).
+
+**Dependencias verificadas en la base (catálogos):** ninguna vista, función, política,
+CHECK, trigger ni default referencia las 3 tablas propias ni las 4 de políticas anon, salvo:
+la función `agregar_campo_y_metadato` (SECURITY DEFINER, sin EXECUTE para clientes) que
+escribe `METADATOS_CAMPOS`; las FK entre tablas de certificaciones (las comprueba el
+dueño, no `anon`); y la secuencia propia de `MENU_APP`. `vw_parcelas_web` y `vw_socios_web`
+(`security_invoker`) no las tocan. Las 3 funciones no tienen ningún invocador dentro de la
+base; sus únicos usos son `rpc` desde `apps/granja-valencia/src/app/(protegido)/empadre/asignar-macho.tsx`
+(líneas 96, 104) y `reproductores/nuevo.tsx` (101, 109, 119), con sesión `authenticated`,
+y tests con `service_role`.
+
+**Riesgo residual:**
+- `spatial_ref_sys`: `postgres` no es miembro de `supabase_admin` (que otorgó los permisos),
+  así que lo más probable es que el `REVOKE` no cambie nada; requiere soporte de Supabase o
+  una acción como `supabase_admin`. El test lo informa como `UserWarning` ("pendiente:
+  soporte de Supabase"), sin fallar.
+- `SOCIO_CERTIFICACIONES` sigue con lectura anon abierta (`id_organizacion IS NOT NULL`,
+  todas las organizaciones) porque `lib/padronCsv.js:203,1409` la lee en el navegador con la
+  llave anon desde `app/dashboard/socios/page.jsx:143`. Tarea futura: mover esas lecturas a
+  una Server Action con sesión y recién entonces cerrarla (cerrarla antes daría 0 filas sin
+  error en el CSV).
+- `CERTIFICACIONES_CATALOGO` y `PRODUCTOS` conservan lectura anon a propósito (catálogos con
+  lector web real); el test las vigila para que nadie las cierre de más.
+- `pg_default_acl` sigue dando todos los permisos a tablas/vistas nuevas de `public` y
+  `EXECUTE` a `PUBLIC` (y a `anon`/`authenticated`) en funciones nuevas: cada tabla nueva
+  necesita RLS y cada función nueva un `REVOKE EXECUTE ... FROM PUBLIC, anon` explícito.
+  Lo vigilan los tests de catálogo (solo para los casos listados).
+
+**Reversa:** `supabase/rollbacks/20261008092000_seguridad_rollback.sql` (reabre la fuga).
+**Tests:** `tests/test_seguridad_tablas_funciones.py`.

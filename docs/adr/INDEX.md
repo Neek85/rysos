@@ -52,6 +52,7 @@ corrigieron como parte de esta misma tarea, junto con este índice.
 | [039](ADR-039-fase-d-qc-aprobar-rechazar-roles-rls.md) | Fase D: aprobar/rechazar en la Consola QC a sesión real, con control de rol vía trigger en Postgres | `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` (`lib/actions/qcActions.js`) | 2026-09-04 | Implementado |
 | [040](ADR-040-infraestructura-sincronizacion-movil-offline.md) | Infraestructura de BD para sincronización móvil offline-first (sin app React Native todavía) | `SYNC_QUEUE`/`PRECIOS_PRODUCTO`/`SOCIO_ACTIVACION_CODES`/`PADRON_SOCIOS` | 2026-09-06 | Implementado |
 | [041](ADR-041-procesador-sync-queue-webgis.md) | Procesador server-side de `SYNC_QUEUE` para el dominio WebGIS — reusa `uploadGeoSpatialFeature` | `SYNC_QUEUE` → `EUDR_MONITOREO`/`EUDR_USO_SUELO`/`EUDR_INSTALACIONES` (`lib/actions/syncGisActions.js`) | 2026-09-06 | Implementado |
+| [042](ADR-042-supabase-db-query-linked-alcance-lectura.md) | Alcance de `supabase db query --linked`: lectura libre, escritura solo manual | Tooling de verificación (CLI de Supabase) / protocolo multi-IA | 2026-09-23 | Aceptado |
 | [043](ADR-043-vistas-sin-escritura-cliente.md) | Vistas de `public` sin escritura para clientes; `USUARIOS_LOGIN` sin acceso de cliente | vistas de `public`/`USUARIOS_LOGIN` (permisos) | 2026-10-07 | Propuesto (migraciones redactadas, no aplicadas) |
 
 ## Notas
