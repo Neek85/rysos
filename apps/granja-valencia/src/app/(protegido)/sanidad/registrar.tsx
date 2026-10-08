@@ -11,6 +11,7 @@ import { useFocusEffect } from 'expo-router'
 import { SanidadActividadCrearSchema, SanidadRegistroCrearSchema } from '../../../../../../lib/validations/pecuario'
 import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
+import { hoyOperativo } from '../../../../lib/fecha/hoyOperativo'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
@@ -24,10 +25,6 @@ const ALCANCES: { valor: Alcance; label: string }[] = [
   { valor: 'granja', label: 'Toda la granja' },
   { valor: 'galpon', label: 'Por galpón' },
 ]
-
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 function esFechaValida(f: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return false
@@ -54,7 +51,7 @@ export default function SanidadScreen() {
   const [modo, setModo] = useState<'registrar' | 'config'>('registrar')
   const [actividadId, setActividadId] = useState<string | null>(null)
   const [galponId, setGalponId] = useState<string | null>(null)
-  const [fecha, setFecha] = useState(hoyISO())
+  const [fecha, setFecha] = useState(hoyOperativo())
   const [producto, setProducto] = useState('')
   const [responsable, setResponsable] = useState('')
   const [observaciones, setObservaciones] = useState('')

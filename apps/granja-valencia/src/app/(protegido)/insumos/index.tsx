@@ -16,6 +16,7 @@ import {
 } from '../../../../../../lib/validations/pecuario'
 import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
+import { hoyOperativo } from '../../../../lib/fecha/hoyOperativo'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
@@ -55,10 +56,6 @@ const UNIDADES = [
 const CATEGORIA_LABEL: Record<string, string> = Object.fromEntries(CATEGORIAS.map((c) => [c.valor, c.label]))
 const UNIDAD_LABEL: Record<string, string> = Object.fromEntries(UNIDADES.map((u) => [u.valor, u.label.toLowerCase()]))
 
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
-
 function esFechaValida(f: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return false
   const d = new Date(`${f}T00:00:00Z`)
@@ -93,7 +90,7 @@ export default function InsumosScreen() {
   const [insumoId, setInsumoId] = useState<string | null>(null)
   const [tipo, setTipo] = useState<'entrada' | 'salida'>('entrada')
   const [cantidad, setCantidad] = useState('')
-  const [fecha, setFecha] = useState(hoyISO())
+  const [fecha, setFecha] = useState(hoyOperativo())
   const [galponId, setGalponId] = useState<string | null>(null)
   const [detalleAbierto, setDetalleAbierto] = useState(false)
   const [pozaId, setPozaId] = useState<string | null>(null)

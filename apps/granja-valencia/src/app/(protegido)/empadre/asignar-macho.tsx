@@ -10,6 +10,7 @@ import { router } from 'expo-router'
 import { EmpadreAsignacionSchema } from '../../../../../../lib/validations/pecuario'
 import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
+import { hoyOperativo } from '../../../../lib/fecha/hoyOperativo'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
@@ -17,10 +18,6 @@ import { AdvertenciaBanner } from '../../../../components/ui/AdvertenciaBanner'
 
 type PozaOption = { id: string; codigo_poza: string }
 type MachoOption = { id: string; codigo_arete: string }
-
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 export default function AsignarMachoScreen() {
   const colors = useThemeColors()
@@ -32,7 +29,7 @@ export default function AsignarMachoScreen() {
 
   const [jaulaId, setJaulaId] = useState<string | null>(null)
   const [machoId, setMachoId] = useState<string | null>(null)
-  const [fechaEntrada, setFechaEntrada] = useState(hoyISO())
+  const [fechaEntrada, setFechaEntrada] = useState(hoyOperativo())
   const [fechaSalida, setFechaSalida] = useState('')
 
   const [advertencias, setAdvertencias] = useState<string[]>([])

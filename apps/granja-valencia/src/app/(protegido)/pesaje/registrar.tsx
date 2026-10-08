@@ -11,16 +11,13 @@ import { useFocusEffect } from 'expo-router'
 import { PesajeSchema } from '../../../../../../lib/validations/pecuario'
 import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
+import { hoyOperativo } from '../../../../lib/fecha/hoyOperativo'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
 
 type LoteOption = { id: string; codigo_lote: string; cantidad_actual: number | null }
 type PesajeAnterior = { fecha_pesaje: string; peso_promedio_g: number }
-
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 function diasEntre(anteriorISO: string, actualISO: string) {
   const anterior = new Date(`${anteriorISO}T00:00:00Z`).getTime()
@@ -66,7 +63,7 @@ export default function RegistrarPesajeScreen() {
   const [cargando, setCargando] = useState(true)
   const [lotes, setLotes] = useState<LoteOption[]>([])
   const [loteId, setLoteId] = useState<string | null>(null)
-  const [fechaPesaje, setFechaPesaje] = useState(hoyISO())
+  const [fechaPesaje, setFechaPesaje] = useState(hoyOperativo())
   const [animalesMuestreados, setAnimalesMuestreados] = useState(1)
   const [pesoMuestra, setPesoMuestra] = useState('')
   const [error, setError] = useState<string | null>(null)

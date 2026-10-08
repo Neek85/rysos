@@ -17,6 +17,7 @@ import { useFocusEffect } from 'expo-router'
 import { VentaAnimalSchema, VentaGuanoSchema } from '../../../../../../lib/validations/pecuario'
 import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
+import { hoyOperativo } from '../../../../lib/fecha/hoyOperativo'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
@@ -31,10 +32,6 @@ const TIPOS_SALIDA = [
   { valor: 'reproductor_saca' as const, label: 'Reproductor de saca' },
   { valor: 'pelado_beneficiado' as const, label: 'Pelado (beneficiado)' },
 ]
-
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 function Stepper({
   value,
@@ -86,7 +83,7 @@ export default function RegistrarVentaScreen() {
   const [animalId, setAnimalId] = useState<string | null>(null)
 
   // Venta de animales -- resto de campos
-  const [fechaVenta, setFechaVenta] = useState(hoyISO())
+  const [fechaVenta, setFechaVenta] = useState(hoyOperativo())
   const [tipoSalida, setTipoSalida] = useState<(typeof TIPOS_SALIDA)[number]['valor']>('carne')
   const [basePrecio, setBasePrecio] = useState<'por_animal' | 'por_kg'>('por_animal')
   const [precioUnitario, setPrecioUnitario] = useState('')
@@ -97,7 +94,7 @@ export default function RegistrarVentaScreen() {
   const [compradorNombre, setCompradorNombre] = useState('')
 
   // Venta de guano
-  const [fechaGuano, setFechaGuano] = useState(hoyISO())
+  const [fechaGuano, setFechaGuano] = useState(hoyOperativo())
   const [cantidadGuano, setCantidadGuano] = useState('')
   const [unidadGuano, setUnidadGuano] = useState<'sacos' | 'kg'>('sacos')
   const [precioTotalGuano, setPrecioTotalGuano] = useState('')

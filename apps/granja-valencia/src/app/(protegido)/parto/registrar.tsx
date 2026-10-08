@@ -13,15 +13,12 @@ import { router } from 'expo-router'
 import { PartoRegistroSchema } from '../../../../../../lib/validations/pecuario'
 import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
+import { hoyOperativo } from '../../../../lib/fecha/hoyOperativo'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
 
 type MadreOption = { id: string; codigo_arete: string; jaula_actual_id: string }
-
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 function Stepper({
   value,
@@ -65,7 +62,7 @@ export default function RegistrarPartoScreen() {
   const [machoCodigo, setMachoCodigo] = useState<string | null>(null)
   const [resolviendoMacho, setResolviendoMacho] = useState(false)
 
-  const [fechaParto, setFechaParto] = useState(hoyISO())
+  const [fechaParto, setFechaParto] = useState(hoyOperativo())
   const [nVivos, setNVivos] = useState(0)
   const [nMuertos, setNMuertos] = useState(0)
   const [pesoTotalCamada, setPesoTotalCamada] = useState('')

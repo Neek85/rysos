@@ -13,6 +13,7 @@ import * as Crypto from 'expo-crypto'
 import { CompraSchema } from '../../../../../../lib/validations/pecuario'
 import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
+import { hoyOperativo } from '../../../../lib/fecha/hoyOperativo'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
@@ -48,10 +49,6 @@ const UNIDAD_LABEL: Record<string, string> = {
   kg: 'kg', g: 'g', litro: 'litro', ml: 'ml', unidad: 'unidad', saco_50kg: 'saco 50kg', saco_40kg: 'saco 40kg',
 }
 
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
-
 function esFechaValida(f: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(f)) return false
   const d = new Date(`${f}T00:00:00Z`)
@@ -84,7 +81,7 @@ export default function ComprasScreen() {
   const [galpones, setGalpones] = useState<Galpon[]>([])
 
   const [formAbierto, setFormAbierto] = useState(false)
-  const [fecha, setFecha] = useState(hoyISO())
+  const [fecha, setFecha] = useState(hoyOperativo())
   const [proveedor, setProveedor] = useState('')
   const [comprobante, setComprobante] = useState('')
   const [concepto, setConcepto] = useState<Concepto>('insumo')

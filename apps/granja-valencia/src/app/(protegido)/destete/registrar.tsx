@@ -15,6 +15,7 @@ import {
 } from '../../../../../../lib/validations/pecuario'
 import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
+import { hoyOperativo } from '../../../../lib/fecha/hoyOperativo'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
@@ -29,10 +30,6 @@ type PartoLactancia = {
 
 type PozaOption = { id: string; codigo_poza: string }
 type LoteConformado = { codigo_lote: string; sexo: string; cantidad_inicial: number }
-
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 function Stepper({ value, onChange, min = 1 }: { value: number; onChange: (v: number) => void; min?: number }) {
   const colors = useThemeColors()
@@ -66,7 +63,7 @@ export default function RegistrarDesteteScreen() {
   // Paso 1
   const [partosPendientes, setPartosPendientes] = useState<PartoLactancia[]>([])
   const [seleccionados, setSeleccionados] = useState<Set<string>>(new Set())
-  const [fechaDestete, setFechaDestete] = useState(hoyISO())
+  const [fechaDestete, setFechaDestete] = useState(hoyOperativo())
   const [guardandoRecoleccion, setGuardandoRecoleccion] = useState(false)
 
   // Paso 2

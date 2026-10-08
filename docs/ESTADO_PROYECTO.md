@@ -1626,6 +1626,39 @@
   (`desinfeccion_estado`, `limpieza_galpon_estado`); (5) `MAINTAIN` en las vistas (ver entrada de
   seguridad).
 
+- **(2026-10-08) App Granja Valencia — fecha operativa de Lima (`hoyOperativo`).**
+  Autor: Claude Sonnet 5.5. Sin migración SQL (no aplica gate de seguridad); no se aplicó nada
+  contra ninguna base. Las 10 `hoyISO()` locales (día en UTC: entre las 19:00 y las 24:00 de Lima
+  precargaban la fecha de mañana) se reemplazaron por un único helper
+  `apps/granja-valencia/lib/fecha/hoyOperativo.ts`: `hoyOperativo(ahora = Date.now())` =
+  `new Date(ahora - 5 h).toISOString().slice(0, 10)` (Lima UTC−5 fijo, igual que
+  `fn_hoy_operativo()`); determinista, sin `Intl`, sin depender de la zona del teléfono, sin
+  librerías. Pantallas: compras, destete, empadre/asignar-macho, insumos, mortalidad, parto,
+  pesaje, sanidad, traslado y venta (11 usos; venta lo usa dos veces). Spec
+  `specs/app_fecha_operativa_lima.md`, plan `plans/app_fecha_operativa_ejecucion.md`.
+  **Clasificación de los demás usos de fecha en la app (grep de `new Date()`, `Date.now()`,
+  `toISOString().slice/split`, `toLocale*`, `getFullYear/Month/Date`, `Intl`):**
+  (a) fecha de calendario del día, migrada: solo las 10 `hoyISO()`. (b) NO se tocan: instante
+  `created_offline_at: new Date().toISOString()` (`compras/index.tsx:260`, `insumos/index.tsx:239`);
+  `Date.now()` para nombrar fotos (`mortalidad/registrar.tsx:252`); validadores de fecha pura
+  `esFechaValida` con `T00:00:00Z` (`compras:57-58`, `insumos:64-65`, `sanidad:34-35`), `sumarDias`
+  (`sanidad:39-41`) y `diasEntre` (`pesaje:26-27`), correctos porque operan sobre fechas YYYY-MM-DD
+  sin hora. No hay `toLocale*`, `getFullYear/Month/Date` ni `Intl` en la app.
+  **Verificado:** `tsc --noEmit` sin errores; Jest 16 suites / 142 tests pasan (10 nuevos del helper,
+  con instantes inyectados: fronteras 04:59:59.999Z/05:00:00Z, 23:59:59.999Z, ventana 19-24 h de Lima,
+  mes, año, bisiesto 2028, formato, `Date.now()` con fake timers); bundle por ruta de las 10 pantallas
+  con Metro: HTTP 200 y 0 `UnableToResolveError` (Metro detenido después).
+  **Archivos web (solo lectura, sin cambios):** `lib/actions/gisActions.js:61` `todayIso()` =
+  `new Date().toISOString().slice(0, 10)` (día UTC) se usa en `:267` como `fecha_monitoreo` (fecha de
+  calendario del día, clase (a): la fecha de monitoreo EUDR se adelanta un día de 19:00 a 24:00 de
+  Lima); `lib/actions/syncGisActions.js:63` `procesado_en: new Date().toISOString()` es un instante
+  (clase (b), correcto). Ojo: los paths indicados en la tarea (`lib/gisActions.js`,
+  `lib/syncGisActions.js`) no existen; los archivos están en `lib/actions/`. Decisión pendiente para
+  `EUDR_MONITOREO.fecha_monitoreo` (default `CURRENT_DATE` en la base, mismo asunto).
+  **Pendiente:** validar en dispositivo entre las 19:00 y las 24:00 de Lima que la fecha precargada
+  sea la de Lima; mover el panel de indicadores a una organización de prueba; defaults de otros módulos;
+  vistas SUPERADA; `MAINTAIN` en vistas.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

@@ -14,6 +14,7 @@ import { decode } from 'base64-arraybuffer'
 import { MortalidadFotoInsertSchema, MortalidadSchema } from '../../../../../../lib/validations/pecuario'
 import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
+import { hoyOperativo } from '../../../../lib/fecha/hoyOperativo'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
@@ -39,10 +40,6 @@ const CAUSAS = [
   { valor: 'desconocido' as const, label: 'Desconocida' },
   { valor: 'otro' as const, label: 'Otro' },
 ]
-
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 function Stepper({
   value,
@@ -90,7 +87,7 @@ export default function RegistrarMortalidadScreen() {
   const [busquedaAnimal, setBusquedaAnimal] = useState('')
   const [animalId, setAnimalId] = useState<string | null>(null)
 
-  const [fecha, setFecha] = useState(hoyISO())
+  const [fecha, setFecha] = useState(hoyOperativo())
   const [cantidad, setCantidad] = useState(1)
   const [causa, setCausa] = useState<(typeof CAUSAS)[number]['valor']>('desconocido')
   const [descripcionSintomas, setDescripcionSintomas] = useState('')

@@ -13,6 +13,7 @@ import { router, useFocusEffect } from 'expo-router'
 import { TrasladoSchema } from '../../../../../../lib/validations/pecuario'
 import { supabase } from '../../../../lib/supabase/client'
 import { useProfile } from '../../../../lib/supabase/useProfile'
+import { hoyOperativo } from '../../../../lib/fecha/hoyOperativo'
 import { useThemeColors } from '../../../../theme/useThemeColors'
 import { BackToInicioButton } from '../../../../components/ui/BackToInicioButton'
 import { Chip } from '../../../../components/ui/Chip'
@@ -27,10 +28,6 @@ const MOTIVOS = [
   { valor: 'sobrepoblacion' as const, label: 'Sobrepoblación' },
   { valor: 'otro' as const, label: 'Otro' },
 ]
-
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 function Stepper({
   value,
@@ -86,7 +83,7 @@ export default function RegistrarTrasladoScreen() {
 
   // Comunes
   const [destinoJaulaId, setDestinoJaulaId] = useState<string | null>(null)
-  const [fecha, setFecha] = useState(hoyISO())
+  const [fecha, setFecha] = useState(hoyOperativo())
   const [motivo, setMotivo] = useState<(typeof MOTIVOS)[number]['valor']>('enfermedad_aislamiento')
   const [observaciones, setObservaciones] = useState('')
 
