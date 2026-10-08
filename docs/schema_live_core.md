@@ -69,7 +69,10 @@ adicionales no documentadas aquí.
   código manual como `"COOP-JS"`/`"COOP-ND"`, comparado contra el claim
   JWT `ID_Organizacion`), `"Nombre_Organizacion"`, `"RUC"`,
   `"Direccion_Fiscal"`, `"Representante_Legal"`, `"Logo"`, `"Config"`
-  (jsonb, **`NULL`** en las 2 filas reales hoy — sin estructura definida
+  (**`text`**, NO jsonb: confirmado en catálogo el 2026-10-09,
+  `information_schema.columns` → `data_type = text`; el texto original de esta
+  sección decía jsonb. Cualquier uso como objeto JSON es por convención y
+  convierte desde/hacia texto. **`NULL`** en las 2 filas reales hoy — sin estructura definida
   todavía, ver `ORGANIZACIONES.Config.gis.radio_contexto_vecinos_m` en
   `docs/adr/ADR-006-capa-contexto-parcelas-vecinas.md` para el primer uso
   real), `creado_en`, `actualizado_en`, `creado_por`. **Pendiente de
@@ -341,3 +344,11 @@ por catálogo: existen `public.fn_fecha_operativa(timestamptz)` y `public.fn_hoy
 sin DEFINER/SET; EXECUTE para `anon`, `authenticated`, `service_role`); la base sigue en `TimeZone=UTC`.
 Fuera de Pecuario, `EUDR_MONITOREO.fecha_monitoreo` y `PRECIOS_PRODUCTO.vigente_desde` conservan
 `DEFAULT CURRENT_DATE` (UTC); no se tocaron.
+
+## Organizaciones de prueba (es_organizacion_prueba = true; verificado en catálogo 2026-10-09)
+
+`GRANJA-TEST`, `ORG-TEST-DEMO` y `ORG-TEST-PANEL` (esta última, dedicada y vacía, creada por la
+migración `20261009090000_org_test_panel.sql`, redactada por Claude Code CLI (Claude Sonnet 5.5) con
+visto bueno de seguridad de Claude (Cowork), 2026-10-09, aplicada a mano en Studio por Neyser).
+Reales (`es_organizacion_prueba = false`): `COOP-AROMAS-VALLE` y `GRANJA-VALENCIA`.
+`tests/test_pecuario_panel_indicadores.py` siembra solo en `ORG-TEST-PANEL`.

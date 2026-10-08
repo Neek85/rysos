@@ -13,10 +13,14 @@ lectura, mismo criterio ya confirmado en el ítem 9 §10.9 y en la
 migración de Población (20260924110000): JS plano, sin capa de
 aplicación de Pecuario en este repo.
 
-Usa la organización real GRANJA-VALENCIA (mismo criterio que el resto
-de la suite) para los casos de negocio -- todas las filas de estos
-tests son descartables, con prefijo TEST-, creadas y borradas dentro de
-cada test. El aislamiento cruzado usa ORG-TEST-DEMO.
+Siembra SOLO en la organización de prueba dedicada ORG-TEST-PANEL
+(migración 20261009090000, es_organizacion_prueba=true; ya no toca la
+organización real GRANJA-VALENCIA). setUpClass aborta toda la suite si esa
+fila no existe o no está marcada como de prueba. Todas las filas son
+descartables, con prefijo TEST-PANEL-, creadas y borradas dentro de cada
+test: cada DELETE filtra por id (UUID propio) Y por ID_Organizacion, se
+verifica el código de respuesta, y al final de la clase se comprueba que
+ORG-TEST-PANEL quedó sin residuos. El aislamiento cruzado usa ORG-TEST-DEMO.
 
 Casos agregados (los 4 bloques de reproductivo/sanitario/productivo/
 comercial, y algunos reproductivos) leen antes y después de insertar
@@ -74,7 +78,7 @@ NEEDS_SUPABASE = pytest.mark.skipif(
     reason="SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY no configuradas — test requiere Supabase Live",
 )
 
-ORG_A = "GRANJA-VALENCIA"     # organización real, mismo criterio que el resto de la suite
+ORG_A = "ORG-TEST-PANEL"      # organización de prueba dedicada (es_organizacion_prueba=true), vacía
 ORG_B = "ORG-TEST-DEMO"       # "otra organización" para el aislamiento cruzado
 ADMIN_EMAIL = "admin-demo@ryzos-demo.test"  # cuenta admin de ORG_B, ya usada en el resto de la suite
 
@@ -107,6 +111,32 @@ def _magic_link_access_token(email: str) -> str:
     )
     verify.raise_for_status()
     return verify.json()["access_token"]
+
+
+# Tablas con una columna de código donde el test pone la marca TEST-PANEL-... (verificación de residuos).
+TABLAS_CON_CODIGO = [
+    ("PECUARIO_GALPONES", "codigo_galpon"),
+    ("PECUARIO_JAULAS", "codigo_poza"),
+    ("PECUARIO_LOTES", "codigo_lote"),
+    ("PECUARIO_INSUMOS", "nombre"),
+    ("PECUARIO_REPRODUCTORES", "codigo_arete"),
+]
+# Todas las tablas donde el test (o sus triggers) pueden escribir; ORG-TEST-PANEL es dedicada: debe quedar vacía.
+TABLAS_SEMBRADAS = [
+    "PECUARIO_VENTAS", "PECUARIO_MORTALIDAD", "PECUARIO_PARTOS", "PECUARIO_PESAJES",
+    "PECUARIO_INSUMOS_MOVIMIENTOS", "PECUARIO_RECOLECCION_PARTOS", "PECUARIO_RECOLECCIONES_DESTETE",
+    "PECUARIO_SUGERENCIAS_REEMPLAZO", "PECUARIO_LOTES", "PECUARIO_JAULAS", "PECUARIO_GALPONES",
+    "PECUARIO_INSUMOS", "PECUARIO_REPRODUCTORES",
+]
+
+
+def _contar(tabla, params):
+    res = httpx.get(
+        f"{SUPABASE_URL}/rest/v1/{tabla}", headers={**_service_headers(), "Prefer": "count=exact"},
+        params={**params, "select": "id", "limit": 1}, timeout=30,
+    )
+    res.raise_for_status()
+    return int(res.headers["content-range"].split("/")[-1])
 
 
 def _migracion_aplicada():
@@ -194,15 +224,51 @@ class TestPanelIndicadoresLive(unittest.TestCase):
                 "20260928090000_pecuario_panel_indicadores_vistas.sql no aplicada "
                 "(aplicación manual pendiente, ver §4.1.4)."
             )
+        # Guarda anti-error: este test jamás debe sembrar en una organización real.
+        org = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/ORGANIZACIONES", headers=_service_headers(),
+            params={"ID": f"eq.{ORG_A}", "select": "ID,es_organizacion_prueba"}, timeout=30,
+        )
+        org.raise_for_status()
+        filas = org.json()
+        if not filas:
+            raise AssertionError(f"{ORG_A} no existe en ORGANIZACIONES (migración 20261009090000 no aplicada): se aborta la suite sin sembrar nada.")
+        if filas[0].get("es_organizacion_prueba") is not True:
+            raise AssertionError(f"{ORG_A} NO está marcada es_organizacion_prueba=true: se aborta la suite, jamás se siembra en una organización real.")
         cls.otra_org_token = _magic_link_access_token(ADMIN_EMAIL)
+
+    @classmethod
+    def tearDownClass(cls):
+        # (c) La organización es dedicada: no debe quedar nada. Marca TEST-PANEL% en las tablas con código
+        # y conteo total por organización en el resto (partos, mortalidad, ventas, pesajes, ...).
+        residuos = []
+        for tabla, col in TABLAS_CON_CODIGO:
+            n = _contar(tabla, {"ID_Organizacion": f"eq.{ORG_A}", col: "like.TEST-PANEL%"})
+            if n:
+                residuos.append(f"{tabla}.{col} LIKE 'TEST-PANEL%': {n}")
+        for tabla in TABLAS_SEMBRADAS:
+            n = _contar(tabla, {"ID_Organizacion": f"eq.{ORG_A}"})
+            if n:
+                residuos.append(f"{tabla} (cualquier fila de {ORG_A}): {n}")
+        if residuos:
+            raise AssertionError(f"Residuos en {ORG_A} tras la suite: {residuos}")
 
     def setUp(self):
         self.suffix = str(int(time.time() * 1000))
         self._cleanup = []  # list of (table, field, value), LIFO en tearDown
 
     def tearDown(self):
+        # (a) filtra por id (UUID propio) Y por ID_Organizacion; (b) un borrado rechazado (FK u otro) hace fallar el test.
+        rechazados = []
         for table, field, value in reversed(self._cleanup):
-            httpx.delete(f"{SUPABASE_URL}/rest/v1/{table}", headers=_service_headers(), params={field: f"eq.{value}"}, timeout=30)
+            res = httpx.delete(
+                f"{SUPABASE_URL}/rest/v1/{table}", headers=_service_headers(),
+                params={field: f"eq.{value}", "ID_Organizacion": f"eq.{ORG_A}"}, timeout=30,
+            )
+            if res.status_code not in (200, 204):
+                rechazados.append(f"{table} {field}={value}: HTTP {res.status_code} {res.text[:160]}")
+        if rechazados:
+            self.fail(f"Borrado rechazado en la limpieza ({ORG_A}): {rechazados}")
 
     # ---- Helpers de creación (service role) ----
 
@@ -284,7 +350,7 @@ class TestPanelIndicadoresLive(unittest.TestCase):
         res = httpx.patch(
             f"{SUPABASE_URL}/rest/v1/PECUARIO_LOTES",
             headers={**_service_headers(), "Content-Type": "application/json"},
-            params={"id": f"eq.{lote_id}"},
+            params={"id": f"eq.{lote_id}", "ID_Organizacion": f"eq.{ORG_A}"},
             json={"cantidad_actual": nueva_cantidad},
             timeout=30,
         )

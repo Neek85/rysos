@@ -1659,6 +1659,44 @@
   sea la de Lima; mover el panel de indicadores a una organización de prueba; defaults de otros módulos;
   vistas SUPERADA; `MAINTAIN` en vistas.
 
+- **(2026-10-08) Panel de indicadores movido a la organización de prueba ORG-TEST-PANEL.**
+  Migración `supabase/migrations/20261009090000_org_test_panel.sql` (reversa
+  `supabase/rollbacks/20261009090000_org_test_panel_rollback.sql`): redactada por Claude Code CLI
+  (Claude Sonnet 5.5) con visto bueno de seguridad de Claude (Cowork), 2026-10-09; **aplicada a mano
+  en Studio por Neyser**. sha256 constatados: migración `63bd6e8a…5ec1`, reversa `2a11dc2a…71cb`.
+  La fila `ORG-TEST-PANEL` existe con `es_organizacion_prueba = true` (catálogo, solo lectura).
+  **Test:** `tests/test_pecuario_panel_indicadores.py` ahora usa `ORG_A = 'ORG-TEST-PANEL'` (ya no
+  siembra en GRANJA-VALENCIA). `setUpClass` lee esa fila con service_role y aborta toda la suite si no
+  existe o no es de prueba. `tearDown`: cada DELETE filtra por id propio Y por `ID_Organizacion`, un
+  borrado rechazado (FK u otro) hace fallar el test; `tearDownClass` cuenta residuos (marca
+  `TEST-PANEL%` en las 5 tablas con código y cualquier fila de la organización en 13 tablas) y falla si
+  hay alguno. **Corrida en vivo (22:13 hora de Lima, ventana 19-24 h):** 25 passed, 30 subtests
+  (8 estáticos + 17 en vivo, entre ellos los 6 casos de FCR, `test_aislamiento_cruzado_las_10_vistas`
+  y `test_reemplazo_reproductoras_cuenta_altas_y_bajas_de_hembras`, que ahora SÍ ejercita el caso
+  límite `activas_antes == 0` porque la organización parte vacía: 0 filas en las 13 tablas antes de
+  correr). Los 8 tests que fallaban de noche por el desfase UTC/Lima pasan. **Constancia:**
+  ORG-TEST-PANEL quedó con 0 filas en las 13 tablas; GRANJA-VALENCIA idéntica antes y después
+  (conteo y `max(created_at)` en las 13 tablas; el test ya no contiene su nombre salvo en el
+  docstring); sin residuos en tearDownClass.
+  `docs/schema_live_core.md` corregido: `ORGANIZACIONES."Config"` es `text` (catálogo,
+  `information_schema.columns`), no `jsonb`; y lista de organizaciones de prueba/reales.
+  **Otras suites alineadas a Lima que siembran en organizaciones REALES (no se corrieron; no se
+  cambiaron):**
+  | Suite | ORG_A (¿real?) | ORG_B | Escribe | Limpieza |
+  |---|---|---|---|---|
+  | `test_pecuario_empadre_asignacion_macho.py` | GRANJA-VALENCIA (**real**) | ORG-TEST-DEMO (prueba): una jaula | JAULAS, REPRODUCTORES, HISTORIAL_MACHOS (+ RETIROS_MACHO_PENDIENTES por trigger); además **PATCH de `ORGANIZACIONES.Config` de ORG_A** (real) en `test_modo_controlado...`, restaurado en `finally` | DELETE por id, sin filtro de organización ni verificación de respuesta |
+  | `test_pecuario_etapa_automatica.py` | ORG-TEST-DEMO (prueba) | COOP-AROMAS-VALLE (**real**): 1 lote en `test_cross_org_read_isolation` | LOTES | DELETE por id, sin filtro de organización ni verificación |
+  | `test_pecuario_poblacion_vistas.py` | GRANJA-VALENCIA (**real**) | ORG-TEST-DEMO (solo lectura) | JAULAS, PARTOS, LOTES, REPRODUCTORES, MORTALIDAD, RECOLECCIONES_DESTETE, RECOLECCION_PARTOS | DELETE por id, sin filtro de organización ni verificación |
+  **Propuesta (sin aplicar):** mover las tres a `ORG-TEST-PANEL` como ORG_A (Empadre y poblacion) y como
+  ORG_B (etapa_automatica), con la misma guarda `es_organizacion_prueba=true` y el mismo `tearDown`
+  endurecido; no usar `GRANJA-TEST` (tiene datos de pruebas manuales y la cuenta de dispositivo). Como
+  `ORG-TEST-PANEL` es dedicada y el panel verifica que quede vacía, las suites deben correr en
+  secuencia (no en paralelo); si algún día se paralelizan, crear una organización de prueba por suite.
+  El caso de Empadre que modifica `Config` debe moverse antes que ninguno: es la única escritura sobre
+  la fila de una organización real.
+  **Pendientes:** mover esas 3 suites; helper de "hoy" en la app ya hecho; `EUDR_MONITOREO.fecha_monitoreo`
+  y `PRECIOS_PRODUCTO.vigente_desde`; vistas SUPERADA; `MAINTAIN` en vistas.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.
