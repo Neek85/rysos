@@ -1722,6 +1722,40 @@
   SUPERADA; `MAINTAIN` en vistas; **ojo:** ~19 suites más (`tests/test_pecuario_*`, `test_inspecciones_rbac_rls.py`) aún
   referencian GRANJA-VALENCIA o COOP-AROMAS-VALLE; no se auditaron en esta ronda.
 
+- **(2026-10-29) Panel de indicadores de la app Granja Valencia — FASE 1 de 2: spec + contrato Zod de
+  lectura.** Autor: Claude Sonnet 5.5. **Sin migración SQL, sin pantalla, sin escrituras.**
+  **Entregables:** `specs/app_granja_valencia_panel_indicadores.md` (tabla por widget con inclusión,
+  vista/columnas, qué muestra con 0 filas/NULL, dependencia de `PECUARIO_CONFIGURACION` y de
+  `PECUARIO_GALPONES`; citas de línea del mockup `7vebvnVwLNR15TT9DL2DyX`, v. `1790102749-f687`),
+  `plans/app_granja_valencia_panel_ejecucion.md` (orden: contrato → datos → componentes → pantalla → tile de
+  Inicio → verificación on-device), 11 schemas de lectura + `CAUSA_MORTALIDAD` agregados al final de
+  `lib/validations/pecuario.ts` (ningún schema previo tocado; `PoblacionResumenSchema` se reutiliza) y
+  `apps/granja-valencia/lib/validations/panel.test.ts`. **`npx tsc --noEmit` limpio; Jest 17 suites / 203
+  tests pasan** (incluye `panel.test.ts`; las filas reales de 8 vistas/tablas capturadas en vivo
+  también pasan los schemas, con un test temporal ya borrado).
+  **Verificado en vivo (solo SELECT, sesiones reales de GRANJA-TEST):** las 10 vistas del panel,
+  `vw_pecuario_poblacion_resumen`, `vw_pecuario_ocupacion_poza` y `PECUARIO_GALPONES` responden 200 a `admin` y a
+  `tecnico_campo`, solo con filas de GRANJA-TEST; **ningún rol queda sin acceso**. El `auditor_qc` demo de
+  ORG-TEST-DEMO también lee las vistas de su org: las vistas filtran por organización, **no por rol**, así que
+  ocultar el panel a `auditor_qc` es cosmético. Propuesta (pendiente de Neyser): `admin` y `tecnico_campo`.
+  **numeric de PostgREST llega como número JSON** (`1.00`, `33.3`), no string → schemas con `z.number()`
+  estricto (no `coerce`, que convertiría NULL en 0).
+  **Hallazgos que afectan la v1 (detalle y números en spec §6):** (H3) C2/C3/C4 (ganancia diaria, FCR, detalle
+  por galpón) saldrán "Sin datos todavía" hoy: `seguimiento_galpon`/`_granja` = 0 filas, de 7 lotes de GRANJA-TEST
+  1 tiene ganancia y 0 `datos_suficientes`; (H4) el FCR pooled no tiene guarda de signo (puede ser ≤ 0; el único
+  lote con ganancia tiene −128,33 g/d) → la UI trata `≤ 0` como sin dato; (H6) tasas de mortalidad con
+  denominador = población actual (33,3 % de reproductores = 1/3 vivos); (H7) `total_lactancia` descuenta toda
+  la mortalidad histórica de lactancia, no solo la del mes; (H2) sin eventos en el mes la vista devuelve 0
+  filas, no ceros (un mes sin ventas se lee como "sin datos"); (H9) "Ventas del mes" no incluye guano.
+  `PECUARIO_CONFIGURACION` (0 filas) no es leída por ninguna vista del panel; Fertilidad (omitida) era la única
+  dependencia de configuración (`ORGANIZACIONES.Config`). **No se encontró columna ni vista faltante para
+  ningún widget incluido.** **Intervalo entre partos:** §6.1 de `pecuario_panel_indicadores.md` solo dice
+  "individual vía `madre_id` … + fallback aproximado sin ID individual"; el umbral de "bajo" no está en ningún
+  documento (la spec propone `madres_con_intervalo_calculado ≥ 1`, pendiente D2); el fallback es partos por
+  hembra al año, no días.
+  **Pendientes de Neyser:** D1 (cero real vs "Sin datos todavía" en ventas/muertes/partos del mes), D2 (umbral
+  del fallback), D3 (roles), D4 (pies informativos). **Siguiente:** FASE 2 (pantalla), según el plan.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

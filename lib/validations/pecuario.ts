@@ -962,3 +962,161 @@ export type RecoleccionDestemteInput = z.infer<typeof RecoleccionDestemteSchema>
 export type ConformarLoteDestemteInput = z.infer<typeof ConformarLoteDestemteSchema>;
 export type SugerenciaReemplazoAccionInput = z.infer<typeof SugerenciaReemplazoAccionSchema>;
 export type SugerenciaReemplazoResolverInput = z.infer<typeof SugerenciaReemplazoResolverSchema>;
+
+// =====================================================================
+// Panel de indicadores (app Granja Valencia) -- schemas de LECTURA.
+// specs/app_granja_valencia_panel_indicadores.md
+//
+// Una fila de la vista = un schema. Columnas confirmadas contra el
+// catálogo en vivo (lectura con sesión real de GRANJA-TEST, 2026-10-29) y
+// contra el texto de las migraciones 20260928090000 /
+// 20260928110000 / 20261008100000. Ningún schema de arriba se tocó.
+//
+// numeric de PostgREST: llega como NÚMERO JSON (ej. `"crias_vivas_promedio_parto":1.00`,
+// no como string) -- confirmado con una lectura real, texto crudo de la
+// respuesta. Por eso aquí se usa z.number() ESTRICTO, no z.coerce.number():
+// coerce convertiría un NULL en 0 (Number(null) === 0) y la UI mostraría
+// "0" donde la decisión de producto es "Sin datos todavía". Un valor que
+// llegara como string haría fallar el parse (señal de que el contrato
+// cambió), no se tragaría en silencio.
+//
+// Todo `number | null` es "no hay dato"; la UI NUNCA lo pinta como 0.
+// Las vistas devuelven 0 filas (no una fila de ceros) cuando la
+// organización no tiene eventos en la ventana: usar z.array(Schema) y tratar
+// [] como "Sin datos todavía".
+// =====================================================================
+
+const numeroPostgrest = z.number()
+const enteroPostgrest = z.number().int()
+
+export const CAUSA_MORTALIDAD = ['neumonia', 'distocia', 'aplastamiento', 'gastroenteritis', 'depredador', 'desconocido', 'otro'] as const
+
+// vw_pecuario_seguimiento_lote -- una fila por LOTE (también los sin 2 pesajes).
+// Ficha de lote; el panel v1 no la usa, pero es la fuente de las otras dos.
+// OJO: `fcr` puede ser 0 cuando hay ganancia positiva pero no hay alimento en el
+// período (la vista no lo pone en NULL): la UI debe mirar `datos_suficientes`.
+export const PanelSeguimientoLoteSchema = z.object({
+  lote_id: z.string().uuid(),
+  ID_Organizacion: z.string(),
+  codigo_lote: z.string(),
+  poza_actual_id: z.string().uuid().nullable(),
+  galpon_id: z.string().uuid().nullable(),
+  cantidad_actual: enteroPostgrest.nullable(),
+  fecha_pesaje_anterior: z.string().nullable(),
+  peso_promedio_anterior_g: numeroPostgrest.nullable(),
+  fecha_pesaje_reciente: z.string().nullable(),
+  peso_promedio_reciente_g: numeroPostgrest.nullable(),
+  dias_periodo: enteroPostgrest.nullable(),
+  ganancia_diaria_g: numeroPostgrest.nullable(),
+  ganancia_total_kg_periodo: numeroPostgrest.nullable(),
+  alimento_consumido_kg: numeroPostgrest,
+  datos_suficientes: z.boolean(),
+  fcr: numeroPostgrest.nullable(),
+})
+export type PanelSeguimientoLoteValues = z.infer<typeof PanelSeguimientoLoteSchema>
+
+// vw_pecuario_seguimiento_galpon -- solo galpones con >=1 lote con datos_suficientes.
+// Agregación pooled: `fcr_promedio` puede ser <= 0 si la ganancia total agregada es
+// <= 0 (el pooled no tiene la guarda del FCR por lote) -> la UI lo trata como sin dato.
+export const PanelSeguimientoGalponSchema = z.object({
+  galpon_id: z.string().uuid(),
+  ID_Organizacion: z.string(),
+  lotes_con_datos: enteroPostgrest,
+  ganancia_diaria_promedio_g: numeroPostgrest.nullable(),
+  fcr_promedio: numeroPostgrest.nullable(),
+})
+export type PanelSeguimientoGalponValues = z.infer<typeof PanelSeguimientoGalponSchema>
+
+// vw_pecuario_seguimiento_granja -- 0 filas hasta que haya movimientos de alimento con lote_id.
+export const PanelSeguimientoGranjaSchema = z.object({
+  ID_Organizacion: z.string(),
+  lotes_con_datos: enteroPostgrest,
+  ganancia_diaria_promedio_g: numeroPostgrest.nullable(),
+  fcr_promedio: numeroPostgrest.nullable(),
+})
+export type PanelSeguimientoGranjaValues = z.infer<typeof PanelSeguimientoGranjaSchema>
+
+// vw_pecuario_reproduccion_mes -- 0 filas si no hubo partos en el mes calendario de Lima.
+export const PanelReproduccionMesSchema = z.object({
+  ID_Organizacion: z.string(),
+  partos_mes: enteroPostgrest,
+  crias_vivas_total_mes: enteroPostgrest,
+  crias_vivas_promedio_parto: numeroPostgrest,
+  peso_promedio_nacimiento_g: numeroPostgrest.nullable(),
+  partos_con_peso_registrado: enteroPostgrest,
+})
+export type PanelReproduccionMesValues = z.infer<typeof PanelReproduccionMesSchema>
+
+// vw_pecuario_intervalo_partos -- 0 filas si la organización nunca registró un parto.
+export const PanelIntervaloPartosSchema = z.object({
+  ID_Organizacion: z.string(),
+  intervalo_promedio_dias_individual: numeroPostgrest.nullable(),
+  madres_con_intervalo_calculado: enteroPostgrest,
+  partos_ultimos_12m_total: enteroPostgrest,
+  hembras_activas_actual: enteroPostgrest,
+})
+export type PanelIntervaloPartosValues = z.infer<typeof PanelIntervaloPartosSchema>
+
+// vw_pecuario_reemplazo_reproductoras_anual -- 0 filas si nunca hubo una hembra reproductora.
+export const PanelReemplazoReproductorasSchema = z.object({
+  ID_Organizacion: z.string(),
+  altas_hembras_12m: enteroPostgrest,
+  bajas_hembras_12m: enteroPostgrest,
+  hembras_activas_actual: enteroPostgrest,
+  tasa_reemplazo_pct: numeroPostgrest.nullable(),
+})
+export type PanelReemplazoReproductorasValues = z.infer<typeof PanelReemplazoReproductorasSchema>
+
+// vw_pecuario_indicadores_sanitarios_mes -- una fila por organización con población.
+// Cada *_pct es NULL cuando el denominador (población actual de esa etapa) es 0.
+export const PanelIndicadoresSanitariosSchema = z.object({
+  ID_Organizacion: z.string(),
+  muertes_lactancia_mes: enteroPostgrest,
+  mortalidad_lactancia_pct_mes: numeroPostgrest.nullable(),
+  muertes_recria_engorde_mes: enteroPostgrest,
+  mortalidad_recria_engorde_pct_mes: numeroPostgrest.nullable(),
+  muertes_reproductores_12m: enteroPostgrest,
+  mortalidad_reproductores_pct_anual: numeroPostgrest.nullable(),
+})
+export type PanelIndicadoresSanitariosValues = z.infer<typeof PanelIndicadoresSanitariosSchema>
+
+// vw_pecuario_incidencia_patologias -- una fila por causa con muertes en el mes (0 filas si no hubo).
+// `causa` es nullable en la tabla base (PECUARIO_MORTALIDAD.causa tiene default, no NOT NULL).
+export const PanelIncidenciaPatologiasSchema = z.object({
+  ID_Organizacion: z.string(),
+  causa: z.enum(CAUSA_MORTALIDAD).nullable(),
+  cantidad_mes: enteroPostgrest,
+  porcentaje_mes: numeroPostgrest.nullable(),
+})
+export type PanelIncidenciaPatologiasValues = z.infer<typeof PanelIncidenciaPatologiasSchema>
+
+// vw_pecuario_pesos_promedio_mes -- una fila por organización con algún lote; ambos pesos nullable.
+export const PanelPesosPromedioSchema = z.object({
+  ID_Organizacion: z.string(),
+  peso_promedio_destete_g_mes: numeroPostgrest.nullable(),
+  peso_promedio_engorde_g_actual: numeroPostgrest.nullable(),
+})
+export type PanelPesosPromedioValues = z.infer<typeof PanelPesosPromedioSchema>
+
+// vw_pecuario_ventas_mes -- 0 filas si no hubo ventas en el mes. `animales_vendidos_mes`
+// es la columna añadida por 20261008100000 (última de la vista). monto_total_mes es
+// numeric(12,2) y NO incluye PECUARIO_VENTAS_SUBPRODUCTOS (guano).
+export const PanelVentasMesSchema = z.object({
+  ID_Organizacion: z.string(),
+  ventas_mes: enteroPostgrest,
+  monto_total_mes: numeroPostgrest,
+  kg_vendidos_mes: numeroPostgrest,
+  rendimiento_carcasa_promedio_pct: numeroPostgrest.nullable(),
+  ventas_con_rendimiento_registrado: enteroPostgrest,
+  animales_vendidos_mes: enteroPostgrest,
+})
+export type PanelVentasMesValues = z.infer<typeof PanelVentasMesSchema>
+
+// PECUARIO_GALPONES (solo las 3 columnas del join con vw_pecuario_seguimiento_galpon).
+// `nombre` es VARCHAR(150) nullable: el rótulo cae a `codigo_galpon`.
+export const PanelGalponNombreSchema = z.object({
+  id: z.string().uuid(),
+  codigo_galpon: z.string(),
+  nombre: z.string().nullable(),
+})
+export type PanelGalponNombreValues = z.infer<typeof PanelGalponNombreSchema>
