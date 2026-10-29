@@ -51,6 +51,8 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
+import _org_prueba
+
 MIGRATION_PATH = (
     Path(__file__).resolve().parent.parent
     / "supabase" / "migrations" / "20260928090000_pecuario_panel_indicadores_vistas.sql"
@@ -128,15 +130,6 @@ TABLAS_SEMBRADAS = [
     "PECUARIO_SUGERENCIAS_REEMPLAZO", "PECUARIO_LOTES", "PECUARIO_JAULAS", "PECUARIO_GALPONES",
     "PECUARIO_INSUMOS", "PECUARIO_REPRODUCTORES",
 ]
-
-
-def _contar(tabla, params):
-    res = httpx.get(
-        f"{SUPABASE_URL}/rest/v1/{tabla}", headers={**_service_headers(), "Prefer": "count=exact"},
-        params={**params, "select": "id", "limit": 1}, timeout=30,
-    )
-    res.raise_for_status()
-    return int(res.headers["content-range"].split("/")[-1])
 
 
 def _migracion_aplicada():
@@ -224,32 +217,15 @@ class TestPanelIndicadoresLive(unittest.TestCase):
                 "20260928090000_pecuario_panel_indicadores_vistas.sql no aplicada "
                 "(aplicación manual pendiente, ver §4.1.4)."
             )
-        # Guarda anti-error: este test jamás debe sembrar en una organización real.
-        org = httpx.get(
-            f"{SUPABASE_URL}/rest/v1/ORGANIZACIONES", headers=_service_headers(),
-            params={"ID": f"eq.{ORG_A}", "select": "ID,es_organizacion_prueba"}, timeout=30,
-        )
-        org.raise_for_status()
-        filas = org.json()
-        if not filas:
-            raise AssertionError(f"{ORG_A} no existe en ORGANIZACIONES (migración 20261009090000 no aplicada): se aborta la suite sin sembrar nada.")
-        if filas[0].get("es_organizacion_prueba") is not True:
-            raise AssertionError(f"{ORG_A} NO está marcada es_organizacion_prueba=true: se aborta la suite, jamás se siembra en una organización real.")
+        # Guarda anti-error (tests/_org_prueba.py): este test jamás debe sembrar en una organización real.
+        _org_prueba.exigir_org_prueba(ORG_A)
         cls.otra_org_token = _magic_link_access_token(ADMIN_EMAIL)
 
     @classmethod
     def tearDownClass(cls):
         # (c) La organización es dedicada: no debe quedar nada. Marca TEST-PANEL% en las tablas con código
         # y conteo total por organización en el resto (partos, mortalidad, ventas, pesajes, ...).
-        residuos = []
-        for tabla, col in TABLAS_CON_CODIGO:
-            n = _contar(tabla, {"ID_Organizacion": f"eq.{ORG_A}", col: "like.TEST-PANEL%"})
-            if n:
-                residuos.append(f"{tabla}.{col} LIKE 'TEST-PANEL%': {n}")
-        for tabla in TABLAS_SEMBRADAS:
-            n = _contar(tabla, {"ID_Organizacion": f"eq.{ORG_A}"})
-            if n:
-                residuos.append(f"{tabla} (cualquier fila de {ORG_A}): {n}")
+        residuos = _org_prueba.residuos(ORG_A, "TEST-PANEL-", TABLAS_CON_CODIGO, TABLAS_SEMBRADAS)
         if residuos:
             raise AssertionError(f"Residuos en {ORG_A} tras la suite: {residuos}")
 
@@ -259,14 +235,7 @@ class TestPanelIndicadoresLive(unittest.TestCase):
 
     def tearDown(self):
         # (a) filtra por id (UUID propio) Y por ID_Organizacion; (b) un borrado rechazado (FK u otro) hace fallar el test.
-        rechazados = []
-        for table, field, value in reversed(self._cleanup):
-            res = httpx.delete(
-                f"{SUPABASE_URL}/rest/v1/{table}", headers=_service_headers(),
-                params={field: f"eq.{value}", "ID_Organizacion": f"eq.{ORG_A}"}, timeout=30,
-            )
-            if res.status_code not in (200, 204):
-                rechazados.append(f"{table} {field}={value}: HTTP {res.status_code} {res.text[:160]}")
+        rechazados = _org_prueba.borrar_entradas(self._cleanup, ORG_A)
         if rechazados:
             self.fail(f"Borrado rechazado en la limpieza ({ORG_A}): {rechazados}")
 

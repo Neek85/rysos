@@ -1697,6 +1697,31 @@
   **Pendientes:** mover esas 3 suites; helper de "hoy" en la app ya hecho; `EUDR_MONITOREO.fecha_monitoreo`
   y `PRECIOS_PRODUCTO.vigente_desde`; vistas SUPERADA; `MAINTAIN` en vistas.
 
+- **(2026-10-29) Empadre, poblacion_vistas y etapa_automatica movidas a organizaciones de prueba.**
+  Autor: Claude Sonnet 5.5. **Sin migración SQL** (sin cambios de esquema ni de RLS). Cierra la
+  "Propuesta" de la entrada anterior para esas 3 suites (el panel ya estaba movido).
+  **Módulo de apoyo `tests/_org_prueba.py`:** `exigir_org_prueba(*orgs)` (guarda de `setUpClass`),
+  `borrar_entradas()` (tearDown endurecido: DELETE por id Y `ID_Organizacion`, verifica código de
+  respuesta; entradas de 4 elementos para filas de otra org de prueba), `residuos()` (tearDownClass).
+  El panel lo usa (sin cambio de comportamiento).
+  **Cambios:** Empadre `ORG_A` GRANJA-VALENCIA → ORG-TEST-PANEL (ORG_B sigue ORG-TEST-DEMO, ahora
+  también con guarda); `test_modo_controlado...` guarda `Config` crudo (incluido NULL), restaura en
+  `finally`, relee y falla si no quedó idéntico (`Config` es `text`: se serializa con `json.dumps`).
+  poblacion_vistas `ORG_A` → ORG-TEST-PANEL (ORG_B DEMO solo lectura). etapa_automatica `ORG_B`
+  COOP-AROMAS-VALLE → ORG-TEST-PANEL (`ORG_A` sigue DEMO). Ninguna suite asumía org vacía ni conteos
+  absolutos: las que cuentan ya usaban deltas (antes/después); no se ajustó ninguna aserción.
+  **Regla:** panel, Empadre, poblacion_vistas y etapa_automatica comparten ORG-TEST-PANEL (cada una
+  exige que quede vacía y panel/poblacion leen agregados de toda la org) → correr SIEMPRE en secuencia,
+  nunca en paralelo. Si se paralelizan: una org de prueba por suite.
+  **Corrida en vivo en secuencia (2026-10-29):** panel 25 passed (30 subtests); Empadre 24 passed;
+  poblacion_vistas 20 passed (3 subtests); etapa_automatica 10 passed. Sin fallos ni reintentos.
+  **Antes/después (solo lectura, conteo y `max(created_at)` en 15 tablas Pecuario + `Config`):**
+  GRANJA-VALENCIA, COOP-AROMAS-VALLE y ORG-TEST-DEMO idénticas; `Config` NULL en las tres reales/demo
+  y en ORG-TEST-PANEL, antes y después; ORG-TEST-PANEL con 0 filas en las 15 tablas.
+  **Pendientes:** `EUDR_MONITOREO.fecha_monitoreo` y `PRECIOS_PRODUCTO.vigente_desde`; vistas
+  SUPERADA; `MAINTAIN` en vistas; **ojo:** ~19 suites más (`tests/test_pecuario_*`, `test_inspecciones_rbac_rls.py`) aún
+  referencian GRANJA-VALENCIA o COOP-AROMAS-VALLE; no se auditaron en esta ronda.
+
 ## 📌 PRÓXIMA VEZ QUE ABRAS UNA CONVERSACIÓN
 
 Si vienes de una pausa, simplemente di: **"Lee el estado del proyecto y sigamos donde quedamos."** No necesitas repetir el contexto — este documento lo tiene.

@@ -16,11 +16,16 @@ Esta migración es de SOLO LECTURA -- 3 vistas, sin tablas nuevas, sin
 triggers, sin RLS de escritura nueva. No hay contrato Zod que verificar
 (no hay ningún INSERT/UPDATE nuevo que validar contra estas vistas).
 
-Usa la organización real GRANJA-VALENCIA (mismo criterio que
-tests/test_pecuario_traslado_interno.py) para los casos de negocio --
-todas las filas de estos tests son descartables, con prefijo TEST-,
-creadas y borradas dentro de cada test. El aislamiento cruzado usa
-ORG-TEST-DEMO como "otra organización".
+Siembra SOLO en la organización de prueba dedicada ORG-TEST-PANEL
+(es_organizacion_prueba=true; ya no toca GRANJA-VALENCIA). setUpClass
+aborta toda la suite si esa fila no existe o no es de prueba. Todas las
+filas son descartables, con prefijo TEST-POBLACION-, creadas y borradas
+dentro de cada test: cada DELETE filtra por id Y por ID_Organizacion, se
+verifica el código de respuesta, y al final de la clase se comprueba que
+ORG-TEST-PANEL quedó sin residuos (apoyo común en tests/_org_prueba.py).
+El aislamiento cruzado usa ORG-TEST-DEMO como "otra organización" (solo
+lectura). ORG-TEST-PANEL la comparten el panel, Empadre, poblacion_vistas y
+etapa_automatica: estas suites deben correr en SECUENCIA, nunca en paralelo.
 
 La migración NO se aplica desde este archivo ni desde ningún script de
 este repo -- ninguna migración SQL se aplica automáticamente contra la
@@ -41,6 +46,8 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
+import _org_prueba
+
 MIGRATION_PATH = (
     Path(__file__).resolve().parent.parent
     / "supabase" / "migrations" / "20260924110000_pecuario_poblacion_vistas.sql"
@@ -55,7 +62,7 @@ NEEDS_SUPABASE = pytest.mark.skipif(
     reason="SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY no configuradas — test requiere Supabase Live",
 )
 
-ORG_A = "GRANJA-VALENCIA"     # organización real, mismo criterio que Traslado
+ORG_A = "ORG-TEST-PANEL"      # organización de prueba dedicada (es_organizacion_prueba=true)
 ORG_B = "ORG-TEST-DEMO"       # "otra organización" para el aislamiento cruzado
 ADMIN_EMAIL = "admin-demo@ryzos-demo.test"  # cuenta admin de ORG_B, ya usada en el resto de la suite
 
@@ -86,6 +93,15 @@ def _magic_link_access_token(email: str) -> str:
     )
     verify.raise_for_status()
     return verify.json()["access_token"]
+
+
+TABLAS_CON_CODIGO = [
+    ("PECUARIO_JAULAS", "codigo_poza"), ("PECUARIO_LOTES", "codigo_lote"), ("PECUARIO_REPRODUCTORES", "codigo_arete"),
+]
+TABLAS_SEMBRADAS = [
+    "PECUARIO_MORTALIDAD", "PECUARIO_RECOLECCION_PARTOS", "PECUARIO_RECOLECCIONES_DESTETE", "PECUARIO_PARTOS",
+    "PECUARIO_LOTES", "PECUARIO_REPRODUCTORES", "PECUARIO_JAULAS",
+]
 
 
 def _migracion_aplicada():
@@ -191,15 +207,25 @@ class TestPoblacionVistasLive(unittest.TestCase):
                 "20260924110000_pecuario_poblacion_vistas.sql no aplicada "
                 "(aplicación manual pendiente, ver §4.1.4)."
             )
+        # Guarda anti-error: este test jamás debe sembrar en una organización real.
+        _org_prueba.exigir_org_prueba(ORG_A)
         cls.otra_org_token = _magic_link_access_token(ADMIN_EMAIL)
+
+    @classmethod
+    def tearDownClass(cls):
+        residuos = _org_prueba.residuos(ORG_A, "TEST-POBLACION-", TABLAS_CON_CODIGO, TABLAS_SEMBRADAS)
+        if residuos:
+            raise AssertionError(f"Residuos en {ORG_A} tras la suite: {residuos}")
 
     def setUp(self):
         self.suffix = str(int(time.time() * 1000))
         self._cleanup = []  # list of (table, field, value), LIFO en tearDown
 
     def tearDown(self):
-        for table, field, value in reversed(self._cleanup):
-            httpx.delete(f"{SUPABASE_URL}/rest/v1/{table}", headers=_service_headers(), params={field: f"eq.{value}"}, timeout=30)
+        # filtra por id (UUID propio) Y por ID_Organizacion; un borrado rechazado hace fallar el test.
+        rechazados = _org_prueba.borrar_entradas(self._cleanup, ORG_A)
+        if rechazados:
+            self.fail(f"Borrado rechazado en la limpieza ({ORG_A}): {rechazados}")
 
     def _crear_jaula(self, capacidad_max=None, org=ORG_A):
         payload = {"ID_Organizacion": org, "codigo_poza": f"TEST-POBLACION-{self.suffix}-{len(self._cleanup)}"}

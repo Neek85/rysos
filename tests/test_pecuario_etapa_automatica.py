@@ -11,6 +11,16 @@ repo -- ninguna migración SQL se aplica automáticamente contra la base real
 verifica el contenido estático de la migración siempre, y sus casos en vivo
 solo cuando la vista ya existe (aplicada a mano en Supabase Studio) --
 `unittest.SkipTest` explícito en caso contrario, sin fallar la suite.
+
+Siembra SOLO en organizaciones de prueba (es_organizacion_prueba=true):
+ORG-TEST-DEMO (ORG_A, la del admin de la sesión) y ORG-TEST-PANEL (ORG_B,
+dedicada; antes era COOP-AROMAS-VALLE, real). setUpClass aborta si alguna no
+existe o no es de prueba; cada DELETE filtra por id Y por ID_Organizacion y
+verifica el código de respuesta; al final de la clase ORG-TEST-PANEL debe
+quedar sin filas de lotes y ninguna org con la marca TEST-ETAPA- (apoyo en
+tests/_org_prueba.py). ORG-TEST-PANEL la comparten el panel, Empadre,
+poblacion_vistas y etapa_automatica: estas suites deben correr en SECUENCIA,
+nunca en paralelo.
 """
 
 import os
@@ -22,6 +32,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
+
+import _org_prueba
 
 MIGRATION_PATH = (
     Path(__file__).resolve().parent.parent
@@ -38,7 +50,7 @@ NEEDS_SUPABASE = pytest.mark.skipif(
 )
 
 ORG_A = "ORG-TEST-DEMO"
-ORG_B = "COOP-AROMAS-VALLE"
+ORG_B = "ORG-TEST-PANEL"      # organización de prueba dedicada (antes COOP-AROMAS-VALLE, real)
 ADMIN_EMAIL = "admin-demo@ryzos-demo.test"
 
 
@@ -125,15 +137,26 @@ class TestVistaEtapaLive(unittest.TestCase):
                 "20260922100000_pecuario_vista_etapa_automatica.sql no aplicada "
                 "(aplicación manual pendiente, ver §4.1.4)."
             )
+        # Guarda anti-error: ambas organizaciones sembradas deben ser de prueba.
+        _org_prueba.exigir_org_prueba(ORG_A, ORG_B)
         cls.admin_token = _magic_link_access_token(ADMIN_EMAIL)
+
+    @classmethod
+    def tearDownClass(cls):
+        residuos = _org_prueba.residuos(ORG_A, "TEST-ETAPA-", [("PECUARIO_LOTES", "codigo_lote")])
+        residuos += _org_prueba.residuos(ORG_B, "TEST-ETAPA-", [("PECUARIO_LOTES", "codigo_lote")], ["PECUARIO_LOTES"])
+        if residuos:
+            raise AssertionError(f"Residuos tras la suite: {residuos}")
 
     def setUp(self):
         self.suffix = str(int(time.time() * 1000))
         self._cleanup = []  # list of (table, field, value), LIFO en tearDown
 
     def tearDown(self):
-        for table, field, value in reversed(self._cleanup):
-            httpx.delete(f"{SUPABASE_URL}/rest/v1/{table}", headers=_service_headers(), params={field: f"eq.{value}"}, timeout=30)
+        # filtra por id (UUID propio) Y por ID_Organizacion; un borrado rechazado hace fallar el test.
+        rechazados = _org_prueba.borrar_entradas(self._cleanup, ORG_A)
+        if rechazados:
+            self.fail(f"Borrado rechazado en la limpieza: {rechazados}")
 
     def _crear_lote(self, org, dias_desde_destete, etapa="recria", estado="activo"):
         # Fecha de Lima, no UTC ni la hora local de la máquina -- desde la
@@ -155,7 +178,7 @@ class TestVistaEtapaLive(unittest.TestCase):
         )
         res.raise_for_status()
         lote_id = res.json()[0]["id"]
-        self._cleanup.append(("PECUARIO_LOTES", "id", lote_id))
+        self._cleanup.append(("PECUARIO_LOTES", "id", lote_id, org))
         return lote_id
 
     def _leer_vista(self, lote_id):

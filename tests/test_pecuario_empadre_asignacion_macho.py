@@ -12,13 +12,20 @@ archivo por instrucción explícita de esta tarea).
 No hay contrato Zod nuevo -- reutiliza `HistorialMachoSchema` (v3,
 2026-09-11), ya existente en lib/validations/pecuario.ts sin cambios.
 
-Usa la organización real GRANJA-VALENCIA (mismo criterio que
-Traslado/Destete/Población) para los casos de negocio -- todas las
-filas de estos tests son descartables, con prefijo TEST-, creadas y
-borradas dentro de cada test. El aislamiento cruzado usa ORG-TEST-DEMO.
-El único estado compartido a nivel organización (`Config->pecuario->
-sistema_cria`) se guarda y se restaura exacto en cada test que lo toca,
-en un `try/finally`, para no filtrar estado entre tests.
+Siembra SOLO en la organización de prueba dedicada ORG-TEST-PANEL
+(es_organizacion_prueba=true; ya no toca GRANJA-VALENCIA). setUpClass
+aborta toda la suite si esa fila (o ORG-TEST-DEMO) no existe o no es de
+prueba. Todas las filas son descartables, con prefijo TEST-EMPADRE-, creadas
+y borradas dentro de cada test: cada DELETE filtra por id Y por
+ID_Organizacion, se verifica el código de respuesta, y al final de la clase
+se comprueba que ORG-TEST-PANEL quedó sin residuos (apoyo común en
+tests/_org_prueba.py). El aislamiento cruzado usa ORG-TEST-DEMO.
+ORG-TEST-PANEL la comparten el panel, Empadre, poblacion_vistas y
+etapa_automatica: estas suites deben correr en SECUENCIA, nunca en paralelo.
+El único estado compartido a nivel organización (`ORGANIZACIONES.Config`,
+pecuario.sistema_cria) se guarda exacto (incluido NULL) y se restaura en un
+`try/finally`, verificando que quedó idéntico (falla si no); ahora ocurre
+sobre ORG-TEST-PANEL, ya no sobre una organización real.
 
 La migración NO se aplica desde este archivo ni desde ningún script de
 este repo -- ninguna migración SQL se aplica automáticamente contra la
@@ -29,6 +36,7 @@ a mano en Supabase Studio) -- `unittest.SkipTest` explícito en caso
 contrario, sin fallar la suite.
 """
 
+import json
 import os
 import time
 import unittest
@@ -37,6 +45,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
+
+import _org_prueba
 
 MIGRATION_PATH = (
     Path(__file__).resolve().parent.parent
@@ -52,7 +62,7 @@ NEEDS_SUPABASE = pytest.mark.skipif(
     reason="SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY no configuradas — test requiere Supabase Live",
 )
 
-ORG_A = "GRANJA-VALENCIA"     # organización real, mismo criterio que el resto de la suite
+ORG_A = "ORG-TEST-PANEL"      # organización de prueba dedicada (es_organizacion_prueba=true)
 ORG_B = "ORG-TEST-DEMO"       # "otra organización" para el aislamiento cruzado
 ADMIN_EMAIL = "admin-demo@ryzos-demo.test"  # cuenta admin de ORG_B, ya usada en el resto de la suite
 
@@ -83,6 +93,13 @@ def _magic_link_access_token(email: str) -> str:
     )
     verify.raise_for_status()
     return verify.json()["access_token"]
+
+
+TABLAS_CON_CODIGO = [("PECUARIO_JAULAS", "codigo_poza"), ("PECUARIO_REPRODUCTORES", "codigo_arete")]
+TABLAS_SEMBRADAS = [
+    "PECUARIO_RETIROS_MACHO_PENDIENTES", "PECUARIO_HISTORIAL_MACHOS",
+    "PECUARIO_REPRODUCTORES", "PECUARIO_JAULAS",
+]
 
 
 def _migracion_aplicada():
@@ -202,15 +219,28 @@ class TestEmpadreAsignacionMachoLive(unittest.TestCase):
                 "no existen todavía -- 20260926090000_pecuario_empadre_asignacion_macho.sql "
                 "no aplicada (aplicación manual pendiente, ver §4.1.4)."
             )
+        # Guarda anti-error: ORG_A (donde se siembra) y ORG_B (una jaula) deben ser de prueba.
+        _org_prueba.exigir_org_prueba(ORG_A, ORG_B)
         cls.otra_org_token = _magic_link_access_token(ADMIN_EMAIL)
+
+    @classmethod
+    def tearDownClass(cls):
+        # ORG_A es dedicada: debe quedar vacía en todas las tablas que esta suite (o sus triggers) escribe.
+        # ORG_B (DEMO) tiene datos propios: solo se comprueba la marca TEST-EMPADRE-.
+        residuos = _org_prueba.residuos(ORG_A, "TEST-EMPADRE-", TABLAS_CON_CODIGO, TABLAS_SEMBRADAS)
+        residuos += _org_prueba.residuos(ORG_B, "TEST-EMPADRE-", TABLAS_CON_CODIGO)
+        if residuos:
+            raise AssertionError(f"Residuos tras la suite: {residuos}")
 
     def setUp(self):
         self.suffix = str(int(time.time() * 1000))
         self._cleanup = []  # list of (table, field, value), LIFO en tearDown
 
     def tearDown(self):
-        for table, field, value in reversed(self._cleanup):
-            httpx.delete(f"{SUPABASE_URL}/rest/v1/{table}", headers=_service_headers(), params={field: f"eq.{value}"}, timeout=30)
+        # filtra por id (UUID propio) Y por ID_Organizacion; un borrado rechazado hace fallar el test.
+        rechazados = _org_prueba.borrar_entradas(self._cleanup, ORG_A)
+        if rechazados:
+            self.fail(f"Borrado rechazado en la limpieza: {rechazados}")
 
     def _crear_jaula(self, org=ORG_A):
         res = httpx.post(
@@ -221,7 +251,7 @@ class TestEmpadreAsignacionMachoLive(unittest.TestCase):
         )
         res.raise_for_status()
         jaula_id = res.json()[0]["id"]
-        self._cleanup.append(("PECUARIO_JAULAS", "id", jaula_id))
+        self._cleanup.append(("PECUARIO_JAULAS", "id", jaula_id, org))
         return jaula_id
 
     def _crear_reproductor(self, sexo, org=ORG_A):
@@ -233,7 +263,7 @@ class TestEmpadreAsignacionMachoLive(unittest.TestCase):
         )
         res.raise_for_status()
         animal_id = res.json()[0]["id"]
-        self._cleanup.append(("PECUARIO_REPRODUCTORES", "id", animal_id))
+        self._cleanup.append(("PECUARIO_REPRODUCTORES", "id", animal_id, org))
         return animal_id
 
     def _insertar_historial(self, macho_id, jaula_id, fecha_salida=None, fecha_entrada=None, org=ORG_A):
@@ -303,7 +333,7 @@ class TestEmpadreAsignacionMachoLive(unittest.TestCase):
         res.raise_for_status()
         rows = res.json()
         self.assertEqual(len(rows), 1)
-        return rows[0]["Config"]
+        return rows[0]["Config"]  # valor crudo de la columna (hoy text; NULL -> None)
 
     def _set_config(self, config, org=ORG_A):
         res = httpx.patch(
@@ -317,10 +347,12 @@ class TestEmpadreAsignacionMachoLive(unittest.TestCase):
 
     def _set_sistema_cria(self, modo, org=ORG_A):
         config = self._get_config(org) or {}
+        if isinstance(config, str):
+            config = json.loads(config)
         pecuario = dict(config.get("pecuario") or {})
         pecuario["sistema_cria"] = modo
         config = {**config, "pecuario": pecuario}
-        self._set_config(config, org)
+        self._set_config(json.dumps(config), org)
 
     # ---- Flujo básico: asignar, reasignar, resolver ----
 
@@ -433,7 +465,7 @@ class TestEmpadreAsignacionMachoLive(unittest.TestCase):
     # ---- Empadre controlado: fecha_salida obligatoria ----
 
     def test_modo_controlado_exige_fecha_salida_y_modo_continuo_no(self):
-        original_config = self._get_config()
+        original_config = self._get_config()  # valor exacto, incluido NULL
         try:
             self._set_sistema_cria("controlado")
             jaula = self._crear_jaula()
@@ -451,6 +483,9 @@ class TestEmpadreAsignacionMachoLive(unittest.TestCase):
             self._cleanup.append(("PECUARIO_RETIROS_MACHO_PENDIENTES", "id", pendientes[0]["id"]))
         finally:
             self._set_config(original_config)
+            restaurado = self._get_config()
+            if restaurado != original_config:
+                self.fail(f"Config de {ORG_A} NO quedó idéntica tras restaurar (original NULL={original_config is None}); revisar a mano.")
 
     # ---- Aislamiento RLS cruzado ----
 
